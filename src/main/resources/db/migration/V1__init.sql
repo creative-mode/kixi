@@ -1,5 +1,3 @@
-CREATE DATABASE banco_enunciados;
-
 CREATE TABLE anos_letivos (
     id BIGSERIAL PRIMARY KEY,
     ano_inicio INT NOT NULL,
