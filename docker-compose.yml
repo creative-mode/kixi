@@ -1,19 +1,17 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:15
     container_name: postgres_enunciados
     environment:
-      POSTGRES_DB: banco_enunciados
-      POSTGRES_USER: creativemode
-      POSTGRES_PASSWORD: cr34t1v3-m0d3
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${DB_PORT}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 10s
       retries: 5
 
@@ -21,14 +19,19 @@ services:
     build: .
     container_name: banco_enunciados
     environment:
-      SPRING_R2DBC_URL: r2dbc:postgresql://postgres_enunciados:5432/banco_enunciados
-      SPRING_R2DBC_USERNAME: creativemode
-      SPRING_R2DBC_PASSWORD: cr34t1v3-m0d3
+      SPRING_R2DBC_URL: r2dbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+      SPRING_R2DBC_USERNAME: ${DB_USER}
+      SPRING_R2DBC_PASSWORD: ${DB_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
+      env_file:
+      - .env
     ports:
       - "8080:8080"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
 
 volumes:
   pgdata:
