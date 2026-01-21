@@ -14,11 +14,11 @@ Para cada simulação efetuada, o sistema deverá ainda guardar o histórico det
 
 ## MER
 
-**anosLetivos** (id, anoInicio, anoFim);
-**trimestres** (id, numero);
-**disciplinas** (id, nome);
-**cursos** (id, nome, descricao);
-**turmas** (id, nome, classe);
+**anosLetivos** (id, anoInicio, anoFim);  </br>
+**trimestres** (id, numero);  </br>
+**disciplinas** (id, nome);  </br>
+**cursos** (id, nome, descricao);  </br>
+**turmas** (id, nome, classe);  </br>
 **contas** (
 id,
 username,
@@ -28,14 +28,14 @@ emailVerificado,
 ativo,
 dataCriacao,
 ultimoLogin
-);
+);  </br>
 **usuarios** (
 id,
 primeiroNome,
 ultimoNome,
 foto,
 idConta
-);
+);  </br>
 **roles** (id, nome, descricao);
 contaRoles (id, idConta, idRole);
 sessoes (
@@ -45,7 +45,7 @@ token,
 dataCriacao,
 dataExpiracao,
 ativo
-);
+);  </br>
 **enunciados** (
 id,
 tipoProva,
@@ -57,14 +57,14 @@ idDisciplina,
 idTurma,
 idCurso,
 criadoPor
-);
+);  </br>
 **questoes** (
 id,
 numero,
 texto,
 pontuacao,
 idEnunciado
-);
+);  </br>
 **simulacoes** (
 id,
 idConta,
@@ -72,7 +72,7 @@ idEnunciado,
 data,
 notaFinal,
 tempoGasto
-);
+);  </br>
 **respostasSimulacao** (
 id,
 idSimulacao,
@@ -80,4 +80,4 @@ idQuestao,
 respostaTexto,
 correta,
 pontuacaoObtida
-);
+); 
