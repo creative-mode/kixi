@@ -1,5 +1,5 @@
 
-# Enuncia Platform
+# Kixi Platform
 
 A modular platform for managing, organizing, and reusing exam papers, designed with a service-oriented architecture and support for automated content extraction from images.
 
