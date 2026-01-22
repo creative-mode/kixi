@@ -1,13 +1,14 @@
+
 # Guia de Implementação de CRUDs Reativos no Projeto
 
-Este guia detalha o padrão de implementação de CRUDs no backend localizado em `services/backend-api`, com base no exemplo de `SchoolYear`. Siga este modelo para criar novos módulos CRUD consistentes e alinhados às boas práticas do projeto.
+Este guia detalha o padrão de implementação de CRUDs no backend localizado em `services/backend-api`, usando o exemplo do CRUD de "schoolyears" como referência. Para implementar qualquer novo CRUD, substitua "[nome da entidade]" pelo nome da sua entidade e consulte os arquivos do CRUD de schoolyears para exemplos práticos.
 
 ---
 
 ## Estrutura de Arquivos e Propósito
 
 ### 1. Controller
-- **Caminho:** `src/main/java/ao/creativemode/kixi/controller/SchoolYearController.java`
+- **Caminho:** `src/main/java/ao/creativemode/kixi/controller/[NomeDaEntidade]Controller.java`
 - **Propósito:** Define as rotas HTTP e expõe a API REST para a entidade. Recebe requisições, valida dados e delega ao service.
 - **Integração:** Depende do service correspondente. Utiliza DTOs para entrada e saída.
 - **Boas práticas:**
@@ -15,9 +16,10 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
   - Métodos reativos (`Mono`, `Flux`).
   - Validação com `@Valid`.
   - Retorno padronizado com `ResponseEntity`.
+  - Consulte o arquivo do controller de schoolyears para exemplos de endpoints e convenções.
 
 ### 2. Service
-- **Caminho:** `src/main/java/ao/creativemode/kixi/service/SchoolYearService.java`
+- **Caminho:** `src/main/java/ao/creativemode/kixi/service/[NomeDaEntidade]Service.java`
 - **Propósito:** Implementa a lógica de negócio do CRUD. Realiza validações adicionais e orquestra operações no repositório.
 - **Integração:** Depende do repository. Utiliza DTOs e entidades.
 - **Boas práticas:**
@@ -25,37 +27,42 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
   - Métodos reativos (`Mono`, `Flux`).
   - Conversão entre entidade e DTO centralizada.
   - Lida com soft delete, restore e hard delete.
+  - Consulte o arquivo do service de schoolyears para exemplos de métodos e lógica de negócio.
 
 ### 3. Repository
-- **Caminho:** `src/main/java/ao/creativemode/kixi/repository/SchoolYearRepository.java`
+- **Caminho:** `src/main/java/ao/creativemode/kixi/repository/[NomeDaEntidade]Repository.java`
 - **Propósito:** Interface para acesso ao banco de dados, usando Spring Data R2DBC.
 - **Integração:** Utilizado pelo service. Opera sobre entidades.
 - **Boas práticas:**
   - Extende `ReactiveCrudRepository`.
   - Métodos customizados para soft delete (`findAllByDeletedFalse`, etc).
+  - Consulte o arquivo do repository de schoolyears para exemplos de métodos customizados.
 
 ### 4. Model (Entidade)
-- **Caminho:** `src/main/java/ao/creativemode/kixi/model/SchoolYear.java`
+- **Caminho:** `src/main/java/ao/creativemode/kixi/model/[NomeDaEntidade].java`
 - **Propósito:** Representa a tabela no banco de dados.
 - **Integração:** Usada pelo repository e service.
 - **Boas práticas:**
   - Anotações do Spring Data (`@Table`, `@Id`, `@Column`).
   - Métodos utilitários para soft delete e restore.
+  - Consulte o arquivo da entidade schoolyears para exemplos de estrutura e métodos.
 
 ### 5. DTOs
-- **Caminho:** `src/main/java/ao/creativemode/kixi/dto/schoolyears/`
+- **Caminho:** `src/main/java/ao/creativemode/kixi/dto/[nomeDaEntidade]/`
 - **Propósito:** Transportam dados entre camadas e expõem contratos da API.
 - **Integração:** Usados no controller e service.
 - **Boas práticas:**
   - Utilização de `record` para imutabilidade.
   - Validação com anotações (`@NotNull`, `@Positive`).
+  - Consulte os DTOs de schoolyears para exemplos de estrutura e validação.
 
 ### 6. Migration (Banco de Dados)
-- **Caminho:** `src/main/resources/db/migration/V1__create_anos_letivos_table.sql`
+- **Caminho:** `src/main/resources/db/migration/Vx__create_[nome_da_tabela]_table.sql`
 - **Propósito:** Cria a tabela no banco de dados.
 - **Integração:** Executada automaticamente na inicialização.
 - **Boas práticas:**
   - Constrains de unicidade e integridade.
+  - Consulte a migration de schoolyears para exemplos de constraints e estrutura.
 
 ### 7. Configurações
 - **Caminho:** `src/main/resources/application.properties`
@@ -63,6 +70,7 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
 - **Integração:** Usado pelo framework.
 - **Boas práticas:**
   - Não versionar senhas reais. Use arquivos de exemplo.
+  - Consulte o arquivo de configuração do projeto para exemplos de propriedades.
 
 ### 8. Exceptions e Handler Global
 - **Caminho:** `src/main/java/ao/creativemode/kixi/common/exception/`
@@ -71,8 +79,10 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
 - **Boas práticas:**
   - Uso de Problem Details (RFC 9457).
   - Handlers para validação e erros genéricos.
+  - Consulte os arquivos de exceção e handler global para exemplos de tratamento de erros.
 
 ---
+
 
 ## Fluxo das Operações CRUD
 
@@ -103,6 +113,8 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
 - **Controller:** Chama `service.hardDelete()`.
 - **Service:** Remove entidade do banco.
 
+Consulte o fluxo completo do CRUD de schoolyears para exemplos detalhados de cada operação.
+
 ---
 
 ## Boas Práticas Gerais
@@ -117,15 +129,17 @@ Este guia detalha o padrão de implementação de CRUDs no backend localizado em
 
 ---
 
+
 ## Como Implementar um Novo CRUD
-1. Crie a entidade em `model/`.
-2. Defina DTOs em `dto/<entidade>/`.
+1. Crie a entidade em `model/` usando `[nome da entidade]`.
+2. Defina DTOs em `dto/[nome da entidade]/`.
 3. Implemente o repository.
 4. Implemente o service.
 5. Implemente o controller.
 6. Crie migration para a tabela.
 7. Adapte o handler global se necessário.
 8. Siga as boas práticas acima.
+9. Consulte os arquivos do CRUD de schoolyears para exemplos práticos e adaptação.
 
 ---
 
