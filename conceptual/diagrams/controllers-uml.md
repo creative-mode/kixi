@@ -1,7 +1,10 @@
+```mermaid
 
-```mermaid    
-    
-    %% CONTROLLERS COM DTOs
+
+%% CONTROLLERS COM DTOs
+
+classDiagram
+    %% CONTROLLERS
     class SchoolYearController {
         +listAllActive() : Mono<ResponseEntity<List<SchoolYearResponse>>>
         +listTrashed() : Mono<ResponseEntity<List<SchoolYearResponse>>>
@@ -156,4 +159,5 @@
 
     }
 
- 
+
+```
