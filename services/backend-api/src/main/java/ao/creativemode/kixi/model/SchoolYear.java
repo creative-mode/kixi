@@ -35,19 +35,20 @@ public class SchoolYear {
     public Integer getEndYear() { return endYear; }
     public void setEndYear(Integer endYear) { this.endYear = endYear; }
 
-    public boolean isDeleted() { return deleted; }
     public void setDeleted(boolean deleted) { this.deleted = deleted; }
 
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
 
     public void markAsDeleted() {
-        this.deleted = true;
         this.deletedAt = LocalDateTime.now();
     }
 
     public void restore() {
-        this.deleted = false;
         this.deletedAt = null;
+    }
+    
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 }

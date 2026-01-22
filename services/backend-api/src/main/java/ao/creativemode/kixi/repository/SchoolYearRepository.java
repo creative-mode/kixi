@@ -7,11 +7,11 @@ import reactor.core.publisher.Mono;
 
 public interface SchoolYearRepository extends ReactiveCrudRepository<SchoolYear, Long> {
 
-    Flux<SchoolYear> findAllByDeletedFalse();
+    Flux<SchoolYear> findAllByDeletedAtIsNull();
 
-    Mono<SchoolYear> findByIdAndDeletedFalse(Long id);
+    Flux<SchoolYear> findAllByDeletedAtIsNotNull();
 
-    Mono<SchoolYear> findByIdAndDeletedTrue(Long id);
+    Mono<SchoolYear> findByIdAndDeletedAtIsNull(Long id);
 
-    Flux<SchoolYear> findAllByDeletedTrue();
+    Mono<SchoolYear> findByIdAndDeletedAtIsNotNull(Long id);
 }

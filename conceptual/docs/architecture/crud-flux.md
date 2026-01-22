@@ -1,300 +1,133 @@
-# Guia de Implementação de CRUD Reativo com Spring WebFlux
+# Guia de Implementação de CRUDs Reativos no Projeto
 
-Este guia apresenta um modelo para criar módulos CRUD reativos usando Spring WebFlux, seguindo a arquitetura e boas práticas do backend existente. Use este documento como referência para novos módulos, adaptando para cada entidade conforme necessário.
-
----
-
-## Estrutura de Arquivos Recomendada
-
-```
-src/main/java/ao/creativemode/
-  ├── controller/
-  │     ProdutoMockController.java
-  ├── service/
-  │     ProdutoMockService.java
-  ├── repository/
-  │     ProdutoMockRepository.java
-  ├── model/
-  │     ProdutoMock.java
-  ├── dto/
-  │     produtomock/
-  │         ProdutoMockCreateDTO.java
-  │         ProdutoMockUpdateDTO.java
-  │         ProdutoMockResponseDTO.java
-  ├── mapper/
-  │     ProdutoMockMapper.java
-  └── exception/
-        GlobalExceptionHandler.java
-```
+Este guia detalha o padrão de implementação de CRUDs no backend localizado em `services/backend-api`, com base no exemplo de `SchoolYear`. Siga este modelo para criar novos módulos CRUD consistentes e alinhados às boas práticas do projeto.
 
 ---
 
-## 1. Entidade de Domínio
+## Estrutura de Arquivos e Propósito
 
-```java
-// ProdutoMock.java
-package ao.creativemode.model;
+### 1. Controller
+- **Caminho:** `src/main/java/ao/creativemode/kixi/controller/SchoolYearController.java`
+- **Propósito:** Define as rotas HTTP e expõe a API REST para a entidade. Recebe requisições, valida dados e delega ao service.
+- **Integração:** Depende do service correspondente. Utiliza DTOs para entrada e saída.
+- **Boas práticas:**
+  - Anotado com `@RestController` e `@RequestMapping`.
+  - Métodos reativos (`Mono`, `Flux`).
+  - Validação com `@Valid`.
+  - Retorno padronizado com `ResponseEntity`.
 
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.relational.core.mapping.Table;
+### 2. Service
+- **Caminho:** `src/main/java/ao/creativemode/kixi/service/SchoolYearService.java`
+- **Propósito:** Implementa a lógica de negócio do CRUD. Realiza validações adicionais e orquestra operações no repositório.
+- **Integração:** Depende do repository. Utiliza DTOs e entidades.
+- **Boas práticas:**
+  - Anotado com `@Service`.
+  - Métodos reativos (`Mono`, `Flux`).
+  - Conversão entre entidade e DTO centralizada.
+  - Lida com soft delete, restore e hard delete.
 
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-@Table("produtos_mock")
-public class ProdutoMock {
-    @Id
-    private Long id;
-    private String nome;
-    private Double preco;
-}
-```
-*Utilize anotações do Spring Data para persistência e Lombok para reduzir boilerplate.*
+### 3. Repository
+- **Caminho:** `src/main/java/ao/creativemode/kixi/repository/SchoolYearRepository.java`
+- **Propósito:** Interface para acesso ao banco de dados, usando Spring Data R2DBC.
+- **Integração:** Utilizado pelo service. Opera sobre entidades.
+- **Boas práticas:**
+  - Extende `ReactiveCrudRepository`.
+  - Métodos customizados para soft delete (`findAllByDeletedFalse`, etc).
 
----
+### 4. Model (Entidade)
+- **Caminho:** `src/main/java/ao/creativemode/kixi/model/SchoolYear.java`
+- **Propósito:** Representa a tabela no banco de dados.
+- **Integração:** Usada pelo repository e service.
+- **Boas práticas:**
+  - Anotações do Spring Data (`@Table`, `@Id`, `@Column`).
+  - Métodos utilitários para soft delete e restore.
 
-## 2. DTOs
+### 5. DTOs
+- **Caminho:** `src/main/java/ao/creativemode/kixi/dto/schoolyears/`
+- **Propósito:** Transportam dados entre camadas e expõem contratos da API.
+- **Integração:** Usados no controller e service.
+- **Boas práticas:**
+  - Utilização de `record` para imutabilidade.
+  - Validação com anotações (`@NotNull`, `@Positive`).
 
-```java
-// ProdutoMockCreateDTO.java
-package ao.creativemode.dto.produtomock;
+### 6. Migration (Banco de Dados)
+- **Caminho:** `src/main/resources/db/migration/V1__create_anos_letivos_table.sql`
+- **Propósito:** Cria a tabela no banco de dados.
+- **Integração:** Executada automaticamente na inicialização.
+- **Boas práticas:**
+  - Constrains de unicidade e integridade.
 
-import jakarta.validation.constraints.NotNull;
+### 7. Configurações
+- **Caminho:** `src/main/resources/application.properties`
+- **Propósito:** Configura conexão com o banco e propriedades do Spring.
+- **Integração:** Usado pelo framework.
+- **Boas práticas:**
+  - Não versionar senhas reais. Use arquivos de exemplo.
 
-public record ProdutoMockCreateDTO(
-    @NotNull String nome,
-    @NotNull Double preco
-) {}
-
-// ProdutoMockUpdateDTO.java
-package ao.creativemode.dto.produtomock;
-
-import jakarta.validation.constraints.NotNull;
-
-public record ProdutoMockUpdateDTO(
-    @NotNull String nome,
-    @NotNull Double preco
-) {}
-
-// ProdutoMockResponseDTO.java
-package ao.creativemode.dto.produtomock;
-
-public record ProdutoMockResponseDTO(
-    Long id,
-    String nome,
-    Double preco
-) {}
-```
-*Separe DTOs para criação, atualização e resposta. Use `record` para imutabilidade e validação.*
-
----
-
-## 3. Repository
-
-```java
-// ProdutoMockRepository.java
-package ao.creativemode.repository;
-
-import ao.creativemode.model.ProdutoMock;
-import org.springframework.data.repository.reactive.ReactiveCrudRepository;
-
-public interface ProdutoMockRepository extends ReactiveCrudRepository<ProdutoMock, Long> {
-    // Métodos customizados podem ser adicionados aqui
-}
-```
-*Utilize `ReactiveCrudRepository` para operações reativas nativas.*
+### 8. Exceptions e Handler Global
+- **Caminho:** `src/main/java/ao/creativemode/kixi/common/exception/`
+- **Propósito:** Centraliza tratamento de erros e padroniza respostas.
+- **Integração:** Usado por todas as camadas.
+- **Boas práticas:**
+  - Uso de Problem Details (RFC 9457).
+  - Handlers para validação e erros genéricos.
 
 ---
 
-## 4. Mapper
+## Fluxo das Operações CRUD
 
-```java
-// ProdutoMockMapper.java
-package ao.creativemode.mapper;
+### Create
+- **Controller:** Recebe DTO de criação, valida e chama `service.create()`.
+- **Service:** Converte DTO em entidade, salva via repository, retorna DTO de resposta.
+- **Repository:** Persiste entidade.
 
-import ao.creativemode.model.ProdutoMock;
-import ao.creativemode.dto.produtomock.*;
+### Read (Listar e Buscar por ID)
+- **Controller:** Expõe endpoints para listar ativos, listar deletados, buscar por ID.
+- **Service:** Busca entidades via repository, converte para DTO de resposta.
+- **Repository:** Métodos customizados para ativos/deletados.
 
-public class ProdutoMockMapper {
-    public static ProdutoMock toEntity(ProdutoMockCreateDTO dto) {
-        return new ProdutoMock(null, dto.nome(), dto.preco());
-    }
-    public static ProdutoMock toEntity(Long id, ProdutoMockUpdateDTO dto) {
-        return new ProdutoMock(id, dto.nome(), dto.preco());
-    }
-    public static ProdutoMockResponseDTO toResponseDTO(ProdutoMock entity) {
-        return new ProdutoMockResponseDTO(entity.getId(), entity.getNome(), entity.getPreco());
-    }
-}
-```
+### Update
+- **Controller:** Recebe DTO de atualização, valida e chama `service.update()`.
+- **Service:** Busca entidade, atualiza campos, salva e retorna DTO de resposta.
+
+### Delete (Soft Delete)
+- **Controller:** Chama `service.softDelete()`.
+- **Service:** Marca entidade como deletada, salva.
+- **Repository:** Atualiza registro.
+
+### Restore
+- **Controller:** Chama `service.restore()`.
+- **Service:** Restaura entidade deletada, salva.
+
+### Hard Delete
+- **Controller:** Chama `service.hardDelete()`.
+- **Service:** Remove entidade do banco.
+
+---
+
+## Boas Práticas Gerais
+- Separe DTOs, entidades, services, controllers e repositórios em pacotes distintos.
+- Use métodos reativos (`Mono`, `Flux`) em todas as camadas.
+- Nunca use `.block()` ou `.subscribe()` fora de testes.
+- Valide dados com anotações e `@Valid`.
+- Centralize conversão entre entidade e DTO.
+- Implemente soft delete sempre que necessário.
+- Centralize tratamento de erros com handler global.
+- Documente endpoints e regras de negócio.
+
+---
+
+## Como Implementar um Novo CRUD
+1. Crie a entidade em `model/`.
+2. Defina DTOs em `dto/<entidade>/`.
+3. Implemente o repository.
+4. Implemente o service.
+5. Implemente o controller.
+6. Crie migration para a tabela.
+7. Adapte o handler global se necessário.
+8. Siga as boas práticas acima.
+
+---
+
+Este guia é o padrão oficial para CRUDs reativos neste projeto. Adapte conforme necessário, mantendo a arquitetura e as convenções.
 *Centralize conversões entre entidades e DTOs para facilitar manutenção.*
-
----
-
-## 5. Service
-
-```java
-// ProdutoMockService.java
-package ao.creativemode.service;
-
-import ao.creativemode.repository.ProdutoMockRepository;
-import ao.creativemode.dto.produtomock.*;
-import ao.creativemode.mapper.ProdutoMockMapper;
-import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-
-@Service
-public class ProdutoMockService {
-    private final ProdutoMockRepository repository;
-
-    public ProdutoMockService(ProdutoMockRepository repository) {
-        this.repository = repository;
-    }
-
-    public Flux<ProdutoMockResponseDTO> getAll() {
-        return repository.findAll()
-            .map(ProdutoMockMapper::toResponseDTO);
-    }
-
-    public Mono<ProdutoMockResponseDTO> getById(Long id) {
-        return repository.findById(id)
-            .map(ProdutoMockMapper::toResponseDTO);
-    }
-
-    public Mono<ProdutoMockResponseDTO> create(ProdutoMockCreateDTO dto) {
-        ProdutoMock entity = ProdutoMockMapper.toEntity(dto);
-        return repository.save(entity)
-            .map(ProdutoMockMapper::toResponseDTO);
-    }
-
-    public Mono<ProdutoMockResponseDTO> update(Long id, ProdutoMockUpdateDTO dto) {
-        return repository.findById(id)
-            .flatMap(existing -> {
-                ProdutoMock updated = ProdutoMockMapper.toEntity(id, dto);
-                return repository.save(updated);
-            })
-            .map(ProdutoMockMapper::toResponseDTO);
-    }
-
-    public Mono<Void> delete(Long id) {
-        return repository.deleteById(id);
-    }
-}
-```
-*Garanta reatividade pura: sempre retorne Mono/Flux, sem blocos ou subscribe.*
-
----
-
-## 6. Controller
-
-```java
-// ProdutoMockController.java
-package ao.creativemode.controller;
-
-import ao.creativemode.dto.produtomock.*;
-import ao.creativemode.service.ProdutoMockService;
-import org.springframework.web.bind.annotation.*;
-import jakarta.validation.Valid;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-
-@RestController
-@RequestMapping("/produtos-mock")
-public class ProdutoMockController {
-    private final ProdutoMockService service;
-
-    public ProdutoMockController(ProdutoMockService service) {
-        this.service = service;
-    }
-
-    @GetMapping
-    public Flux<ProdutoMockResponseDTO> getAll() {
-        return service.getAll();
-    }
-
-    @GetMapping("/{id}")
-    public Mono<ProdutoMockResponseDTO> getById(@PathVariable Long id) {
-        return service.getById(id);
-    }
-
-    @PostMapping
-    public Mono<ProdutoMockResponseDTO> create(@Valid @RequestBody ProdutoMockCreateDTO dto) {
-        return service.create(dto);
-    }
-
-    @PutMapping("/{id}")
-    public Mono<ProdutoMockResponseDTO> update(@PathVariable Long id, @Valid @RequestBody ProdutoMockUpdateDTO dto) {
-        return service.update(id, dto);
-    }
-
-    @DeleteMapping("/{id}")
-    public Mono<Void> delete(@PathVariable Long id) {
-        return service.delete(id);
-    }
-}
-```
-*Utilize validação com `@Valid` e mantenha endpoints reativos.*
-
----
-
-## 7. Handler Global de Exceções
-
-```java
-// GlobalExceptionHandler.java
-package ao.creativemode.exception;
-
-import org.springframework.web.bind.annotation.ControllerAdvice;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.server.ResponseStatusException;
-
-@ControllerAdvice
-public class GlobalExceptionHandler {
-    @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<String> handleResponseStatusException(ResponseStatusException ex) {
-        return ResponseEntity.status(ex.getStatusCode()).body(ex.getReason());
-    }
-    // Adicione outros handlers conforme necessário
-}
-```
-*Centralize tratamento de erros para respostas padronizadas e claras.*
-
----
-
-## Boas Práticas e Observações
-
-- **Separação de responsabilidades:** mantenha DTOs, entidades, mappers, serviços e controllers em pacotes distintos.
-- **Reatividade pura:** nunca use `.block()` ou `.subscribe()` nos fluxos, exceto em testes.
-- **Validação:** utilize anotações de validação nos DTOs e `@Valid` nos controllers.
-- **Naming conventions:** siga nomes consistentes para arquivos, classes e endpoints.
-- **Tratamento de erros:** implemente um handler global para exceções.
-- **Mapper centralizado:** facilita manutenção e testes.
-- **Documentação:** sempre documente endpoints e regras de negócio.
-
----
-
-## Como Reaplicar o Padrão para Novas Entidades
-
-1. **Crie a entidade de domínio** em `model/`.
-2. **Defina os DTOs** em `dto/<entidade>/` para criação, atualização e resposta.
-3. **Implemente o repository** estendendo `ReactiveCrudRepository`.
-4. **Crie o mapper** para conversão entre entidade e DTOs.
-5. **Implemente o service** com métodos reativos usando Mono/Flux.
-6. **Implemente o controller** com endpoints REST reativos.
-7. **Adicione o handler global de exceções** se necessário.
-8. **Siga as boas práticas** descritas acima.
-
----
-
-## Referências
-- [Spring WebFlux Documentation](https://docs.spring.io/spring-framework/docs/current/reference/html/web-reactive.html)
-- [Project Reactor](https://projectreactor.io/)
-- [Spring Data R2DBC](https://spring.io/projects/spring-data-r2dbc)
-
----
-
-Este guia serve como modelo oficial para novos módulos CRUD reativos no backend. Adapte conforme necessário para cada contexto, mantendo a arquitetura e boas práticas.
