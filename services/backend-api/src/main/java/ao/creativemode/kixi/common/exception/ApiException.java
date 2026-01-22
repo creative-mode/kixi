@@ -1,26 +1,33 @@
 package ao.creativemode.kixi.common.exception;
 
-public class ApiException extends RuntimeException {
-    private final int status;
+import org.springframework.http.HttpStatus;
 
-    public ApiException(String message, int status) {
+public class ApiException extends RuntimeException {
+    private final HttpStatus status;
+    private final String title;
+    private final String code;
+
+    public ApiException(HttpStatus status, String message) {
         super(message);
         this.status = status;
+        this.title = null;
+        this.code = null;
     }
 
-    public int getStatus() {
-        return status;
+    public ApiException(HttpStatus status, String title, String message) {
+        super(message);
+        this.status = status;
+        this.title = title;
+        this.code = null;
     }
 
     public static ApiException notFound(String message) {
-        return new ApiException(message, 404);
+        return new ApiException(HttpStatus.NOT_FOUND, "Not Found", message);
     }
 
     public static ApiException badRequest(String message) {
-        return new ApiException(message, 400);
+        return new ApiException(HttpStatus.BAD_REQUEST, "Bad Request", message);
     }
 
-    public static ApiException internalError(String message) {
-        return new ApiException(message, 500);
-    }
+    // getters...
 }
