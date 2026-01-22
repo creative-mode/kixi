@@ -89,4 +89,8 @@ All contributions should follow the defined workflow and adhere to the documente
 * This repository defines the canonical structure and standards of the platform
 * Each service is expected to maintain its own documentation
 * Architectural changes should be accompanied by an ADR
+  
+## License
 
+This project is licensed under the Apache License 2.0
+with the Commons Clause restriction.
