@@ -143,5 +143,19 @@ Consulte o fluxo completo do CRUD de schoolyears para exemplos detalhados de cad
 
 ---
 
+## Destaques Importantes
+
+- **Relacionamentos Many-to-Many:**  
+  - Se **não há dados extras** na tabela intermediária, **evite criar uma entidade** para ela; utilize apenas a anotação `@ManyToMany` nas entidades relacionadas.
+  - Se **há dados extras** (colunas adicionais além das FKs), **sempre crie a entidade** da tabela intermediária e trate-a como uma “entidade normal” (com CRUD, DTOs, etc).
+
+- **DTOs:**  
+  Sempre crie DTOs para transportar dados entre camadas e **nunca exponha diretamente suas entidades** nos endpoints.
+
+- **Service Layer:**  
+  É recomendável utilizar uma camada de service para manter o controller limpo e separar a lógica de negócio.
+
+---
+
 Este guia é o padrão oficial para CRUDs reativos neste projeto. Adapte conforme necessário, mantendo a arquitetura e as convenções.
 *Centralize conversões entre entidades e DTOs para facilitar manutenção.*
