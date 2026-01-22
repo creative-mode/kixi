@@ -6,21 +6,21 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
-@Table("school_years")
+@Table("schoolYears")
 public class SchoolYear {
 
     @Id
     private Long id;
 
-    @Column("start_year")
+    @Column("startYear")
     private Integer startYear;
 
-    @Column("end_year")
+    @Column("endYear")
     private Integer endYear;
 
     private boolean deleted = false;
 
-    @Column("deleted_at")
+    @Column("deletedAt")
     private LocalDateTime deletedAt;
 
     public SchoolYear() {

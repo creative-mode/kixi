@@ -12,72 +12,72 @@ Para cada simulação efetuada, o sistema deverá ainda guardar o histórico det
 
 É importante salientar que um usuário pode realizar várias simulações, contudo cada simulação está associada a um único usuário e a um único enunciado. Um enunciado pode ser utilizado em várias simulações, e cada simulação pode conter várias respostas correspondentes às questões do enunciado. Do mesmo modo, um curso pode estar associado a vários enunciados, mas um enunciado pode estar direcionado apenas a um curso específico ou ser comum a todos.
 
-## MER
+## ERD
 
-**anosLetivos** (id, anoInicio, anoFim);  </br>
-**trimestres** (id, numero);  </br>
-**disciplinas** (id, nome);  </br>
-**cursos** (id, nome, descricao);  </br>
-**turmas** (id, nome, classe);  </br>
-**contas** (
+**schoolYears** (id, startYear, endYear);  </br>
+**terms** (id, number);  </br>
+**subjects** (id, name);  </br>
+**courses** (id, name, description);  </br>
+**classes** (id, name, grade);  </br>
+**accounts** (
 id,
 username,
 email,
 passwordHash,
-emailVerificado,
-ativo,
-dataCriacao,
-ultimoLogin
+emailVerified,
+active,
+createdAt,
+lastLogin
 );  </br>
-**usuarios** (
+**users** (
 id,
-primeiroNome,
-ultimoNome,
-foto,
-idConta
+firstName,
+lastName,
+photo,
+accountId
 );  </br>
-**roles** (id, nome, descricao);
-contaRoles (id, idConta, idRole);
-sessoes (
+**roles** (id, name, description);  
+accountRoles (id, accountId, roleId);  
+**sessions** (
 id,
-idConta,
+accountId,
 token,
-dataCriacao,
-dataExpiracao,
-ativo
+createdAt,
+expiresAt,
+active
 );  </br>
-**enunciados** (
+**statements** (
 id,
-tipoProva,
-duracaoMinutos,
-variante,
-idAnoLetivo,
-idTrimestre,
-idDisciplina,
-idTurma,
-idCurso,
-criadoPor
+examType,
+durationMinutes,
+variant,
+schoolYearId,
+termId,
+subjectId,
+classId,
+courseId,
+createdBy
 );  </br>
-**questoes** (
+**questions** (
 id,
-numero,
-texto,
-pontuacao,
-idEnunciado
+number,
+text,
+score,
+statementId
 );  </br>
-**simulacoes** (
+**simulations** (
 id,
-idConta,
-idEnunciado,
-data,
-notaFinal,
-tempoGasto
+accountId,
+statementId,
+date,
+finalScore,
+timeSpent
 );  </br>
-**respostasSimulacao** (
+**simulationAnswers** (
 id,
-idSimulacao,
-idQuestao,
-respostaTexto,
-correta,
-pontuacaoObtida
-); 
+simulationId,
+questionId,
+answerText,
+correct,
+scoreObtained
+);  </br>
