@@ -1,110 +1,102 @@
 package ao.creativemode.kixi.controller;
 
-import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.dto.courses.CourseRequest;
 import ao.creativemode.kixi.dto.courses.CourseResponse;
 import ao.creativemode.kixi.service.CourseService;
 import jakarta.validation.Valid;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Flux;
+import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
+import java.net.URI;
+import java.util.List;
+import static org.springframework.http.HttpStatus.NO_CONTENT;
 
 @RestController
 @RequestMapping("/api/v1/courses")
 public class CourseController {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CourseController.class);
+    private final CourseService service;
 
-    private final CourseService courseService;
-
-    public CourseController(CourseService courseService) {
-        this.courseService = courseService;
+    public CourseController(CourseService service) {
+        this.service = service;
     }
 
+    /**
+     * Retrieves all active (non-deleted) courses.
+     */
     @GetMapping
-    public Flux<CourseResponse> listAllActive() {
-        LOG.info("GET /api/v1/courses - Listar todos os cursos ativos");
-        return courseService.findAllActive();
+    public Mono<ResponseEntity<List<CourseResponse>>> listAllActive() {
+        return service.findAllActive()
+                .collectList()
+                .map(ResponseEntity::ok);
     }
 
+    /**
+     * Retrieves all soft-deleted (trashed) courses.
+     */
     @GetMapping("/trash")
-    public Flux<CourseResponse> listAllDeleted() {
-        LOG.info("GET /api/v1/courses/trash - Listar todos os cursos deletados");
-        return courseService.findAllDeleted();
+    public Mono<ResponseEntity<List<CourseResponse>>> listTrashed() {
+        return service.findAllDeleted()
+                .collectList()
+                .map(ResponseEntity::ok);
     }
 
+    /**
+     * Retrieves a single active course by ID.
+     */
     @GetMapping("/{id}")
-    public Mono<ResponseEntity<CourseResponse>> getCourseById(@PathVariable Long id) {
-        if (id == null || id <= 0) {
-            LOG.warn("GET /api/v1/courses/{} - ID inválido fornecido", id);
-            return Mono.error(new ApiException("ID inválido", HttpStatus.BAD_REQUEST));
-        }
-
-        LOG.info("GET /api/v1/courses/{} - Obter curso por ID", id);
-        return courseService.findByIdActive(id)
-            .map(ResponseEntity::ok)
-            .doOnError(error -> LOG.error("Erro ao buscar curso com ID {}: {}", id, error.getMessage()));
+    public Mono<ResponseEntity<CourseResponse>> getById(@PathVariable Long id) {
+        return service.findByIdActive(id)
+                .map(ResponseEntity::ok);
     }
 
+    /**
+     * Creates a new course.
+     */
     @PostMapping
-    public Mono<ResponseEntity<CourseResponse>> createCourse(@Valid @RequestBody CourseRequest request) {
-        LOG.info("POST /api/v1/courses - Criar novo curso com código: {}", request.code());
+    public Mono<ResponseEntity<CourseResponse>> create(
+            @Valid @RequestBody CourseRequest request,
+            UriComponentsBuilder uriBuilder) {
 
-        return courseService.create(request)
-            .map(created -> ResponseEntity.status(HttpStatus.CREATED).body(created))
-            .doOnSuccess(response -> LOG.info("Curso criado com sucesso: {}", response.getBody().id()))
-            .doOnError(error -> LOG.error("Erro ao criar curso: {}", error.getMessage()));
+        return service.create(request)
+                .map(created -> {
+                    URI location = uriBuilder
+                            .path("/api/v1/courses/{id}")
+                            .buildAndExpand(created.id())
+                            .toUri();
+
+                    return ResponseEntity.created(location).body(created);
+                });
     }
 
+    /**
+     * Updates an existing active course.
+     */
     @PutMapping("/{id}")
-    public Mono<ResponseEntity<CourseResponse>> updateCourse(
+    public Mono<ResponseEntity<CourseResponse>> update(
             @PathVariable Long id,
             @Valid @RequestBody CourseRequest request) {
 
-        if (id == null || id <= 0) {
-            LOG.warn("PUT /api/v1/courses/{} - ID inválido fornecido", id);
-            return Mono.error(new ApiException("ID inválido", HttpStatus.BAD_REQUEST));
-        }
-
-        LOG.info("PUT /api/v1/courses/{} - Atualizar curso", id);
-
-        return courseService.update(id, request)
-            .map(ResponseEntity::ok)
-            .doOnSuccess(response -> LOG.info("Curso {} atualizado com sucesso", id))
-            .doOnError(error -> LOG.error("Erro ao atualizar curso {}: {}", id, error.getMessage()));
+        return service.update(id, request)
+                .map(ResponseEntity::ok);
     }
 
+    /**
+     * Soft-deletes a course (moves it to trash).
+     */
     @DeleteMapping("/{id}")
-    public Mono<ResponseEntity<Void>> deleteCourse(@PathVariable Long id) {
-        if (id == null || id <= 0) {
-            LOG.warn("DELETE /api/v1/courses/{} - ID inválido fornecido", id);
-            return Mono.error(new ApiException("ID inválido", HttpStatus.BAD_REQUEST));
-        }
-
-        LOG.info("DELETE /api/v1/courses/{} - Deletar curso", id);
-
-        return courseService.softDelete(id)
-            .then(Mono.fromCallable(() -> ResponseEntity.noContent().<Void>build()))
-            .doOnSuccess(response -> LOG.info("Curso {} deletado com sucesso", id))
-            .doOnError(error -> LOG.error("Erro ao deletar curso {}: {}", id, error.getMessage()));
+    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
+        return service.softDelete(id)
+                .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
+    /**
+     * Restores a soft-deleted course from trash.
+     */
     @PostMapping("/{id}/restore")
-    public Mono<ResponseEntity<CourseResponse>> restoreCourse(@PathVariable Long id) {
-        if (id == null || id <= 0) {
-            LOG.warn("POST /api/v1/courses/{}/restore - ID inválido fornecido", id);
-            return Mono.error(new ApiException("ID inválido", HttpStatus.BAD_REQUEST));
-        }
-
-        LOG.info("POST /api/v1/courses/{}/restore - Restaurar curso", id);
-
-        return courseService.restore(id)
-            .map(ResponseEntity::ok)
-            .doOnSuccess(response -> LOG.info("Curso {} restaurado com sucesso", id))
-            .doOnError(error -> LOG.error("Erro ao restaurar curso {}: {}", id, error.getMessage()));
+    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
+        return service.restore(id)
+                .thenReturn(ResponseEntity.ok().build());
     }
 }
