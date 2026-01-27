@@ -5,16 +5,16 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record AccountRequest(
-    @NotBlank(message = "Username é obrigatório")
-    @Size(min = 3, max = 100, message = "Username deve ter entre 3 e 100 caracteres")
+    @NotBlank(message = "Username is required")
+    @Size(min = 3, max = 100, message = "Username must be between 3 and 100 characters")
     String username,
 
-    @NotBlank(message = "Email é obrigatório")
-    @Email(message = "Email deve ser válido")
-    @Size(max = 255, message = "Email não pode exceder 255 caracteres")
+    @NotBlank(message = "Email is required")
+    @Email(message = "Email must be valid")
+    @Size(max = 255, message = "Email must not exceed 255 characters")
     String email,
 
-    @NotBlank(message = "Palavra-passe é obrigatória")
-    @Size(min = 8, max = 255, message = "Palavra-passe deve ter entre 8 e 255 caracteres")
+    @NotBlank(message = "Password is required")
+    @Size(min = 8, max = 255, message = "Password must be between 8 and 255 characters")
     String password
 ) {}
