@@ -141,4 +141,11 @@ public class AccountService {
             entity.getDeletedAt()
         );
     }
+    public Mono<Void> hardDelete(Long id) {
+        return repository.findByIdAndDeletedAtIsNotNull(id)
+                .switchIfEmpty(
+                        Mono.error(ApiException.badRequest("Only deleted accounts can be permanently removed")))
+                .flatMap(repository::delete)
+                .then();
+    }
 }

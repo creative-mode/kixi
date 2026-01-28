@@ -19,7 +19,7 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
 
-    Mono<Account> findByEmailAndDeletedAtIsNull(String email);
+    Mono<Account> findByEmailAndDeletedAtIsNull(String email);    
 
     Mono<Account> findByEmailAndIdNotAndDeletedAtIsNull(String email, Long id);
 

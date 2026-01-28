@@ -128,4 +128,13 @@ public class AccountController {
         return service.recordLogin(id)
                 .map(ResponseEntity::ok);
     }
+
+    /**
+     * Permanently deletes a account (only if already soft-deleted).
+     */
+    @DeleteMapping("/{id}/purge")
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
+        return service.hardDelete(id)
+                .thenReturn(ResponseEntity.status(NO_CONTENT).build());
+    }
 }
