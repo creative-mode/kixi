@@ -124,7 +124,7 @@ public class UserController {
      * Permanently deletes a soft-deleted user.
      * Only deleted users can be permanently removed.
      */
-    @DeleteMapping("/{id}/hard-delete")
+    @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
         return service.hardDelete(id)
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
