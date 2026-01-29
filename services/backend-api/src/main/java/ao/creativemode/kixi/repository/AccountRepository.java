@@ -11,6 +11,8 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Flux<Account> findAllByDeletedAtIsNull();
 
+    Flux<Account> findAllByActiveAndDeletedAtIsNull(Boolean active);
+
     Flux<Account> findAllByDeletedAtIsNotNull();
 
     Mono<Account> findByIdAndDeletedAtIsNotNull(Long id);
