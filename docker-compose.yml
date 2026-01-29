@@ -1,2 +1,24 @@
-# docker-compose.yml
-# Add your service definitions here
+version: '3.8'
+
+services:
+  kixi_postgres:
+    image: postgres:15.15-alpine
+    container_name: kixi_postgres
+    environment:
+      POSTGRES_DB: kixi_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - kixi_postgres_data:/var/lib/postgresql/data
+      - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - kixi_network
+
+volumes:
+  kixi_postgres_data:
+
+networks:
+  kixi_network:
+    driver: bridge

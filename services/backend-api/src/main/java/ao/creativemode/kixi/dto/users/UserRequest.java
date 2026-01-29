@@ -5,17 +5,17 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 public record UserRequest(
-        @NotNull(message = "ID da conta é obrigatório")
+        @NotNull(message = "Account ID is required")
         Long accountId,
 
-        @NotBlank(message = "Nome é obrigatório")
-        @Size(min = 2, max = 100, message = "Nome deve ter entre 2 e 100 caracteres")
+        @NotBlank(message = "First name is required")
+        @Size(min = 2, max = 100, message = "First name must be between 2 and 100 characters")
         String firstName,
 
-        @NotBlank(message = "Sobrenome é obrigatório")
-        @Size(min = 2, max = 100, message = "Sobrenome deve ter entre 2 e 100 caracteres")
+        @NotBlank(message = "Last name is required")
+        @Size(min = 2, max = 100, message = "Last name must be between 2 and 100 characters")
         String lastName,
 
-        @Size(max = 500, message = "URL da foto não pode ter mais de 500 caracteres")
+        @Size(max = 500, message = "Photo URL cannot exceed 500 characters")
         String photo
 ) {}

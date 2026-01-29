@@ -1,9 +1,13 @@
 package ao.creativemode.kixi.service;
 
 import ao.creativemode.kixi.model.User;
+import ao.creativemode.kixi.model.Account;
 import ao.creativemode.kixi.repository.UserRepository;
+import ao.creativemode.kixi.repository.AccountRepository;
 import ao.creativemode.kixi.dto.users.UserResponse;
 import ao.creativemode.kixi.dto.users.UserRequest;
+import ao.creativemode.kixi.dto.users.UserResponseWithAccount;
+import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.common.exception.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -15,29 +19,47 @@ import java.time.LocalDateTime;
 public class UserService {
 
     private final UserRepository repository;
+    private final AccountRepository accountRepository;
 
-    public UserService(UserRepository repository) {
+    public UserService(UserRepository repository, AccountRepository accountRepository) {
         this.repository = repository;
+        this.accountRepository = accountRepository;
     }
 
     public Flux<UserResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull()
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
     public Flux<UserResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull()
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
     public Mono<UserResponse> findByIdActive(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("User not found")))
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
+    }
+
+    public Mono<UserResponseWithAccount> findByIdActiveWithAccount(Long id) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("User not found")))
+                .flatMap(this::loadAccountRelationship)
+                .flatMap(user -> {
+                    if (user.getAccount() == null) {
+                        return Mono.error(ApiException.notFound("Account not found"));
+                    }
+                    return Mono.just(toResponseWithAccount(user));
+                });
     }
 
     public Flux<UserResponse> findByAccountIdActive(Long accountId) {
         return repository.findByAccountIdAndDeletedAtIsNull(accountId)
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
@@ -96,6 +118,29 @@ public class UserService {
                 .then();
     }
 
+    public Mono<Void> hardDelete(Long id) {
+        return repository.findByIdAndDeletedAtIsNotNull(id)
+                .switchIfEmpty(
+                    Mono.error(ApiException.badRequest("Only deleted users can be permanently removed")))
+                .flatMap(repository::delete)
+                .then();
+    }
+
+    /**
+     * Loads the Account relationship for a User entity.
+     * This is necessary in R2DBC since it doesn't support lazy loading like JPA.
+     */
+    private Mono<User> loadAccountRelationship(User user) {
+        if (user.getAccountId() == null) {
+            return Mono.just(user);
+        }
+
+        return accountRepository.findByIdAndDeletedAtIsNull(user.getAccountId())
+                .doOnNext(user::setAccount)
+                .thenReturn(user)
+                .defaultIfEmpty(user);
+    }
+
     private UserResponse toResponse(User entity) {
         return new UserResponse(
                 entity.getId(),
@@ -106,6 +151,26 @@ public class UserService {
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
                 entity.getDeletedAt()
+        );
+    }
+
+    private UserResponseWithAccount toResponseWithAccount(User user) {
+        Account account = user.getAccount();
+        AccountBasicResponse accountResponse = new AccountBasicResponse(
+                account.getId(),
+                account.getUsername(),
+                account.getEmail()
+        );
+
+        return new UserResponseWithAccount(
+                user.getId(),
+                accountResponse,
+                user.getFirstName(),
+                user.getLastName(),
+                user.getPhoto(),
+                user.getCreatedAt(),
+                user.getUpdatedAt(),
+                user.getDeletedAt()
         );
     }
 }

@@ -11,6 +11,8 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Flux<Account> findAllByDeletedAtIsNull();
 
+    Flux<Account> findAllByActiveAndDeletedAtIsNull(Boolean active);
+
     Flux<Account> findAllByDeletedAtIsNotNull();
 
     Mono<Account> findByIdAndDeletedAtIsNotNull(Long id);
@@ -18,14 +20,4 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
     Mono<Account> findByUsernameAndDeletedAtIsNull(String username);
 
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
-
-    Mono<Account> findByEmailAndDeletedAtIsNull(String email);    
-
-    Mono<Account> findByEmailAndIdNotAndDeletedAtIsNull(String email, Long id);
-
-    Flux<Account> findAllByActiveAndDeletedAtIsNull(Boolean active);
-
-    Mono<Long> countByUsernameAndDeletedAtIsNull(String username);
-
-    Mono<Long> countByEmailAndDeletedAtIsNull(String email);
 }

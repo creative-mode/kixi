@@ -2,6 +2,7 @@ package ao.creativemode.kixi.controller;
 
 import ao.creativemode.kixi.dto.users.UserRequest;
 import ao.creativemode.kixi.dto.users.UserResponse;
+import ao.creativemode.kixi.dto.users.UserResponseWithAccount;
 import ao.creativemode.kixi.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -48,6 +49,15 @@ public class UserController {
     @GetMapping("/{id}")
     public Mono<ResponseEntity<UserResponse>> getById(@PathVariable Long id) {
         return service.findByIdActive(id)
+                .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Retrieves a single active user by ID with complete account information.
+     */
+    @GetMapping("/{id}/with-account")
+    public Mono<ResponseEntity<UserResponseWithAccount>> getByIdWithAccount(@PathVariable Long id) {
+        return service.findByIdActiveWithAccount(id)
                 .map(ResponseEntity::ok);
     }
 
@@ -108,5 +118,15 @@ public class UserController {
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
         return service.restore(id)
                 .thenReturn(ResponseEntity.ok().build());
+    }
+
+    /**
+     * Permanently deletes a soft-deleted user.
+     * Only deleted users can be permanently removed.
+     */
+    @DeleteMapping("/{id}/hard-delete")
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
+        return service.hardDelete(id)
+                .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 }
