@@ -104,7 +104,7 @@ public class CourseController {
      * Permanently deletes a soft-deleted course.
      * Only deleted courses can be permanently removed.
      */
-    @DeleteMapping("/{id}/hard-delete")
+    @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
         return service.hardDelete(id)
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
