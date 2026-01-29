@@ -28,30 +28,38 @@ public class UserService {
 
     public Flux<UserResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull()
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
     public Flux<UserResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull()
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
     public Mono<UserResponse> findByIdActive(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("User not found")))
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
     public Mono<UserResponseWithAccount> findByIdActiveWithAccount(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("User not found")))
-                .flatMap(user -> accountRepository.findByIdAndDeletedAtIsNull(user.getAccountId())
-                        .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
-                        .map(account -> toResponseWithAccount(user, account)));
+                .flatMap(this::loadAccountRelationship)
+                .flatMap(user -> {
+                    if (user.getAccount() == null) {
+                        return Mono.error(ApiException.notFound("Account not found"));
+                    }
+                    return Mono.just(toResponseWithAccount(user));
+                });
     }
 
     public Flux<UserResponse> findByAccountIdActive(Long accountId) {
         return repository.findByAccountIdAndDeletedAtIsNull(accountId)
+                .flatMap(this::loadAccountRelationship)
                 .map(this::toResponse);
     }
 
@@ -118,6 +126,21 @@ public class UserService {
                 .then();
     }
 
+    /**
+     * Loads the Account relationship for a User entity.
+     * This is necessary in R2DBC since it doesn't support lazy loading like JPA.
+     */
+    private Mono<User> loadAccountRelationship(User user) {
+        if (user.getAccountId() == null) {
+            return Mono.just(user);
+        }
+
+        return accountRepository.findByIdAndDeletedAtIsNull(user.getAccountId())
+                .doOnNext(user::setAccount)
+                .thenReturn(user)
+                .defaultIfEmpty(user);
+    }
+
     private UserResponse toResponse(User entity) {
         return new UserResponse(
                 entity.getId(),
@@ -131,7 +154,8 @@ public class UserService {
         );
     }
 
-    private UserResponseWithAccount toResponseWithAccount(User user, Account account) {
+    private UserResponseWithAccount toResponseWithAccount(User user) {
+        Account account = user.getAccount();
         AccountBasicResponse accountResponse = new AccountBasicResponse(
                 account.getId(),
                 account.getUsername(),

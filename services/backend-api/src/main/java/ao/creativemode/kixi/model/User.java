@@ -7,6 +7,7 @@ import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
@@ -24,6 +25,14 @@ public class User {
 
     @Column("account_id")
     private Long accountId;
+
+    /**
+     * Relationship field: User belongs to one Account.
+     * This field is not persisted in the database (marked as @Transient).
+     * Must be loaded explicitly via repository/service layer.
+     */
+    @Transient
+    private Account account;
 
     @Column("first_name")
     private String firstName;
@@ -61,5 +70,14 @@ public class User {
 
     public boolean isDeleted() {
         return deletedAt != null;
+    }
+
+    /**
+     * Sets the account relationship and updates the foreign key.
+     * In R2DBC, relationships must be managed manually.
+     */
+    public void setAccount(Account account) {
+        this.account = account;
+        this.accountId = account != null ? account.getId() : null;
     }
 }
