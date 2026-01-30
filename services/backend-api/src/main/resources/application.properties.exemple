@@ -1,3 +1,0 @@
-spring.r2dbc.url=r2dbc:postgresql://localhost:5432/seu_banco
-spring.r2dbc.username=postgres
-spring.r2dbc.password=sua_senha
