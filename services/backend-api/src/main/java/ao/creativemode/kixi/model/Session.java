@@ -3,13 +3,17 @@ package ao.creativemode.kixi.model;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
+import java.time.LocalDateTime;
+
 @Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @Table("sessions")
@@ -24,12 +28,12 @@ public class Session {
     private String token;
 
     @Column("ip_address")
-    private String ipAdress
+    private String ipAddress;
 
     @Column("expires_at")
     private LocalDateTime expiresAt;
 
-    @Colum("last_used")
+    @Column("last_used")
     private LocalDateTime lastUsed;
 
     @CreatedDate
@@ -42,6 +46,9 @@ public class Session {
 
     @Column("deleted_at")
     private LocalDateTime deletedAt;
+
+    @Transient
+    private Account account;
 
     public void markAsDeleted() {
         this.deletedAt = LocalDateTime.now();
