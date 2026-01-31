@@ -36,3 +36,5 @@ application.properties
 
 .env
 Kixi
+demo.iml
+docker-compose.yml
