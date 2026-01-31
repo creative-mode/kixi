@@ -1,7 +1,6 @@
 package ao.creativemode.kixi.model;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -12,6 +11,9 @@ import java.time.LocalDateTime;
 @Table("terms")
 @Getter
 @Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class Term {
 
     @Id
@@ -33,6 +35,10 @@ public class Term {
 
     public void markAsDeleted() {
         this.deletedAt = LocalDateTime.now();
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 
     public void restore() {
