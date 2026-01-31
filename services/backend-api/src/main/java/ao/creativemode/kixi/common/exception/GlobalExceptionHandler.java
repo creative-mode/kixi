@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.net.URI;
 import java.util.Map;
@@ -24,6 +25,22 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     private static final URI DEFAULT_TYPE = URI.create("https://api.kixi.com/errors");
+
+    @ExceptionHandler(DuplicateKeyException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleDuplicateKeyException(
+            DuplicateKeyException ex,
+            ServerWebExchange exchange) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                        409,
+                        "There is already an active simulation for this account and statement.")
+                .withTitle("Duplicate Resource");
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(ResponseEntity.status(409).body(problem));
+    }
+
 
     @ExceptionHandler(ApiException.class)
     public Mono<ResponseEntity<ProblemDetail>> handleApiException(
