@@ -17,5 +17,7 @@ public interface AccountRoleRepository extends ReactiveCrudRepository<AccountRol
 
     Mono<AccountRole> findByAccountIdAndRoleIdAndDeletedAtIsNull(Long accountId, Long roleId);
 
+    Mono<AccountRole> findFirstByAccountIdAndRoleId(Long accountId, Long roleId);
+
     Mono<Boolean> existsByAccountIdAndRoleIdAndDeletedAtIsNull(Long accountId, Long roleId);
 }
