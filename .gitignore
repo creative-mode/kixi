@@ -4,6 +4,7 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 aplication.properties
+Dockerfile
 
 ### STS ###
 .apt_generated
