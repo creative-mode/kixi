@@ -1,4 +1,3 @@
--- Script de criação da tabela 'terms'
 CREATE TABLE IF NOT EXISTS terms (
     id SERIAL PRIMARY KEY,
     number INTEGER NOT NULL,
@@ -8,8 +7,6 @@ CREATE TABLE IF NOT EXISTS terms (
     deleted_at TIMESTAMP
     );
 
--- Índices para otimizar as buscas por Soft Delete
 CREATE INDEX idx_terms_deleted_at ON terms(deleted_at);
 
--- Comentários para documentação da tabela
 COMMENT ON TABLE terms IS 'Tabela que armazena os períodos/trimestres letivos do sistema.';
