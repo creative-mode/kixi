@@ -1,0 +1,15 @@
+CREATE TABLE sessions (
+   id BIGSERIAL PRIMARY KEY,
+   account_id BIGINT NOT NULL,
+   token TEXT NOT NULL UNIQUE,
+   ip_address VARCHAR(45) NOT NULL,
+   expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+   last_used TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+   deleted_at TIMESTAMP WITH TIME ZONE,
+   CONSTRAINT fk_sessions_account_id
+       FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
+CREATE INDEX idx_sessions_account_id ON sessions(account_id);
