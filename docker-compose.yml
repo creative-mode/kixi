@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   kixi_postgres:
     image: postgres:15.15-alpine
