@@ -1,4 +1,3 @@
--- Tabela associativa N:N entre accounts e roles (AccountRole)
 CREATE TABLE IF NOT EXISTS account_roles (
     id BIGSERIAL PRIMARY KEY,
     account_id BIGINT NOT NULL,

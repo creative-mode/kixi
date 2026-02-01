@@ -5,15 +5,9 @@ import ao.creativemode.kixi.service.AccountRoleService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
-
 import java.util.List;
-
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
-/**
- * Controller para atribuição de roles a accounts (relacionamento N:N).
- * Base path: /api/v1/accounts/{accountId}/roles
- */
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/roles")
 public class AccountRoleController {
