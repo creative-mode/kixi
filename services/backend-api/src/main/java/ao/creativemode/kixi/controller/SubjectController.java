@@ -29,9 +29,9 @@ public class SubjectController {
                 .map(ResponseEntity::ok);
     }
 
-    @GetMapping("/{code}")
-    public Mono<ResponseEntity<SubjectResponse>> getByCode(@PathVariable String code){
-        return service.findByCodeActive(code)
+    @GetMapping("/{id}")
+    public Mono<ResponseEntity<SubjectResponse>> getByCode(@PathVariable Long id){
+        return service.findByCodeActive(id)
                 .map(ResponseEntity::ok);
     }
 
@@ -50,38 +50,38 @@ public class SubjectController {
         return service.create(request)
                 .map(subject->{
                     URI uriLocal = uriBuilder
-                            .path("/api/v1/subjects/{code}")
-                            .buildAndExpand(subject.code())
+                            .path("/api/v1/subjects/{id}")
+                            .buildAndExpand(subject.id())
                             .toUri();
                     return ResponseEntity.created(uriLocal).body(subject);
                 });
 
     }
 
-    @PutMapping("/{code}")
+    @PutMapping("/{id}")
     public Mono<ResponseEntity<SubjectResponse>> update(
-            @PathVariable String code,
+            @PathVariable Long id,
             @Valid @RequestBody SubjectRequest data
     ){
-        return service.update(code,data)
+        return service.update(id,data)
                 .map(ResponseEntity::ok);
     }
 
-    @DeleteMapping("/{code}")
-    public Mono<ResponseEntity<Void>> softDelete(@PathVariable String code){
-        return service.softDelete(code)
+    @DeleteMapping("/{id}")
+    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id){
+        return service.softDelete(id)
                 .map(v->ResponseEntity.noContent().build());
     }
 
-    @PostMapping("/{code}/restore")
-    public Mono<ResponseEntity<Void>> restore(@PathVariable String code){
-        return service.restore(code)
+    @PostMapping("/{id}/restore")
+    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id){
+        return service.restore(id)
                 .map(v->ResponseEntity.noContent().build());
     }
 
-    @DeleteMapping("/{code}/purge")
-    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable String code){
-        return service.hardDelete(code)
+    @DeleteMapping("/{id}/purge")
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id){
+        return service.hardDelete(id)
                 .map(v->ResponseEntity.noContent().build());
     }
 }

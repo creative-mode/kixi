@@ -29,8 +29,8 @@ public class SubjectService {
         return repository.findAllByDeletedAtIsNotNull().map(this::toResponse);
     }
 
-    public Mono<SubjectResponse>  findByCodeActive(String code){
-        return repository.findByCodeAndDeletedAtIsNull(code)
+    public Mono<SubjectResponse>  findByCodeActive(Long id){
+        return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))
                 .map(this::toResponse);
     }
@@ -41,7 +41,6 @@ public class SubjectService {
         newSubject.setName(data.name());
         newSubject.setShortName(data.shortName());
         newSubject.setDeletedAt(null);
-        newSubject.setNewRecord(true);
 
         return repository.save(newSubject)
                 .map(this::toResponse)
@@ -49,14 +48,16 @@ public class SubjectService {
                         e-> ApiException.conflict("Subject with code " + data.code() + " already exists."));
     }
 
-    public Mono<SubjectResponse> update(String code, SubjectRequest data){
-        return repository.findByCodeAndDeletedAtIsNull(code)
+    public Mono<SubjectResponse> update(Long id, SubjectRequest data){
+        return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))
                 .flatMap(subject -> {
+                    String newCode = data.code();
                     String newName = data.name();
                     String newShortName = data.shortName();
-                    System.out.println(data);
 
+
+                    subject.setCode(newCode);
                     subject.setName(newName);
                     subject.setShortName(newShortName);
                     return repository.save(subject)
@@ -65,8 +66,8 @@ public class SubjectService {
                 }).map(this::toResponse);
     }
 
-    public Mono<Void> softDelete(String code){
-        return repository.findByCodeAndDeletedAtIsNull(code)
+    public Mono<Void> softDelete(Long id){
+        return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))
                 .flatMap(subject -> {
                     subject.markAsDeleted();
@@ -74,8 +75,8 @@ public class SubjectService {
                 }).then();
     }
 
-    public Mono<Void> restore(String code){
-        return repository.findByCodeAndDeletedAtIsNotNull(code)
+    public Mono<Void> restore(Long id){
+        return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))
                 .flatMap(subject -> {
                     subject.restore();
@@ -83,8 +84,8 @@ public class SubjectService {
                 }).then();
     }
 
-    public Mono<Void> hardDelete(String code){
-        return repository.findByCodeAndDeletedAtIsNotNull(code)
+    public Mono<Void> hardDelete(Long id){
+        return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Only deleted subject can be permanently removed")))
                 .flatMap(repository::delete)
                 .then();
@@ -94,6 +95,7 @@ public class SubjectService {
 
     private SubjectResponse toResponse(Subject entity) {
         return new SubjectResponse(
+                entity.getId(),
                 entity.getCode(),
                 entity.getName(),
                 entity.getShortName(),

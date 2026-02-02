@@ -15,9 +15,10 @@ import java.time.LocalDateTime;
 @Table("subjects")
 @Getter
 @Setter
-public class Subject implements Persistable<String> {
+public class Subject{
 
     @Id
+    private Long id;
     @Column("code")
     private String code;
     @Column("name")
@@ -49,19 +50,5 @@ public class Subject implements Persistable<String> {
         return deletedAt != null;
     }
 
-    @Transient
-    private boolean isNewRecord = false;
 
-    @Override
-    public boolean isNew() {
-        return this.isNewRecord || this.code == null;
-    }
-    @Override
-    public String getId() {
-        return this.code;
-    }
-
-    public void setNewRecord(boolean isNew) {
-        this.isNewRecord = isNew;
-    }
 }
