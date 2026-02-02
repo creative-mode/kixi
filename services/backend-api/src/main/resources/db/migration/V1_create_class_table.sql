@@ -1,5 +1,6 @@
 CREATE TABLE classes (
-   code VARCHAR(50) PRIMARY KEY ,
+   id BIGSERIAL PRIMARY KEY,
+   code VARCHAR(50),
    grade VARCHAR(20) NOT NULL,
    course_id BIGINT NOT NULL,
    school_year_id BIGINT NOT NULL,

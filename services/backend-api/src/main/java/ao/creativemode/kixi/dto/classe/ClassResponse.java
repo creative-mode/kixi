@@ -6,10 +6,9 @@ import ao.creativemode.kixi.model.SchoolYear;
 import java.time.LocalDateTime;
 
 public record ClassResponse(
+        Long id,
         String code,
         String grade,
-        Long courseId,
-        Long schoolYearId,
         Course course,
         SchoolYear schoolYear,
         LocalDateTime createdAt,

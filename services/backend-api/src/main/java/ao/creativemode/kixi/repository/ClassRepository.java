@@ -6,10 +6,10 @@ import ao.creativemode.kixi.model.Class;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-public interface ClassRepository  extends ReactiveCrudRepository<Class,String> {
+public interface ClassRepository  extends ReactiveCrudRepository<Class,Long> {
 
     Flux<Class> findAllByDeletedAtIsNull();
     Flux<Class> findAllByDeletedAtIsNotNull();
-    Mono<Class> findByCodeAndDeletedAtIsNull(String code);
-    Mono<Class> findByCodeAndDeletedAtIsNotNull(String code);
+    Mono<Class> findByIdAndDeletedAtIsNull(Long id);
+    Mono<Class> findByIdAndDeletedAtIsNotNull(Long id);
 }

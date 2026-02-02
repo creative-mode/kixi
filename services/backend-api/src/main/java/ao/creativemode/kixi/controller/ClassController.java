@@ -22,6 +22,10 @@ public class ClassController {
 
     public ClassController(ClassService service){this.service = service;}
 
+
+    /**
+     * Retrieves all active (non-deleted) class.
+     */
     @GetMapping
     public Mono<ResponseEntity<List<ClassResponse>>> listAllActive(){
         return service.findAllActive()
@@ -29,18 +33,29 @@ public class ClassController {
                 .map(ResponseEntity::ok);
     }
 
+
+    /**
+     * Retrieves all soft-deleted (trashed) class.
+     */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<ClassResponse>>> listTrashed(){
         return service.findAllDeteted()
                 .collectList().map(ResponseEntity::ok);
     }
 
-    @GetMapping("/{code}")
-    public Mono<ResponseEntity<ClassResponse>> getById(@PathVariable String code){
-        return service.findByCodeActive(code)
+
+    /**
+     * Retrieves a single active class by ID.
+     */
+    @GetMapping("/{id}")
+    public Mono<ResponseEntity<ClassResponse>> getById(@PathVariable Long id){
+        return service.findByIdActive(id)
                 .map(ResponseEntity::ok);
     }
 
+    /**
+     * Creates a new class.
+     */
     @PostMapping
     public Mono<ResponseEntity<ClassResponse>> create(
             @Valid @RequestBody ClassRequest request,
@@ -57,22 +72,32 @@ public class ClassController {
                 });
     }
 
-    @DeleteMapping("/{code}")
-    public Mono<ResponseEntity<Void>> softDelete(@PathVariable String code){
 
-        return service.softDelete(code)
+    /**
+     * Soft-deletes a class (moves it to trash).
+     */
+    @DeleteMapping("/{id}")
+    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id){
+
+        return service.softDelete(id)
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
-    @PostMapping("/{code}/restore")
-    public Mono<ResponseEntity<Void>> restore(@PathVariable String code){
-        return service.restore(code)
+    /**
+     * Restores a soft-deleted class from trash.
+     */
+    @PostMapping("/{id}/restore")
+    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id){
+        return service.restore(id)
                 .thenReturn(ResponseEntity.ok().build());
     }
 
-    @DeleteMapping("/{code}/purge")
-    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable String code){
-        return service.hardDelete(code)
+    /**
+     * Permanently deletes a class (only if already soft-deleted).
+     */
+    @DeleteMapping("/{id}/purge")
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id){
+        return service.hardDelete(id)
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 }
