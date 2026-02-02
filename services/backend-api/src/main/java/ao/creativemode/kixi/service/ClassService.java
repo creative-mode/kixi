@@ -29,7 +29,6 @@ public class ClassService {
     }
 
 
-
     // Retrieve all active classes
     public Flux<ClassResponse> findAllActive(){
         return repository.findAllByDeletedAtIsNull().flatMap(this::toResponse);
