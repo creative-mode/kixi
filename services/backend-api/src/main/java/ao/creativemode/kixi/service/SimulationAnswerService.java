@@ -16,7 +16,7 @@ import java.util.List;
 @Service
 public class SimulationAnswerService {
 
-    public final SimulationAnswerRepository repository;
+    private final SimulationAnswerRepository repository;
 
     public SimulationAnswerService(SimulationAnswerRepository repository) {
         this.repository = repository;
@@ -27,17 +27,18 @@ public class SimulationAnswerService {
                 .map(this::toResponse);
     }
 
-    public Mono<List<SimulationAnswerResponse>> listTrashed() {
+    public Mono<List<SimulationAnswerResponse>> findAllTrashed() {
         return repository.findAllByDeletedAtIsNotNull()
                 .map(this::toResponse)
                 .collectList();
     }
 
-    public Flux<SimulationAnswerResponse> findByIdActive(Long id) {
+    public Mono<SimulationAnswerResponse> findByIdActive(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
-                .switchIfEmpty(Mono.error(ApiException.notFound("School year not found")))
+                .switchIfEmpty(Mono.error(ApiException.notFound("SimulationAnswer not found")))
                 .map(this::toResponse);
     }
+
 
     public Mono<SimulationAnswerResponse> create(SimulationAnswerRequest request) {
         SimulationAnswer answer = new SimulationAnswer();
@@ -50,7 +51,7 @@ public class SimulationAnswerService {
     }
 
 
-    public Flux<SimulationAnswerResponse> update(Long id, SimulationAnswerRequest request) {
+    public Mono<SimulationAnswerResponse> update(Long id, SimulationAnswerRequest request) {
 
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(
