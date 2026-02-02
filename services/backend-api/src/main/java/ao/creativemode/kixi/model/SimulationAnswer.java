@@ -5,8 +5,8 @@ import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
+import java.time.LocalDateTime;
 
-import java.sql.Date;
 @Getter
 @Setter
 @Table("simulation_answer")
@@ -30,16 +30,16 @@ public class SimulationAnswer {
     private Boolean isCorrect;
 
     @Column("answered_at")
-    private Date answeredAt;
+    private LocalDateTime answeredAt;
 
     @Column("created_at")
-    private Date createdAt;
+    private LocalDateTime createdAt;
 
     @Column("updated_at")
-    private Date updatedAt;
+    private LocalDateTime updatedAt;
 
     @Column("deleted_at")
-    private Date deletedAt;
+    private LocalDateTime deletedAt;
 
 }
 
