@@ -1,230 +1,237 @@
-# Handbook Detalhado de Workflow do Projeto (GitHub)
-
-## Objetivo
-
-Este handbook define o **workflow oficial** que todos os membros do projeto devem seguir ao trabalhar no GitHub. Ele garante:
-
-* Organização do trabalho e rastreabilidade
-* Qualidade do código
-* Colaboração eficiente e transparente
-* Histórico claro para futuras referências
-
-O fluxo oficial é:
-
-> **Issue → Branch → Commit → Pull Request (Code Review) → Merge**
-
-O **GitHub Projects** será utilizado para gerir todo o trabalho (backlog, em progresso, em review, concluído), garantindo visibilidade total do progresso.
+Aqui está a tradução completa para inglês do handbook de workflow:
 
 ---
 
-## Visão Geral do Workflow
+# Detailed Project Workflow Handbook (GitHub)
 
-O workflow completo envolve os seguintes elementos:
+## Objective
 
-1. **Issue** – define o que precisa ser feito
-2. **Branch** – ambiente isolado para trabalhar na Issue
-3. **Commit** – unidade mínima de alteração de código
-4. **Pull Request (PR)** – proposta de integração das mudanças
-5. **Code Review** – revisão do código para qualidade e conformidade
-6. **Merge** – integração final na branch principal
+This handbook defines the **official workflow** that all project members must follow when working on GitHub. It ensures:
 
-Cada etapa tem suas regras, responsabilidades e boas práticas, que detalharemos abaixo.
+* Organized work and traceability
+* Code quality
+* Efficient and transparent collaboration
+* Clear history for future reference
+
+The official flow is:
+
+> **Issue → Branch → Commit → Pull Request (Code Review) → Merge**
+
+**GitHub Projects** will be used to manage all work (backlog, in progress, in review, done), ensuring full visibility of progress.
+
+---
+
+## Workflow Overview
+
+The complete workflow involves the following elements:
+
+1. **Issue** – defines what needs to be done
+2. **Branch** – isolated environment to work on the Issue
+3. **Commit** – smallest unit of code change
+4. **Pull Request (PR)** – proposal to integrate changes
+5. **Code Review** – review of code for quality and compliance
+6. **Merge** – final integration into the main branch
+
+Each step has rules, responsibilities, and best practices, detailed below.
 
 ---
 
 ## Issues
 
-### Definição
+### Definition
 
-Uma **Issue** é uma tarefa ou problema a ser resolvido. Pode representar:
+An **Issue** is a task or problem to be solved. It can represent:
 
-* Um bug a ser corrigido
-* Uma nova funcionalidade
-* Refatoração ou melhoria de código
-* Documentação ou testes
+* A bug to fix
+* A new feature
+* Refactoring or code improvement
+* Documentation or tests
 
-### Responsabilidades
+### Responsibilities
 
-* As **Issues serão criadas exclusivamente pelo Project Manager, Abner Lourenço**
-* Atribuir labels (`bug`, `feature`, `refactor`, etc.)
-* Definir critérios de aceitação ou resultados esperados
-* Associar a milestones ou épicos quando aplicável
+* **Issues are created exclusively by the Project Manager, Abner Lourenço**
+* Assign labels (`bug`, `feature`, `refactor`, etc.)
+* Define acceptance criteria or expected results
+* Associate with milestones or epics when applicable
 
-### Boas práticas
+### Best Practices
 
-* Uma Issue deve ter **um único objetivo**
-* Evitar Issues muito grandes: se necessário, dividir em subtarefas
-* Referenciar qualquer recurso relevante (documentação, designs, etc.)
+* An Issue should have **a single objective**
+* Avoid very large Issues: split into subtasks if needed
+* Reference any relevant resources (documentation, designs, etc.)
 
 ---
 
 ## Branches
 
-### Definição
+### Definition
 
-A **Branch** é uma cópia isolada do código, permitindo trabalhar na Issue sem afetar a branch principal.
+A **Branch** is an isolated copy of the code, allowing work on the Issue without affecting the main branch.
 
-### Regras principais
+### Main Rules
 
-* Cada Issue deve ter sua própria Branch
-* Branch criada a partir da **branch principal** (`main` ou `develop`)
-* Nome descritivo, seguindo padrão:
+* Each Issue must have its own Branch
+* Branch created from the **main branch** (`main` or `develop`)
+* Descriptive name, following the pattern:
 
 ```
-<tipo>/<issue-id>-<descricao-curta>
+<type>/<issue-id>-<short-description>
 ```
 
-Exemplos:
+Examples:
 
-* `feature/23-login-com-jwt`
+* `feature/23-login-with-jwt`
 * `bug/45-fix-null-pointer`
 * `refactor/12-service-cleanup`
 
-### Responsabilidades
+### Responsibilities
 
-* Garantir isolamento do código até que esteja pronto
-* Manter branch atualizada com a principal para evitar conflitos
-* Não commitar direto na branch principal
+* Ensure code isolation until ready
+* Keep the branch up to date with the main branch to avoid conflicts
+* Do not commit directly to the main branch
 
 ---
 
 ## Commits
 
-### Definição
+### Definition
 
-Um **commit** representa uma unidade de alteração de código, que deve ser lógica e coesa.
+A **commit** represents a unit of code change, which should be logical and cohesive.
 
-### Boas práticas
+### Best Practices
 
-* Commits pequenos e frequentes
-* Cada commit deve representar **uma mudança específica**
-* Código deve compilar e passar testes (se existirem)
-* Evitar commits genéricos ou grandes demais
+* Small and frequent commits
+* Each commit should represent **a specific change**
+* Code should compile and pass tests (if any)
+* Avoid generic or overly large commits
 
-### Mensagens de commit recomendadas (Conventional Commits simplificado)
+### Recommended Commit Messages (Simplified Conventional Commits)
 
 ```
-<tipo>: descrição curta
+<type>: short description
 ```
 
-Tipos comuns:
+Common types:
 
-* `feat:` nova funcionalidade
-* `fix:` correção de bug
-* `refactor:` refatoração
-* `docs:` documentação
-* `test:` testes
-* `chore:` tarefas internas
+* `feat:` new feature
+* `fix:` bug fix
+* `refactor:` refactoring
+* `docs:` documentation
+* `test:` tests
+* `chore:` internal tasks
 
-Exemplos:
+Examples:
 
-* `feat: adicionar autenticação JWT`
-* `fix: corrigir erro ao salvar usuário`
+* `feat: add JWT authentication`
+* `fix: correct user save error`
 
-### Responsabilidades do commit
+### Commit Responsibilities
 
-* Registrar mudanças de forma clara
-* Associar cada commit à Issue quando possível (referenciando o número)
-* Garantir consistência e legibilidade
+* Clearly record changes
+* Associate each commit with the Issue when possible (referencing the number)
+* Ensure consistency and readability
 
 ---
 
 ## Pull Request (PR)
 
-### Definição
+### Definition
 
-Um **PR** é a proposta de integração da branch da Issue na branch principal.
+A **PR** is the proposal to merge the Issue branch into the main branch.
 
-### Quando criar um PR?
+### When to Create a PR
 
-* Quando a Issue estiver concluída
-* Ou quando precisar de feedback antecipado
+* When the Issue is complete
+* Or when early feedback is needed
 
-### Regras obrigatórias
+### Mandatory Rules
 
-* PR deve estar **sempre ligado a uma Issue** (`Closes #n`)
-* PR vai para a branch principal
-* PR sem review **não pode ser mergeado**
+* PR must **always be linked to an Issue** (`Closes #n`)
+* PR targets the main branch
+* PR without review **cannot be merged**
 
-### Conteúdo do PR
+### PR Content
 
-* Descrição clara do que foi feito
-* Issue relacionada
-* Screenshots ou logs (quando aplicável)
-* Instruções de teste, se necessário
+* Clear description of what was done
+* Related Issue
+* Screenshots or logs (if applicable)
+* Testing instructions, if necessary
 
-### Responsabilidades do autor
+### Author Responsibilities
 
-* Explicar claramente as mudanças
-* Garantir que os commits estejam organizados
-* Responder a comentários do Code Review
+* Clearly explain the changes
+* Ensure commits are organized
+* Respond to Code Review comments
 
 ---
 
 ## Code Review
 
-### Definição
+### Definition
 
-O **Code Review** é a revisão do código por outros membros da equipe antes do merge.
+**Code Review** is the process of reviewing code by other team members before merging.
 
-### Objetivo
+### Objective
 
-* Garantir qualidade e consistência do código
-* Detectar bugs e problemas de design
-* Melhorar legibilidade e manutenção
-* Compartilhar conhecimento entre membros
+* Ensure code quality and consistency
+* Detect bugs and design issues
+* Improve readability and maintainability
+* Share knowledge among team members
 
-### Regras
+### Rules
 
-* Pelo menos **uma aprovação** necessária (ou mais, conforme definido)
-* Comentários claros e respeitosos
-* Autor do PR deve revisar e responder comentários
-* Sugestões de melhoria são bem-vindas
+* At least **one approval** required (or more, as defined)
+* Clear and respectful comments
+* PR author must review and respond to comments
+* Suggestions for improvement are welcome
 
 ---
 
 ## Merge
 
-### Definição
+### Definition
 
-O **Merge** é a integração final das mudanças aprovadas na branch principal.
+**Merge** is the final integration of approved changes into the main branch.
 
-### Regras e responsabilidades
+### Rules and Responsibilities
 
-* Só mergear após aprovação e checks automáticos passarem
-* Resolver conflitos antes do merge
-* Estratégias recomendadas:
+* Only merge after approval and passing automated checks
 
-  * **Squash and merge:** para histórico limpo
-  * **Merge commit:** se quiser preservar histórico detalhado
-* Nunca mergear sem revisão
+* Resolve conflicts before merging
 
-### Pós-Merge
+* Recommended strategies:
 
-* Fechar automaticamente ou manualmente a Issue
-* Mover card no Project para **Done**
-* Apagar branch da Issue para manter repositório limpo
+  * **Squash and merge:** for a clean history
+  * **Merge commit:** if you want to preserve detailed history
 
----
+* Never merge without review
 
-## Resumo das Regras de Ouro
+### Post-Merge
 
-* Sem Issue → sem código
-* Uma Issue → uma Branch
-* Commits claros, pequenos e frequentes
-* PR obrigatório antes do merge
-* Code Review necessário
-* Nunca commitar direto na branch principal
-* Pós-merge: fechar Issue, mover card, apagar branch
+* Automatically or manually close the Issue
+* Move the card in Project to **Done**
+* Delete the Issue branch to keep the repository clean
 
 ---
 
-## Considerações Finais
+## Golden Rules Summary
 
-Este workflow é **obrigatório para todos os membros** do projeto. Ele garante:
+* No Issue → no code
+* One Issue → one Branch
+* Clear, small, frequent commits
+* PR required before merge
+* Code Review mandatory
+* Never commit directly to the main branch
+* Post-merge: close Issue, move card, delete branch
 
-* Colaboração organizada e transparente
-* Código de qualidade e rastreável
-* Histórico claro para referência futura
+---
 
-Siga o fluxo, documente suas mudanças, e mantenha o repositório saudável.
+## Final Considerations
+
+This workflow is **mandatory for all project members**. It ensures:
+
+* Organized and transparent collaboration
+* Quality, traceable code
+* Clear history for future reference
+
+Follow the flow, document your changes, and keep the repository healthy.

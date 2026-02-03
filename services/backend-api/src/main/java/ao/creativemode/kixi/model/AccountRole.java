@@ -1,38 +1,44 @@
 package ao.creativemode.kixi.model;
 
-import org.springframework.data.annotation.Id;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
-import lombok.Data;
+
 import java.time.LocalDateTime;
 
+/**
+ * Entidade associativa para o relacionamento N:N entre Account e Role.
+ * Permite soft-delete (deletedAt) e auditoria (createdAt).
+ */
 @Data
-@Table("school_years")
-public class SchoolYear {
+@NoArgsConstructor
+@AllArgsConstructor
+@Table("account_roles")
+public class AccountRole {
 
     @Id
     private Long id;
 
-    @Column("start_year")
-    private Integer startYear;
+    @Column("account_id")
+    private Long accountId;
 
-    @Column("end_year")
-    private Integer endYear;
+    @Column("role_id")
+    private Long roleId;
 
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
 
-    @LastModifiedDate
-    @Column("updated_at")
-    private LocalDateTime updatedAt;
-
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 
-    public SchoolYear() {
+    public AccountRole(Long accountId, Long roleId) {
+        this.accountId = accountId;
+        this.roleId = roleId;
     }
 
     public void markAsDeleted() {

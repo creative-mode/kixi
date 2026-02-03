@@ -1,25 +1,33 @@
 package ao.creativemode.kixi.model;
 
-import org.springframework.data.annotation.Id;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
-import lombok.Data;
+
 import java.time.LocalDateTime;
 
 @Data
-@Table("school_years")
-public class SchoolYear {
+@NoArgsConstructor
+@AllArgsConstructor
+@Table("courses")
+public class Course {
 
     @Id
     private Long id;
 
-    @Column("start_year")
-    private Integer startYear;
+    @Column("code")
+    private String code;
 
-    @Column("end_year")
-    private Integer endYear;
+    @Column("name")
+    private String name;
+
+    @Column("description")
+    private String description;
 
     @CreatedDate
     @Column("created_at")
@@ -32,9 +40,6 @@ public class SchoolYear {
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 
-    public SchoolYear() {
-    }
-
     public void markAsDeleted() {
         this.deletedAt = LocalDateTime.now();
     }
@@ -44,6 +49,6 @@ public class SchoolYear {
     }
 
     public boolean isDeleted() {
-        return deletedAt != null;
+        return this.deletedAt != null;
     }
 }

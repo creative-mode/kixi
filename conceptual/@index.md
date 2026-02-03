@@ -1,9 +1,9 @@
-Ao longo de anos, diversas gerações de alunos do **Instituto de Telecomunicações - ITEL** enfrentaram um desafio silencioso: o acesso e a organização de enunciados de provas antigas eram sempre complicados, tornando o estudo mais difícil e fragmentado.
+For years, several generations of students at the **Institute of Telecommunications - ITEL** faced a silent challenge: accessing and organizing past exam papers was always complicated, making studying more difficult and fragmented.
 
-Foi então que o @creativemode, um grupo de jovens estudantes do ITEL conhecidos por sua criatividade e espírito disruptivo, decidiu transformar essa realidade. Eles perceberam que, com a tecnologia certa, seria possível não apenas organizar o passado acadêmico, mas também facilitar o futuro do aprendizado das gerações seguintes de _Wakanda University_.
+That's when @creativemode, a group of young ITEL students known for their creativity and disruptive spirit, decided to transform this reality. They realized that, with the right technology, it would be possible not only to organize the academic past but also to facilitate the future learning of subsequent generations at Wakanda University.
 
-O resultado? Um sistema inovador que centraliza enunciados, permite simulações de provas e oferece análises detalhadas de desempenho, um módulo de IA que automatiza processos manuais e fornece uma gama de funcionalidades convenientes nesse contexto. Uma ferramenta que promete tornar o estudo mais inteligente, eficiente e adaptado às necessidades de cada aluno — transformando o jeito de aprender no ITEL.
+The result? An innovative system that centralizes exam papers, allows for exam simulations, and offers detailed performance analyses, an AI module that automates manual processes, and provides a range of convenient functionalities in this context. A tool that promises to make studying smarter, more efficient, and adapted to the needs of each student—transforming the way of learning at ITEL.
 
-Temos a certeza que a iniciativa de transformar um "legado de dificuldades" em uma ferramenta de empoderamento acadêmico tem um peso muito forte.
+We are certain that the initiative to transform a "legacy of difficulties" into a tool for academic empowerment has a very strong impact.
 
-**Feito por alunos para alunos**.
+**Made by students for students.**

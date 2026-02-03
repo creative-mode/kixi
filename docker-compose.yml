@@ -1,58 +1,22 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: kixi-postgres
+  kixi_postgres:
+    image: postgres:15.15-alpine
+    container_name: kixi_postgres
     environment:
+      POSTGRES_DB: kixi_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: creativemode
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - kixi_postgres_data:/var/lib/postgresql/data
       - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     networks:
-      - kixi-network
-
-  backend-api:
-    build:
-      context: ./services/backend-api
-      dockerfile: ../../infra/docker/backend.Dockerfile
-    container_name: kixi-backend
-    ports:
-      - "8080:8080"
-    environment:
-      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/creativemode
-      SPRING_R2DBC_USERNAME: postgres
-      SPRING_R2DBC_PASSWORD: postgres
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - kixi-network
-
-  ocr-service:
-    build:
-      context: ./services/ocr-service
-      dockerfile: ../../infra/docker/ocr.Dockerfile
-    container_name: kixi-ocr
-    ports:
-      - "8000:8000"
-    depends_on:
-      - backend-api
-    networks:
-      - kixi-network
+      - kixi_network
 
 volumes:
-  postgres_data:
+  kixi_postgres_data:
 
 networks:
-  kixi-network:
+  kixi_network:
     driver: bridge
