@@ -25,7 +25,7 @@ public class StatementService {
                 .map(this::toResponse)
                 .collectList()
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao listar enunciados: " + e.getMessage())
+                        ApiException.badRequest("Error listing statements: " + e.getMessage())
                 ));
     }
 
@@ -34,31 +34,31 @@ public class StatementService {
                 .map(this::toResponse)
                 .collectList()
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao listar enunciados excluídos: " + e.getMessage())
+                        ApiException.badRequest("Error listing deleted statements: " + e.getMessage())
                 ));
     }
 
     public Mono<StatementResponse> getById(Long id) {
         if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("O ID do enunciado é obrigatório e deve ser maior que zero"));
+            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
         }
 
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Enunciado com ID " + id + " não encontrado")
+                        ApiException.notFound("Statement with ID " + id + " not found")
                 ))
                 .map(this::toResponse);
     }
 
     public Mono<StatementResponse> update(Long id, StatementRequest request) {
         if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("O ID do enunciado é obrigatório e deve ser maior que zero"));
+            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
         }
 
         return validateRequest(request)
                 .then(repository.findByIdAndDeletedAtIsNull(id))
                 .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Enunciado com ID " + id + " não encontrado para atualização")
+                        ApiException.notFound("Statement with ID " + id + " not found for update")
                 ))
                 .flatMap(statement -> {
                     statement.setTitle(request.getTitle());
@@ -79,18 +79,18 @@ public class StatementService {
                 .map(this::toResponse)
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao atualizar enunciado: " + e.getMessage())
+                        ApiException.badRequest("Error updating statement: " + e.getMessage())
                 ));
     }
 
     public Mono<Void> softDelete(Long id) {
         if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("O ID do enunciado é obrigatório e deve ser maior que zero"));
+            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
         }
 
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Enunciado com ID " + id + " não encontrado para exclusão")
+                        ApiException.notFound("Statement with ID " + id + " not found for deletion")
                 ))
                 .flatMap(statement -> {
                     statement.setDeletedAt(LocalDateTime.now());
@@ -99,22 +99,22 @@ public class StatementService {
                 .then()
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao excluir enunciado: " + e.getMessage())
+                        ApiException.badRequest("Error deleting statement: " + e.getMessage())
                 ));
     }
 
     public Mono<Void> restore(Long id) {
         if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("O ID do enunciado é obrigatório e deve ser maior que zero"));
+            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
         }
 
         return repository.findById(id)
                 .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Enunciado com ID " + id + " não encontrado")
+                        ApiException.notFound("Statement with ID " + id + " not found")
                 ))
                 .filter(statement -> statement.getDeletedAt() != null)
                 .switchIfEmpty(Mono.error(
-                        ApiException.badRequest("O enunciado com ID " + id + " não está excluído e não pode ser restaurado")
+                        ApiException.badRequest("Statement with ID " + id + " is not deleted and cannot be restored")
                 ))
                 .flatMap(statement -> {
                     statement.setDeletedAt(null);
@@ -123,23 +123,23 @@ public class StatementService {
                 .then()
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao restaurar enunciado: " + e.getMessage())
+                        ApiException.badRequest("Error restoring statement: " + e.getMessage())
                 ));
     }
 
     public Mono<Void> hardDelete(Long id) {
         if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("O ID do enunciado é obrigatório e deve ser maior que zero"));
+            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
         }
 
         return repository.findById(id)
                 .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Enunciado com ID " + id + " não encontrado para exclusão permanente")
+                        ApiException.notFound("Statement with ID " + id + " not found for permanent deletion")
                 ))
                 .flatMap(statement -> repository.deleteById(id))
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao excluir permanentemente enunciado: " + e.getMessage())
+                        ApiException.badRequest("Error permanently deleting statement: " + e.getMessage())
                 ));
     }
 
@@ -166,7 +166,7 @@ public class StatementService {
                 .map(this::toResponse)
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Erro ao criar enunciado: " + e.getMessage())
+                        ApiException.badRequest("Error creating statement: " + e.getMessage())
                 ));
     }
 
@@ -174,48 +174,48 @@ public class StatementService {
         List<String> errors = new ArrayList<>();
 
         if (request == null) {
-            return Mono.error(ApiException.badRequest("Os dados do enunciado são obrigatórios"));
+            return Mono.error(ApiException.badRequest("Statement data is required"));
         }
 
         if (request.getTitle() == null || request.getTitle().isBlank()) {
-            errors.add("O título é obrigatório");
+            errors.add("Title is required");
         } else if (request.getTitle().length() < 3) {
-            errors.add("O título deve ter pelo menos 3 caracteres");
+            errors.add("Title must have at least 3 characters");
         } else if (request.getTitle().length() > 255) {
-            errors.add("O título deve ter no máximo 255 caracteres");
+            errors.add("Title must have at most 255 characters");
         }
 
         if (request.getExamType() == null || request.getExamType().isBlank()) {
-            errors.add("O tipo de exame é obrigatório");
+            errors.add("Exam type is required");
         }
 
         if (request.getDurationMinutes() != null && request.getDurationMinutes() <= 0) {
-            errors.add("A duração deve ser maior que zero");
+            errors.add("Duration must be greater than zero");
         }
 
         if (request.getTotalMaxScore() != null && request.getTotalMaxScore() < 0) {
-            errors.add("A pontuação máxima não pode ser negativa");
+            errors.add("Maximum score cannot be negative");
         }
 
         if (request.getSchoolYearId() == null) {
-            errors.add("O ano letivo é obrigatório");
+            errors.add("School year is required");
         }
 
         if (request.getTermId() == null) {
-            errors.add("O trimestre é obrigatório");
+            errors.add("Term is required");
         }
 
         if (request.getSubjectId() == null) {
-            errors.add("A disciplina é obrigatória");
+            errors.add("Subject is required");
         }
 
         if (request.getClassId() == null) {
-            errors.add("A turma é obrigatória");
+            errors.add("Class is required");
         }
 
         if (!errors.isEmpty()) {
             String errorMessage = String.join("; ", errors);
-            return Mono.error(ApiException.badRequest("Erros de validação: " + errorMessage));
+            return Mono.error(ApiException.badRequest("Validation errors: " + errorMessage));
         }
 
         return Mono.empty();
