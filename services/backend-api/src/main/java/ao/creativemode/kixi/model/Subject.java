@@ -1,7 +1,6 @@
 package ao.creativemode.kixi.model;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -13,8 +12,7 @@ import org.springframework.data.relational.core.mapping.Table;
 import java.time.LocalDateTime;
 
 @Table("subjects")
-@Getter
-@Setter
+@Data
 public class Subject{
 
     @Id
