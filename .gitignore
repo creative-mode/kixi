@@ -1,10 +1,8 @@
 HELP.md
-Dockerfile
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-aplication.properties
 
 
 ### STS ###
@@ -35,9 +33,10 @@ build/
 ### VS Code ###
 .vscode/
 
-application.properties
-
+### Environment ###
 .env
-Kixi
-demo.iml
-docker-compose.yml
+.env.local
+.env.*.local
+
+### Application ###
+application.properties

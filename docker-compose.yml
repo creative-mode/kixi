@@ -13,6 +13,41 @@ services:
       - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - kixi_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kixi_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kixi_backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kixi_backend
+    environment:
+      DB_HOST: kixi_postgres
+      DB_PORT: 5432
+      DB_NAME: kixi_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+    ports:
+      - "8080:8080"
+    networks:
+      - kixi_network
+    restart: unless-stopped
+
+  kixi_ocr:
+    build:
+      context: ./services/ocr-service
+      dockerfile: ../../infra/docker/ocr.Dockerfile
+    container_name: kixi_ocr
+    ports:
+      - "8000:8000"
+    networks:
+      - kixi_network
+    restart: unless-stopped
 
 volumes:
   kixi_postgres_data:
