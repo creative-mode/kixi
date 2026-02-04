@@ -1,19 +1,28 @@
 package ao.creativemode.kixi.controller;
 
+import java.util.List;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
 import ao.creativemode.kixi.dto.statement.StatementRequest;
 import ao.creativemode.kixi.dto.statement.StatementResponse;
 import ao.creativemode.kixi.service.StatementService;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
-
-import java.util.List;
 
 
 @RestController
-@RequestMapping("/statements")
+@RequestMapping("/api/statements")
 public class StatementController {
 
     private final StatementService service;
@@ -26,12 +35,14 @@ public class StatementController {
     @GetMapping
     public Mono<ResponseEntity<List<StatementResponse>>> listAllActive() {
         return service.listAllActive()
+                .collectList()
                 .map(ResponseEntity::ok);
     }
 
     @GetMapping("/trashed")
     public Mono<ResponseEntity<List<StatementResponse>>> listTrashed() {
         return service.listTrashed()
+                .collectList()
                 .map(ResponseEntity::ok);
     }
 
