@@ -66,7 +66,7 @@ public class SimulationService {
                     simulation.setAccountId(dto.accountId());
                     simulation.setSchoolYearId(dto.schoolYearId());
                     simulation.setStatementId(dto.statementId());
-                    simulation.setStartedAt(dto.startedAt());
+                    simulation.setStartedAt(dto.startedAt() != null ? dto.startedAt() : LocalDateTime.now());
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     return repository.save(simulation);
                 }))
@@ -132,7 +132,7 @@ public class SimulationService {
 
     public Mono<Void> hardDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNotNull(id)
-                .switchIfEmpty(Mono.error(new RuntimeException("Simulation not found or not trashed")))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found or not in trash")))
                 .flatMap(repository::delete).then();
     }
 
