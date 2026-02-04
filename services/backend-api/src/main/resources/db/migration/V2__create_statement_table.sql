@@ -15,7 +15,14 @@ CREATE TABLE statement (
     visible             BOOLEAN DEFAULT false,
     create_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     update_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    delete_at           TIMESTAMP WITH TIME ZONE DEFAULT NULL
+    delete_at           TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+
+    CONSTRAINT fk_statement_school_year FOREIGN KEY (school_year_id) REFERENCES school_years(id),
+    CONSTRAINT fk_statement_term FOREIGN KEY (term_id) REFERENCES terms(id),
+    CONSTRAINT fk_statement_subject FOREIGN KEY (subject_id) REFERENCES subjects(id),
+    CONSTRAINT fk_statement_class FOREIGN KEY (class_id) REFERENCES classes(id),
+    CONSTRAINT fk_statement_course FOREIGN KEY (course_id) REFERENCES courses(id),
+    CONSTRAINT fk_statement_created_by FOREIGN KEY (create_by) REFERENCES accounts(id)
 );
 
 CREATE INDEX idx_statement_active ON statement (delete_at) WHERE delete_at IS NULL;
