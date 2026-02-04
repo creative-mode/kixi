@@ -15,7 +15,7 @@ import java.util.List;
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
 @RestController
-@RequestMapping("api/v1/class")
+@RequestMapping("api/v1/classes")
 public class ClassController {
 
     private final ClassService service;
