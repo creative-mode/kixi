@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import ao.creativemode.kixi.dto.simulation.SimulationRequest;
+import jakarta.validation.Valid;
 import ao.creativemode.kixi.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.service.SimulationService;
 import reactor.core.publisher.Mono;
@@ -43,7 +44,7 @@ public class SimulationController {
     }
 
     @PostMapping
-    public Mono<ResponseEntity<SimulationResponse>> create(@RequestBody SimulationRequest dto) {
+    public Mono<ResponseEntity<SimulationResponse>> create(@Valid @RequestBody SimulationRequest dto) {
         return service.create(dto)
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
@@ -51,7 +52,7 @@ public class SimulationController {
     @PutMapping("/{id}")
     public Mono<ResponseEntity<SimulationResponse>> update(
             @PathVariable Long id,
-            @RequestBody SimulationRequest dto) {
+            @Valid @RequestBody SimulationRequest dto) {
         return service.update(id, dto)
                 .map(ResponseEntity::ok);
     }
