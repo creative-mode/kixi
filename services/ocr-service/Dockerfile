@@ -1,18 +1,10 @@
 # OCR Service Dockerfile
-#
-# Multi-stage build for the Kixi OCR Service using PaddleOCR-VL
-# Optimized for production deployments with minimal image size
-#
-# Build from project root:
-#   docker build -f infra/docker/ocr.Dockerfile -t kixi-ocr-service .
-#
-# Or using docker-compose (recommended):
-#   docker-compose up --build ocr-service
+# Multi-stage build for optimized image size
 
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim as builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -35,7 +27,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install dependencies
 WORKDIR /app
-COPY services/ocr-service/requirements.txt .
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --upgrade pip setuptools wheel && \
@@ -44,15 +36,13 @@ RUN pip install --upgrade pip setuptools wheel && \
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim as runtime
 
 # Labels
-LABEL maintainer="Kixi Team <team@kixi.ao>" \
-    org.opencontainers.image.title="Kixi OCR Service" \
-    org.opencontainers.image.description="OCR Service using PaddleOCR-VL for text extraction from exam images" \
-    org.opencontainers.image.version="1.0.0" \
-    org.opencontainers.image.vendor="Creative Mode" \
-    org.opencontainers.image.source="https://github.com/creative-mode/kixi"
+LABEL maintainer="Kixi Team" \
+    service="ocr-service" \
+    version="1.0.0" \
+    description="OCR Service using PaddleOCR-VL for text extraction"
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -75,18 +65,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Processing settings
     MAX_IMAGE_SIZE_MB=20.0 \
     MAX_IMAGES_PER_REQUEST=10 \
-    PROCESSING_TIMEOUT_SECONDS=120 \
     MIN_CONFIDENCE_THRESHOLD=0.5 \
     ENABLE_DESKEW=true \
     ENABLE_DENOISE=true \
     TARGET_DPI=300 \
     # Logging
     LOG_LEVEL=INFO \
-    LOG_FORMAT=json \
-    # Metrics
-    ENABLE_METRICS=true \
-    # Timezone
-    TZ=Africa/Luanda
+    LOG_FORMAT=json
 
 # Install runtime dependencies
 # Note: libgl1-mesa-glx was renamed to libgl1 in Debian Trixie
@@ -98,16 +83,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender1 \
     libgomp1 \
-    # PDF processing dependencies
+    # PDF processing dependencies (for pdf2image fallback)
     poppler-utils \
-    # Fonts for proper text rendering
+    # Fonts for rendering
     fonts-liberation \
     fonts-dejavu-core \
-    fonts-freefont-ttf \
     # Curl for health checks
     curl \
-    # Timezone data
-    tzdata \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -121,20 +103,12 @@ COPY --from=builder /opt/venv /opt/venv
 # Set working directory
 WORKDIR /app
 
-# Instalar dependências do sistema para OCR (Tesseract)
-RUN apt-get update && apt-get install -y \
-  tesseract-ocr \
-  tesseract-ocr-por \
-  libgl1 \
-  libglib2.0-0 \
-  && rm -rf /var/lib/apt/lists/*
+# Copy application code
+COPY --chown=ocr:ocr . .
 
 # Create directories for models and cache
 RUN mkdir -p /home/ocr/.paddleocr && \
-    chown -R ocr:ocr /home/ocr/.paddleocr && \
-    # Create tmp directory for processing
-    mkdir -p /tmp/ocr && \
-    chown -R ocr:ocr /tmp/ocr
+    chown -R ocr:ocr /home/ocr/.paddleocr
 
 # Switch to non-root user
 USER ocr
@@ -143,8 +117,8 @@ USER ocr
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default command - run with uvicorn
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Run the application
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

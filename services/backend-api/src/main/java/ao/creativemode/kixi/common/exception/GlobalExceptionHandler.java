@@ -1,5 +1,7 @@
 package ao.creativemode.kixi.common.exception;
 
+import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
+import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.common.dto.ProblemDetail;
 import java.net.URI;
 import java.util.Map;
@@ -29,6 +31,9 @@ public class GlobalExceptionHandler {
         "https://api.kixi.com/errors"
     );
 
+    /**
+     * Handle custom API exceptions with proper status codes.
+     */
     @ExceptionHandler(ApiException.class)
     public Mono<ResponseEntity<ProblemDetail>> handleApiException(
         ApiException ex,
@@ -49,6 +54,9 @@ public class GlobalExceptionHandler {
         return Mono.just(ResponseEntity.status(statusCode).body(problem));
     }
 
+    /**
+     * Handle validation errors from request body binding.
+     */
     @ExceptionHandler(WebExchangeBindException.class)
     public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
         WebExchangeBindException ex,
@@ -88,6 +96,112 @@ public class GlobalExceptionHandler {
         return Mono.just(ResponseEntity.badRequest().body(problem));
     }
 
+    /**
+     * Handle OCR client exceptions (4xx errors from OCR service).
+     */
+    @ExceptionHandler(OcrClientException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleOcrClientException(
+        OcrClientException ex,
+        ServerWebExchange exchange
+    ) {
+        log.warn(
+            "OCR client error: status={}, message={}",
+            ex.getStatusCode(),
+            ex.getMessage()
+        );
+
+        ProblemDetail problem = new ProblemDetail(
+            OCR_ERROR_TYPE,
+            "OCR Processing Error",
+            ex.getStatusCode(),
+            ex.getMessage(),
+            Map.of("service", "ocr-service", "errorType", "client_error")
+        );
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(
+            ResponseEntity.status(ex.getStatusCode()).body(problem)
+        );
+    }
+
+    /**
+     * Handle OCR server exceptions (5xx errors from OCR service).
+     */
+    @ExceptionHandler(OcrServerException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleOcrServerException(
+        OcrServerException ex,
+        ServerWebExchange exchange
+    ) {
+        log.error(
+            "OCR server error: status={}, message={}",
+            ex.getStatusCode(),
+            ex.getMessage()
+        );
+
+        ProblemDetail problem = new ProblemDetail(
+            OCR_ERROR_TYPE,
+            "OCR Service Unavailable",
+            HttpStatus.SERVICE_UNAVAILABLE.value(),
+            "The OCR service is temporarily unavailable. Please try again later.",
+            Map.of("service", "ocr-service", "errorType", "server_error")
+        );
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(
+            ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problem)
+        );
+    }
+
+    /**
+     * Handle timeout exceptions from OCR service calls.
+     */
+    @ExceptionHandler(TimeoutException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleTimeoutException(
+        TimeoutException ex,
+        ServerWebExchange exchange
+    ) {
+        log.error("Request timeout: {}", ex.getMessage());
+
+        ProblemDetail problem = new ProblemDetail(
+            URI.create("https://api.kixi.ao/errors/timeout"),
+            "Request Timeout",
+            HttpStatus.GATEWAY_TIMEOUT.value(),
+            "The request took too long to process. Please try again with a smaller file or fewer images.",
+            Map.of("errorType", "timeout")
+        );
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(
+            ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT).body(problem)
+        );
+    }
+
+    /**
+     * Handle illegal argument exceptions (bad requests).
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleIllegalArgumentException(
+        IllegalArgumentException ex,
+        ServerWebExchange exchange
+    ) {
+        log.warn("Illegal argument: {}", ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST.value(),
+            ex.getMessage() != null ? ex.getMessage() : "Invalid request"
+        ).withTitle("Bad Request");
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(ResponseEntity.badRequest().body(problem));
+    }
+
+    /**
+     * Handle all other uncaught exceptions.
+     */
     @ExceptionHandler(Exception.class)
     public Mono<ResponseEntity<ProblemDetail>> handleGenericException(
         Exception ex,
@@ -100,6 +214,7 @@ public class GlobalExceptionHandler {
             "An unexpected error occurred on the server. Please try again later."
         ).withTitle("Internal Server Error");
         problem = addInstance(exchange, problem);
+
         return Mono.just(ResponseEntity.internalServerError().body(problem));
     }
 
