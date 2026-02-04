@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.schoolyears;
+package ao.creativemode.kixi.dto.statement;
 
 import java.time.LocalDateTime;
 
@@ -20,11 +20,7 @@ public class StatementResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-
-    public StatementResponse() {
-
-    }
-
+    public StatementResponse() {}
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
