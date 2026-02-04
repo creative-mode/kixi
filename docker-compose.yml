@@ -18,21 +18,21 @@ services:
 
   backend:
     build: 
-      context: .    # 👈 Caminho para o Dockerfile
+      context: .    
       dockerfile: ./infra/docker/backend.dockerfile
     container_name: kixi-backend
     environment:
-      # Variáveis que sua aplicação espera
+
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: kixi
       DB_USER: postgres
       DB_PASSWORD: postgres
-      # OU use diretamente as propriedades do Spring
+      
       SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/kixi
       SPRING_R2DBC_USERNAME: postgres
       SPRING_R2DBC_PASSWORD: postgres
-      # Se você tiver JDBC para Flyway
+      
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/kixi
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
