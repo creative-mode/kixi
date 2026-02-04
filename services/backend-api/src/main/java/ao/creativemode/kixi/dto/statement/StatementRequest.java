@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.schoolyears;
+package ao.creativemode.kixi.dto.statement;
 
 import jakarta.validation.constraints.*;
 

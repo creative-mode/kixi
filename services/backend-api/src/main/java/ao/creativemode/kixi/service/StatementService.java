@@ -1,10 +1,10 @@
 package ao.creativemode.kixi.service;
 
 import ao.creativemode.kixi.common.exception.ApiException;
-import ao.creativemode.kixi.dto.schoolyears.StatementRequest;
+import ao.creativemode.kixi.dto.statement.StatementRequest;
+import ao.creativemode.kixi.dto.statement.StatementResponse;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.repository.StatementRepository;
-import ao.creativemode.kixi.dto.schoolyears.StatementResponse;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 

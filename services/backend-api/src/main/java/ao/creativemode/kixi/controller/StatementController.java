@@ -1,7 +1,7 @@
 package ao.creativemode.kixi.controller;
 
-import ao.creativemode.kixi.dto.schoolyears.StatementRequest;
-import ao.creativemode.kixi.dto.schoolyears.StatementResponse;
+import ao.creativemode.kixi.dto.statement.StatementRequest;
+import ao.creativemode.kixi.dto.statement.StatementResponse;
 import ao.creativemode.kixi.service.StatementService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
