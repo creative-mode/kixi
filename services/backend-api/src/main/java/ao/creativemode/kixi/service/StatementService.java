@@ -1,39 +1,66 @@
 package ao.creativemode.kixi.service;
 
-import ao.creativemode.kixi.common.exception.ApiException;
-import ao.creativemode.kixi.dto.statement.StatementRequest;
-import ao.creativemode.kixi.dto.statement.StatementResponse;
-import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.repository.StatementRepository;
-import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.stereotype.Service;
+
+import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
+import ao.creativemode.kixi.dto.classe.ClassResponse;
+import ao.creativemode.kixi.dto.courses.CourseResponse;
+import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
+import ao.creativemode.kixi.dto.statement.StatementRequest;
+import ao.creativemode.kixi.dto.statement.StatementResponse;
+import ao.creativemode.kixi.dto.subject.SubjectResponse;
+import ao.creativemode.kixi.dto.term.TermResponse;
+import ao.creativemode.kixi.model.*;
+import ao.creativemode.kixi.model.Class;
+import ao.creativemode.kixi.repository.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
 @Service
 public class StatementService {
     private final StatementRepository repository;
+    private final SchoolYearRepository schoolYearRepository;
+    private final TermRepository termRepository;
+    private final SubjectRepository subjectRepository;
+    private final ClassRepository classRepository;
+    private final CourseRepository courseRepository;
+    private final AccountRepository accountRepository;
 
-    public StatementService(StatementRepository repository) {
+    public StatementService(
+            StatementRepository repository,
+            SchoolYearRepository schoolYearRepository,
+            TermRepository termRepository,
+            SubjectRepository subjectRepository,
+            ClassRepository classRepository,
+            CourseRepository courseRepository,
+            AccountRepository accountRepository
+    ) {
         this.repository = repository;
+        this.schoolYearRepository = schoolYearRepository;
+        this.termRepository = termRepository;
+        this.subjectRepository = subjectRepository;
+        this.classRepository = classRepository;
+        this.courseRepository = courseRepository;
+        this.accountRepository = accountRepository;
     }
 
-    public Mono<List<StatementResponse>> listAllActive() {
+    public Flux<StatementResponse> listAllActive() {
         return repository.findByDeletedAtIsNull()
-                .map(this::toResponse)
-                .collectList()
-                .onErrorResume(e -> Mono.error(
+                .flatMap(this::toResponse)
+                .onErrorResume(e -> Flux.error(
                         ApiException.badRequest("Error listing statements: " + e.getMessage())
                 ));
     }
 
-    public Mono<List<StatementResponse>> listTrashed() {
+    public Flux<StatementResponse> listTrashed() {
         return repository.findByDeletedAtIsNotNull()
-                .map(this::toResponse)
-                .collectList()
-                .onErrorResume(e -> Mono.error(
+                .flatMap(this::toResponse)
+                .onErrorResume(e -> Flux.error(
                         ApiException.badRequest("Error listing deleted statements: " + e.getMessage())
                 ));
     }
@@ -47,7 +74,7 @@ public class StatementService {
                 .switchIfEmpty(Mono.error(
                         ApiException.notFound("Statement with ID " + id + " not found")
                 ))
-                .map(this::toResponse);
+                .flatMap(this::toResponse);
     }
 
     public Mono<StatementResponse> update(Long id, StatementRequest request) {
@@ -61,22 +88,22 @@ public class StatementService {
                         ApiException.notFound("Statement with ID " + id + " not found for update")
                 ))
                 .flatMap(statement -> {
-                    statement.setTitle(request.getTitle());
-                    statement.setExamType(request.getExamType());
-                    statement.setDurationMinutes(request.getDurationMinutes());
-                    statement.setVariant(request.getVariant());
-                    statement.setInstructions(request.getInstructions());
-                    statement.setTotalMaxScore(request.getTotalMaxScore());
-                    statement.setSchoolYearId(request.getSchoolYearId());
-                    statement.setTermId(request.getTermId());
-                    statement.setSubjectId(request.getSubjectId());
-                    statement.setClassId(request.getClassId());
-                    statement.setCourseId(request.getCourseId());
-                    statement.setVisible(request.getVisible());
+                    statement.setTitle(request.title());
+                    statement.setExamType(request.examType());
+                    statement.setDurationMinutes(request.durationMinutes());
+                    statement.setVariant(request.variant());
+                    statement.setInstructions(request.instructions());
+                    statement.setTotalMaxScore(request.totalMaxScore());
+                    statement.setSchoolYearId(request.schoolYearId());
+                    statement.setTermId(request.termId());
+                    statement.setSubjectId(request.subjectId());
+                    statement.setClassId(request.classId());
+                    statement.setCourseId(request.courseId());
+                    statement.setVisible(request.visible());
                     statement.setUpdatedAt(LocalDateTime.now());
                     return repository.save(statement);
                 })
-                .map(this::toResponse)
+                .flatMap(this::toResponse)
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
                         ApiException.badRequest("Error updating statement: " + e.getMessage())
@@ -147,23 +174,23 @@ public class StatementService {
         return validateRequest(request)
                 .then(Mono.defer(() -> {
                     Statement statement = new Statement();
-                    statement.setTitle(request.getTitle());
-                    statement.setExamType(request.getExamType());
-                    statement.setDurationMinutes(request.getDurationMinutes());
-                    statement.setVariant(request.getVariant());
-                    statement.setInstructions(request.getInstructions());
-                    statement.setTotalMaxScore(request.getTotalMaxScore());
-                    statement.setSchoolYearId(request.getSchoolYearId());
-                    statement.setTermId(request.getTermId());
-                    statement.setSubjectId(request.getSubjectId());
-                    statement.setClassId(request.getClassId());
-                    statement.setCourseId(request.getCourseId());
-                    statement.setVisible(request.getVisible() != null ? request.getVisible() : false);
+                    statement.setTitle(request.title());
+                    statement.setExamType(request.examType());
+                    statement.setDurationMinutes(request.durationMinutes());
+                    statement.setVariant(request.variant());
+                    statement.setInstructions(request.instructions());
+                    statement.setTotalMaxScore(request.totalMaxScore());
+                    statement.setSchoolYearId(request.schoolYearId());
+                    statement.setTermId(request.termId());
+                    statement.setSubjectId(request.subjectId());
+                    statement.setClassId(request.classId());
+                    statement.setCourseId(request.courseId());
+                    statement.setVisible(request.visible() != null ? request.visible() : false);
                     statement.setCreatedAt(LocalDateTime.now());
 
                     return repository.save(statement);
                 }))
-                .map(this::toResponse)
+                .flatMap(this::toResponse)
                 .onErrorResume(ApiException.class, Mono::error)
                 .onErrorResume(e -> Mono.error(
                         ApiException.badRequest("Error creating statement: " + e.getMessage())
@@ -177,39 +204,39 @@ public class StatementService {
             return Mono.error(ApiException.badRequest("Statement data is required"));
         }
 
-        if (request.getTitle() == null || request.getTitle().isBlank()) {
+        if (request.title() == null || request.title().isBlank()) {
             errors.add("Title is required");
-        } else if (request.getTitle().length() < 3) {
+        } else if (request.title().length() < 3) {
             errors.add("Title must have at least 3 characters");
-        } else if (request.getTitle().length() > 255) {
+        } else if (request.title().length() > 255) {
             errors.add("Title must have at most 255 characters");
         }
 
-        if (request.getExamType() == null || request.getExamType().isBlank()) {
+        if (request.examType() == null || request.examType().isBlank()) {
             errors.add("Exam type is required");
         }
 
-        if (request.getDurationMinutes() != null && request.getDurationMinutes() <= 0) {
+        if (request.durationMinutes() != null && request.durationMinutes() <= 0) {
             errors.add("Duration must be greater than zero");
         }
 
-        if (request.getTotalMaxScore() != null && request.getTotalMaxScore() < 0) {
+        if (request.totalMaxScore() != null && request.totalMaxScore() < 0) {
             errors.add("Maximum score cannot be negative");
         }
 
-        if (request.getSchoolYearId() == null) {
+        if (request.schoolYearId() == null) {
             errors.add("School year is required");
         }
 
-        if (request.getTermId() == null) {
+        if (request.termId() == null) {
             errors.add("Term is required");
         }
 
-        if (request.getSubjectId() == null) {
+        if (request.subjectId() == null) {
             errors.add("Subject is required");
         }
 
-        if (request.getClassId() == null) {
+        if (request.classId() == null) {
             errors.add("Class is required");
         }
 
@@ -221,25 +248,103 @@ public class StatementService {
         return Mono.empty();
     }
 
+    private Mono<StatementResponse> toResponse(Statement statement) {
+        Mono<SchoolYearResponse> schoolYearMono = statement.getSchoolYearId() != null
+                ? schoolYearRepository.findById(statement.getSchoolYearId())
+                    .map(this::toSchoolYearResponse)
+                    .switchIfEmpty(Mono.just(new SchoolYearResponse(null, null, null, null, null, null)))
+                : Mono.just(new SchoolYearResponse(null, null, null, null, null, null));
 
+        Mono<TermResponse> termMono = statement.getTermId() != null
+                ? termRepository.findById(statement.getTermId())
+                    .map(this::toTermResponse)
+                    .switchIfEmpty(Mono.just(new TermResponse(null, 0, null, null, null, null)))
+                : Mono.just(new TermResponse(null, 0, null, null, null, null));
 
-    private StatementResponse toResponse(Statement statement) {
-        StatementResponse response = new StatementResponse();
-        response.setId(statement.getId());
-        response.setExamType(statement.getExamType());
-        response.setDurationMinutes(statement.getDurationMinutes());
-        response.setVariant(statement.getVariant());
-        response.setTitle(statement.getTitle());
-        response.setInstructions(statement.getInstructions());
-        response.setTotalMaxScore(statement.getTotalMaxScore());
-        response.setSchoolYearId(statement.getSchoolYearId());
-        response.setTermId(statement.getTermId());
-        response.setSubjectId(statement.getSubjectId());
-        response.setClassId(statement.getClassId());
-        response.setCourseId(statement.getCourseId());
-        response.setVisible(statement.getVisible());
-        response.setCreatedAt(statement.getCreatedAt());
-        response.setUpdatedAt(statement.getUpdatedAt());
-        return response;
+        Mono<SubjectResponse> subjectMono = statement.getSubjectId() != null
+                ? subjectRepository.findById(statement.getSubjectId())
+                    .map(this::toSubjectResponse)
+                    .switchIfEmpty(Mono.just(new SubjectResponse(null, null, null, null, null, null, null)))
+                : Mono.just(new SubjectResponse(null, null, null, null, null, null, null));
+
+        Mono<ClassResponse> classMono = statement.getClassId() != null
+                ? classRepository.findById(statement.getClassId())
+                    .map(this::toClassResponse)
+                    .switchIfEmpty(Mono.just(new ClassResponse(null, null, null, null, null, null, null, null)))
+                : Mono.just(new ClassResponse(null, null, null, null, null, null, null, null));
+
+        Mono<CourseResponse> courseMono = statement.getCourseId() != null
+                ? courseRepository.findById(statement.getCourseId())
+                    .map(this::toCourseResponse)
+                    .switchIfEmpty(Mono.just(new CourseResponse(null, null, null, null, null, null, null)))
+                : Mono.just(new CourseResponse(null, null, null, null, null, null, null));
+
+        Mono<AccountBasicResponse> createdByMono = statement.getCreatedBy() != null
+                ? accountRepository.findById(statement.getCreatedBy())
+                    .map(this::toAccountResponse)
+                    .switchIfEmpty(Mono.just(new AccountBasicResponse(null, null, null)))
+                : Mono.just(new AccountBasicResponse(null, null, null));
+
+        return Mono.zip(schoolYearMono, termMono, subjectMono, classMono, courseMono, createdByMono)
+                .map(tuple -> new StatementResponse(
+                        statement.getId(),
+                        statement.getExamType(),
+                        statement.getDurationMinutes(),
+                        statement.getVariant(),
+                        statement.getTitle(),
+                        statement.getInstructions(),
+                        statement.getTotalMaxScore(),
+                        tuple.getT1(),
+                        tuple.getT2(),
+                        tuple.getT3(),
+                        tuple.getT4(),
+                        tuple.getT5(),
+                        tuple.getT6(),
+                        statement.getVisible(),
+                        statement.getCreatedAt(),
+                        statement.getUpdatedAt()
+                ));
+    }
+
+    private SchoolYearResponse toSchoolYearResponse(SchoolYear sy) {
+        return new SchoolYearResponse(
+                sy.getId(), sy.getStartYear(), sy.getEndYear(),
+                sy.getCreatedAt(), sy.getUpdatedAt(), sy.getDeletedAt()
+        );
+    }
+
+    private TermResponse toTermResponse(Term term) {
+        return new TermResponse(
+                term.getId(), term.getNumber(), term.getName(),
+                term.getCreatedAt(), term.getUpdatedAt(), term.getDeletedAt()
+        );
+    }
+
+    private SubjectResponse toSubjectResponse(Subject subject) {
+        return new SubjectResponse(
+                subject.getId(), subject.getCode(), subject.getName(), subject.getShortName(),
+                subject.getCreatedAt(), subject.getUpdatedAt(), subject.getDeletedAt()
+        );
+    }
+
+    private ClassResponse toClassResponse(Class clazz) {
+        return new ClassResponse(
+                clazz.getId(), clazz.getCode(), clazz.getGrade(),
+                null, null, // course e schoolYear serão null aqui para evitar recursão
+                clazz.getCreatedAt(), clazz.getUpdatedAt(), clazz.getDeletedAt()
+        );
+    }
+
+    private CourseResponse toCourseResponse(Course course) {
+        return new CourseResponse(
+                course.getId(), course.getCode(), course.getName(), course.getDescription(),
+                course.getCreatedAt(), course.getUpdatedAt(), course.getDeletedAt()
+        );
+    }
+
+    private AccountBasicResponse toAccountResponse(Account account) {
+        return new AccountBasicResponse(
+                account.getId(), account.getUsername(), account.getEmail()
+        );
     }
 }
