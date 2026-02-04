@@ -1,22 +1,46 @@
 services:
-  kixi_postgres:
-    image: postgres:15.15-alpine
-    container_name: kixi_postgres
+  postgres:
+    image: postgres:15-alpine
+    container_name: kixi-db
     environment:
-      POSTGRES_DB: kixi_db
+      POSTGRES_DB: kixi
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
-      - kixi_postgres_data:/var/lib/postgresql/data
-      - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - kixi_network
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: 
+      context: .    # 👈 Caminho para o Dockerfile
+      dockerfile: ./infra/docker/backend.dockerfile
+    container_name: kixi-backend
+    environment:
+      # Variáveis que sua aplicação espera
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: kixi
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      # OU use diretamente as propriedades do Spring
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/kixi
+      SPRING_R2DBC_USERNAME: postgres
+      SPRING_R2DBC_PASSWORD: postgres
+      # Se você tiver JDBC para Flyway
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/kixi
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
-  kixi_postgres_data:
-
-networks:
-  kixi_network:
-    driver: bridge
+  postgres_data:
