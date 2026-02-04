@@ -1,361 +1,477 @@
 package ao.creativemode.kixi.service;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-
-import org.springframework.stereotype.Service;
-
-import ao.creativemode.kixi.common.exception.ApiException;
-import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
-import ao.creativemode.kixi.dto.classe.ClassResponse;
-import ao.creativemode.kixi.dto.courses.CourseResponse;
-import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
-import ao.creativemode.kixi.dto.statement.StatementRequest;
-import ao.creativemode.kixi.dto.statement.StatementResponse;
-import ao.creativemode.kixi.dto.subject.SubjectResponse;
-import ao.creativemode.kixi.dto.term.TermResponse;
-import ao.creativemode.kixi.model.Account;
-import ao.creativemode.kixi.model.Class;
-import ao.creativemode.kixi.model.Course;
-import ao.creativemode.kixi.model.SchoolYear;
+import ao.creativemode.kixi.client.OcrServiceClient;
+import ao.creativemode.kixi.dto.ocr.OcrResponse;
+import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedQuestion;
+import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedOption;
+import ao.creativemode.kixi.dto.ocr.OcrResponse.OcrMetadata;
 import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.model.Subject;
-import ao.creativemode.kixi.model.Term;
-import ao.creativemode.kixi.repository.AccountRepository;
-import ao.creativemode.kixi.repository.ClassRepository;
-import ao.creativemode.kixi.repository.CourseRepository;
-import ao.creativemode.kixi.repository.SchoolYearRepository;
+import ao.creativemode.kixi.model.Question;
+import ao.creativemode.kixi.model.QuestionOption;
 import ao.creativemode.kixi.repository.StatementRepository;
-import ao.creativemode.kixi.repository.SubjectRepository;
-import ao.creativemode.kixi.repository.TermRepository;
+import ao.creativemode.kixi.repository.QuestionRepository;
+import ao.creativemode.kixi.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.common.exception.ApiException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.codec.multipart.FilePart;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * Service for managing Statement entities and OCR integration.
+ *
+ * Provides business logic for:
+ * - CRUD operations on statements
+ * - OCR-based statement creation from images
+ * - Mapping OCR results to domain entities
+ * - Managing questions and options
+ */
 @Service
 public class StatementService {
-    private final StatementRepository repository;
-    private final SchoolYearRepository schoolYearRepository;
-    private final TermRepository termRepository;
-    private final SubjectRepository subjectRepository;
-    private final ClassRepository classRepository;
-    private final CourseRepository courseRepository;
-    private final AccountRepository accountRepository;
+
+    private static final Logger log = LoggerFactory.getLogger(StatementService.class);
+
+    private static final double LOW_CONFIDENCE_THRESHOLD = 0.8;
+    private static final double MIN_CONFIDENCE_THRESHOLD = 0.5;
+
+    private final StatementRepository statementRepository;
+    private final QuestionRepository questionRepository;
+    private final QuestionOptionRepository optionRepository;
+    private final OcrServiceClient ocrServiceClient;
 
     public StatementService(
-            StatementRepository repository,
-            SchoolYearRepository schoolYearRepository,
-            TermRepository termRepository,
-            SubjectRepository subjectRepository,
-            ClassRepository classRepository,
-            CourseRepository courseRepository,
-            AccountRepository accountRepository
-    ) {
-        this.repository = repository;
-        this.schoolYearRepository = schoolYearRepository;
-        this.termRepository = termRepository;
-        this.subjectRepository = subjectRepository;
-        this.classRepository = classRepository;
-        this.courseRepository = courseRepository;
-        this.accountRepository = accountRepository;
+            StatementRepository statementRepository,
+            QuestionRepository questionRepository,
+            QuestionOptionRepository optionRepository,
+            OcrServiceClient ocrServiceClient) {
+        this.statementRepository = statementRepository;
+        this.questionRepository = questionRepository;
+        this.optionRepository = optionRepository;
+        this.ocrServiceClient = ocrServiceClient;
     }
 
-    public Flux<StatementResponse> listAllActive() {
-        return repository.findByDeletedAtIsNull()
-                .flatMap(this::toResponse)
-                .onErrorResume(e -> Flux.error(
-                        ApiException.badRequest("Error listing statements: " + e.getMessage())
-                ));
-    }
+    // =========================================================================
+    // OCR Integration
+    // =========================================================================
 
-    public Flux<StatementResponse> listTrashed() {
-        return repository.findByDeletedAtIsNotNull()
-                .flatMap(this::toResponse)
-                .onErrorResume(e -> Flux.error(
-                        ApiException.badRequest("Error listing deleted statements: " + e.getMessage())
-                ));
-    }
+    /**
+     * Create a statement from uploaded images using OCR.
+     *
+     * @param files List of uploaded image files
+     * @param createdBy ID of the user creating the statement
+     * @return Mono containing the created statement with questions
+     */
+    @Transactional
+    public Mono<StatementWithQuestions> createFromOcr(List<FilePart> files, Long createdBy) {
+        log.info("Creating statement from OCR: {} file(s), createdBy={}", files.size(), createdBy);
 
-    public Mono<StatementResponse> getById(Long id) {
-        if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
-        }
+        return ocrServiceClient.extractText(files)
+                .flatMap(ocrResponse -> {
+                    if (ocrResponse.isError()) {
+                        log.error("OCR extraction failed: {}", ocrResponse.errorMessage());
+                        return Mono.error(ApiException.badRequest(
+                                "OCR extraction failed: " + ocrResponse.errorMessage()));
+                    }
 
-        return repository.findByIdAndDeletedAtIsNull(id)
-                .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Statement with ID " + id + " not found")
-                ))
-                .flatMap(this::toResponse);
-    }
+                    log.info("OCR extraction successful: requestId={}, confidence={}, questions={}",
+                            ocrResponse.requestId(),
+                            ocrResponse.overallConfidence(),
+                            ocrResponse.questions() != null ? ocrResponse.questions().size() : 0);
 
-    public Mono<StatementResponse> update(Long id, StatementRequest request) {
-        if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
-        }
-
-        return validateRequest(request)
-                .then(repository.findByIdAndDeletedAtIsNull(id))
-                .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Statement with ID " + id + " not found for update")
-                ))
-                .flatMap(statement -> {
-                    statement.setTitle(request.title());
-                    statement.setExamType(request.examType());
-                    statement.setDurationMinutes(request.durationMinutes());
-                    statement.setVariant(request.variant());
-                    statement.setInstructions(request.instructions());
-                    statement.setTotalMaxScore(request.totalMaxScore());
-                    statement.setSchoolYearId(request.schoolYearId());
-                    statement.setTermId(request.termId());
-                    statement.setSubjectId(request.subjectId());
-                    statement.setClassId(request.classId());
-                    statement.setCourseId(request.courseId());
-                    statement.setVisible(request.visible());
-                    statement.setUpdatedAt(LocalDateTime.now());
-                    return repository.save(statement);
+                    return createStatementFromOcrResponse(ocrResponse, createdBy);
                 })
-                .flatMap(this::toResponse)
-                .onErrorResume(ApiException.class, Mono::error)
-                .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Error updating statement: " + e.getMessage())
-                ));
+                .doOnSuccess(result -> log.info(
+                        "Statement created from OCR: statementId={}, questions={}",
+                        result.statement().getId(),
+                        result.questions().size()))
+                .doOnError(error -> log.error("Failed to create statement from OCR", error));
     }
 
+    /**
+     * Create a statement from an OCR response.
+     *
+     * @param ocrResponse The OCR response containing extracted data
+     * @param createdBy ID of the user creating the statement
+     * @return Mono containing the created statement with questions
+     */
+    @Transactional
+    public Mono<StatementWithQuestions> createStatementFromOcrResponse(
+            OcrResponse ocrResponse,
+            Long createdBy) {
+
+        // Create and populate statement from metadata
+        Statement statement = mapMetadataToStatement(ocrResponse.metadata(), ocrResponse);
+        statement.setCreatedBy(createdBy);
+        statement.setOcrMetadata(
+                ocrResponse.requestId(),
+                ocrResponse.overallConfidence(),
+                ocrResponse.needsReview());
+        statement.setSource("ocr");
+
+        // Calculate total max score from questions
+        if (ocrResponse.questions() != null) {
+            double totalScore = ocrResponse.questions().stream()
+                    .filter(q -> q.maxScore() != null && q.maxScore().value() != null)
+                    .mapToDouble(q -> q.maxScore().value())
+                    .sum();
+            statement.setTotalMaxScore(totalScore);
+        }
+
+        // Save statement first
+        return statementRepository.save(statement)
+                .flatMap(savedStatement -> {
+                    if (ocrResponse.questions() == null || ocrResponse.questions().isEmpty()) {
+                        return Mono.just(new StatementWithQuestions(
+                                savedStatement, List.of(), List.of()));
+                    }
+
+                    // Create and save questions
+                    return createQuestionsFromOcr(savedStatement.getId(), ocrResponse.questions())
+                            .collectList()
+                            .flatMap(savedQuestions -> {
+                                // Collect all question IDs
+                                List<Long> questionIds = savedQuestions.stream()
+                                        .map(Question::getId)
+                                        .toList();
+
+                                // Load all options for these questions
+                                return optionRepository.findAllByQuestionIds(questionIds)
+                                        .collectList()
+                                        .map(options -> new StatementWithQuestions(
+                                                savedStatement, savedQuestions, options));
+                            });
+                });
+    }
+
+    /**
+     * Map OCR metadata to Statement entity.
+     */
+    private Statement mapMetadataToStatement(OcrMetadata metadata, OcrResponse ocrResponse) {
+        Statement statement = new Statement();
+
+        if (metadata != null) {
+            // Title
+            if (metadata.title() != null && metadata.title().value() != null) {
+                statement.setTitle(metadata.title().value());
+            } else {
+                statement.setTitle("Imported Statement - " + LocalDateTime.now());
+            }
+
+            // Exam type
+            if (metadata.examType() != null && metadata.examType().value() != null) {
+                statement.setExamType(metadata.examType().value());
+            }
+
+            // Duration
+            if (metadata.durationMinutes() != null && metadata.durationMinutes().value() != null) {
+                statement.setDurationMinutes(metadata.durationMinutes().value());
+            }
+
+            // Variant
+            if (metadata.variant() != null && metadata.variant().value() != null) {
+                statement.setVariant(metadata.variant().value());
+            }
+
+            // Instructions
+            if (metadata.instructions() != null && metadata.instructions().value() != null) {
+                statement.setInstructions(metadata.instructions().value());
+            }
+
+            // Note: schoolYearId, termId, subjectId, classId, courseId need to be
+            // resolved from the text values (e.g., "2024/2025" -> ID lookup)
+            // This would require additional repositories and lookup logic
+            // For now, these are left null and can be set manually or via a separate endpoint
+        }
+
+        // Set OCR-specific fields
+        statement.setVisible(false); // Require manual review before publishing
+        statement.setNeedsReview(ocrResponse.needsReview() ||
+                (ocrResponse.overallConfidence() != null &&
+                        ocrResponse.overallConfidence() < LOW_CONFIDENCE_THRESHOLD));
+
+        return statement;
+    }
+
+    /**
+     * Create questions from OCR extracted questions.
+     */
+    private Flux<Question> createQuestionsFromOcr(Long statementId, List<ExtractedQuestion> extractedQuestions) {
+        return Flux.fromIterable(extractedQuestions)
+                .flatMap(extracted -> {
+                    Question question = mapExtractedToQuestion(statementId, extracted);
+                    return questionRepository.save(question)
+                            .flatMap(savedQuestion -> {
+                                // Create options if this is a multiple choice question
+                                if (extracted.options() != null && !extracted.options().isEmpty()) {
+                                    return createOptionsFromOcr(savedQuestion.getId(), extracted.options())
+                                            .then(Mono.just(savedQuestion));
+                                }
+                                return Mono.just(savedQuestion);
+                            });
+                });
+    }
+
+    /**
+     * Map extracted question to Question entity.
+     */
+    private Question mapExtractedToQuestion(Long statementId, ExtractedQuestion extracted) {
+        Question question = new Question();
+        question.setStatementId(statementId);
+        question.setNumber(extracted.number());
+        question.setOrderIndex(extracted.number());
+
+        // Text
+        if (extracted.text() != null && extracted.text().value() != null) {
+            question.setText(extracted.text().value());
+        }
+
+        // Question type
+        question.setQuestionType(extracted.getQuestionTypeValue());
+
+        // Max score
+        if (extracted.maxScore() != null && extracted.maxScore().value() != null) {
+            question.setMaxScore(extracted.maxScore().value());
+        }
+
+        // OCR metadata
+        question.setOcrConfidence(extracted.confidence());
+        question.setPageIndex(extracted.pageIndex());
+
+        // Mark for review if low confidence
+        question.setNeedsReview(extracted.confidence() != null &&
+                extracted.confidence() < LOW_CONFIDENCE_THRESHOLD);
+
+        return question;
+    }
+
+    /**
+     * Create options from OCR extracted options.
+     */
+    private Flux<QuestionOption> createOptionsFromOcr(Long questionId, List<ExtractedOption> extractedOptions) {
+        return Flux.fromIterable(extractedOptions)
+                .index()
+                .flatMap(indexed -> {
+                    ExtractedOption extracted = indexed.getT2();
+                    int index = indexed.getT1().intValue();
+
+                    QuestionOption option = new QuestionOption();
+                    option.setQuestionId(questionId);
+                    option.setOptionLabel(extracted.optionLabel());
+                    option.setOptionText(extracted.optionText());
+                    option.setIsCorrect(false); // OCR doesn't know the correct answer
+                    option.setOrderIndex(index);
+                    option.setOcrConfidence(extracted.confidence());
+
+                    return optionRepository.save(option);
+                });
+    }
+
+    // =========================================================================
+    // Standard CRUD Operations
+    // =========================================================================
+
+    /**
+     * Find all active statements.
+     */
+    public Flux<Statement> findAllActive() {
+        return statementRepository.findAllByDeletedAtIsNull();
+    }
+
+    /**
+     * Find all deleted statements.
+     */
+    public Flux<Statement> findAllDeleted() {
+        return statementRepository.findAllByDeletedAtIsNotNull();
+    }
+
+    /**
+     * Find a statement by ID.
+     */
+    public Mono<Statement> findById(Long id) {
+        return statementRepository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")));
+    }
+
+    /**
+     * Find a statement with all its questions.
+     */
+    public Mono<StatementWithQuestions> findByIdWithQuestions(Long id) {
+        return findById(id)
+                .flatMap(statement ->
+                        questionRepository.findAllByStatementIdOrderedByNumber(id)
+                                .collectList()
+                                .flatMap(questions -> {
+                                    List<Long> questionIds = questions.stream()
+                                            .map(Question::getId)
+                                            .toList();
+
+                                    if (questionIds.isEmpty()) {
+                                        return Mono.just(new StatementWithQuestions(
+                                                statement, questions, List.of()));
+                                    }
+
+                                    return optionRepository.findAllByQuestionIds(questionIds)
+                                            .collectList()
+                                            .map(options -> new StatementWithQuestions(
+                                                    statement, questions, options));
+                                })
+                );
+    }
+
+    /**
+     * Find statements that need review.
+     */
+    public Flux<Statement> findNeedingReview() {
+        return statementRepository.findAllByNeedsReviewTrueAndDeletedAtIsNull();
+    }
+
+    /**
+     * Find statements created via OCR.
+     */
+    public Flux<Statement> findFromOcr() {
+        return statementRepository.findAllFromOcr();
+    }
+
+    /**
+     * Find statements by school year.
+     */
+    public Flux<Statement> findBySchoolYear(Long schoolYearId) {
+        return statementRepository.findAllBySchoolYearIdAndDeletedAtIsNull(schoolYearId);
+    }
+
+    /**
+     * Find statements by subject.
+     */
+    public Flux<Statement> findBySubject(Long subjectId) {
+        return statementRepository.findAllBySubjectIdAndDeletedAtIsNull(subjectId);
+    }
+
+    /**
+     * Search statements by title.
+     */
+    public Flux<Statement> searchByTitle(String searchTerm) {
+        return statementRepository.searchByTitle(searchTerm);
+    }
+
+    /**
+     * Save a statement.
+     */
+    public Mono<Statement> save(Statement statement) {
+        return statementRepository.save(statement);
+    }
+
+    /**
+     * Soft delete a statement.
+     */
+    @Transactional
     public Mono<Void> softDelete(Long id) {
-        if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
-        }
-
-        return repository.findByIdAndDeletedAtIsNull(id)
-                .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Statement with ID " + id + " not found for deletion")
-                ))
+        return findById(id)
                 .flatMap(statement -> {
-                    statement.setDeletedAt(LocalDateTime.now());
-                    return repository.save(statement);
+                    statement.markAsDeleted();
+                    return statementRepository.save(statement);
                 })
-                .then()
-                .onErrorResume(ApiException.class, Mono::error)
-                .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Error deleting statement: " + e.getMessage())
-                ));
+                .then();
     }
 
+    /**
+     * Restore a soft-deleted statement.
+     */
+    @Transactional
     public Mono<Void> restore(Long id) {
-        if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
-        }
-
-        return repository.findById(id)
-                .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Statement with ID " + id + " not found")
-                ))
-                .filter(statement -> statement.getDeletedAt() != null)
-                .switchIfEmpty(Mono.error(
-                        ApiException.badRequest("Statement with ID " + id + " is not deleted and cannot be restored")
-                ))
+        return statementRepository.findByIdAndDeletedAtIsNotNull(id)
+                .switchIfEmpty(Mono.error(ApiException.badRequest("Statement is not deleted")))
                 .flatMap(statement -> {
-                    statement.setDeletedAt(null);
-                    return repository.save(statement);
+                    statement.restore();
+                    return statementRepository.save(statement);
                 })
-                .then()
-                .onErrorResume(ApiException.class, Mono::error)
-                .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Error restoring statement: " + e.getMessage())
-                ));
+                .then();
     }
 
+    /**
+     * Hard delete a statement (only if already soft-deleted).
+     */
+    @Transactional
     public Mono<Void> hardDelete(Long id) {
-        if (id == null || id <= 0) {
-            return Mono.error(ApiException.badRequest("Statement ID is required and must be greater than zero"));
-        }
-
-        return repository.findById(id)
-                .switchIfEmpty(Mono.error(
-                        ApiException.notFound("Statement with ID " + id + " not found for permanent deletion")
-                ))
-                .flatMap(statement -> repository.deleteById(id))
-                .onErrorResume(ApiException.class, Mono::error)
-                .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Error permanently deleting statement: " + e.getMessage())
-                ));
+        return statementRepository.findByIdAndDeletedAtIsNotNull(id)
+                .switchIfEmpty(Mono.error(ApiException.badRequest(
+                        "Only deleted statements can be permanently removed")))
+                .flatMap(statement ->
+                        // First delete all questions and options
+                        questionRepository.findAllByStatementIdAndDeletedAtIsNull(id)
+                                .flatMap(question ->
+                                        optionRepository.softDeleteAllByQuestionId(question.getId())
+                                                .then(questionRepository.delete(question)))
+                                .then(statementRepository.delete(statement)))
+                .then();
     }
 
-    public Mono<StatementResponse> create(StatementRequest request) {
-        return validateRequest(request)
-                .then(Mono.defer(() -> {
-                    Statement statement = new Statement();
-                    statement.setTitle(request.title());
-                    statement.setExamType(request.examType());
-                    statement.setDurationMinutes(request.durationMinutes());
-                    statement.setVariant(request.variant());
-                    statement.setInstructions(request.instructions());
-                    statement.setTotalMaxScore(request.totalMaxScore());
-                    statement.setSchoolYearId(request.schoolYearId());
-                    statement.setTermId(request.termId());
-                    statement.setSubjectId(request.subjectId());
-                    statement.setClassId(request.classId());
-                    statement.setCourseId(request.courseId());
-                    statement.setVisible(request.visible() != null ? request.visible() : false);
-                    statement.setCreatedAt(LocalDateTime.now());
-
-                    return repository.save(statement);
-                }))
-                .flatMap(this::toResponse)
-                .onErrorResume(ApiException.class, Mono::error)
-                .onErrorResume(e -> Mono.error(
-                        ApiException.badRequest("Error creating statement: " + e.getMessage())
-                ));
+    /**
+     * Approve review for a statement (mark as reviewed).
+     */
+    @Transactional
+    public Mono<Statement> approveReview(Long id) {
+        return findById(id)
+                .flatMap(statement -> {
+                    statement.approveReview();
+                    statement.setVisible(true);
+                    return statementRepository.save(statement);
+                });
     }
 
-    private Mono<Void> validateRequest(StatementRequest request) {
-        List<String> errors = new ArrayList<>();
-
-        if (request == null) {
-            return Mono.error(ApiException.badRequest("Statement data is required"));
-        }
-
-        if (request.title() == null || request.title().isBlank()) {
-            errors.add("Title is required");
-        } else if (request.title().length() < 3) {
-            errors.add("Title must have at least 3 characters");
-        } else if (request.title().length() > 255) {
-            errors.add("Title must have at most 255 characters");
-        }
-
-        if (request.examType() == null || request.examType().isBlank()) {
-            errors.add("Exam type is required");
-        }
-
-        if (request.durationMinutes() != null && request.durationMinutes() <= 0) {
-            errors.add("Duration must be greater than zero");
-        }
-
-        if (request.totalMaxScore() != null && request.totalMaxScore() < 0) {
-            errors.add("Maximum score cannot be negative");
-        }
-
-        if (request.schoolYearId() == null) {
-            errors.add("School year is required");
-        }
-
-        if (request.termId() == null) {
-            errors.add("Term is required");
-        }
-
-        if (request.subjectId() == null) {
-            errors.add("Subject is required");
-        }
-
-        if (request.classId() == null) {
-            errors.add("Class is required");
-        }
-
-        if (!errors.isEmpty()) {
-            String errorMessage = String.join("; ", errors);
-            return Mono.error(ApiException.badRequest("Validation errors: " + errorMessage));
-        }
-
-        return Mono.empty();
+    /**
+     * Mark a statement as visible.
+     */
+    public Mono<Statement> setVisible(Long id, boolean visible) {
+        return findById(id)
+                .flatMap(statement -> {
+                    statement.setVisible(visible);
+                    return statementRepository.save(statement);
+                });
     }
 
-    private Mono<StatementResponse> toResponse(Statement statement) {
-        Mono<SchoolYearResponse> schoolYearMono = statement.getSchoolYearId() != null
-                ? schoolYearRepository.findById(statement.getSchoolYearId())
-                    .map(this::toSchoolYearResponse)
-                    .switchIfEmpty(Mono.just(new SchoolYearResponse(null, null, null, null, null, null)))
-                : Mono.just(new SchoolYearResponse(null, null, null, null, null, null));
+    // =========================================================================
+    // Statistics
+    // =========================================================================
 
-        Mono<TermResponse> termMono = statement.getTermId() != null
-                ? termRepository.findById(statement.getTermId())
-                    .map(this::toTermResponse)
-                    .switchIfEmpty(Mono.just(new TermResponse(null, 0, null, null, null, null)))
-                : Mono.just(new TermResponse(null, 0, null, null, null, null));
-
-        Mono<SubjectResponse> subjectMono = statement.getSubjectId() != null
-                ? subjectRepository.findById(statement.getSubjectId())
-                    .map(this::toSubjectResponse)
-                    .switchIfEmpty(Mono.just(new SubjectResponse(null, null, null, null, null, null, null)))
-                : Mono.just(new SubjectResponse(null, null, null, null, null, null, null));
-
-        Mono<ClassResponse> classMono = statement.getClassId() != null
-                ? classRepository.findById(statement.getClassId())
-                    .map(this::toClassResponse)
-                    .switchIfEmpty(Mono.just(new ClassResponse(null, null, null, null, null, null, null, null)))
-                : Mono.just(new ClassResponse(null, null, null, null, null, null, null, null));
-
-        Mono<CourseResponse> courseMono = statement.getCourseId() != null
-                ? courseRepository.findById(statement.getCourseId())
-                    .map(this::toCourseResponse)
-                    .switchIfEmpty(Mono.just(new CourseResponse(null, null, null, null, null, null, null)))
-                : Mono.just(new CourseResponse(null, null, null, null, null, null, null));
-
-        Mono<AccountBasicResponse> createdByMono = statement.getCreatedBy() != null
-                ? accountRepository.findById(statement.getCreatedBy())
-                    .map(this::toAccountResponse)
-                    .switchIfEmpty(Mono.just(new AccountBasicResponse(null, null, null)))
-                : Mono.just(new AccountBasicResponse(null, null, null));
-
-        return Mono.zip(schoolYearMono, termMono, subjectMono, classMono, courseMono, createdByMono)
-                .map(tuple -> new StatementResponse(
-                        statement.getId(),
-                        statement.getExamType(),
-                        statement.getDurationMinutes(),
-                        statement.getVariant(),
-                        statement.getTitle(),
-                        statement.getInstructions(),
-                        statement.getTotalMaxScore(),
-                        tuple.getT1(),
-                        tuple.getT2(),
-                        tuple.getT3(),
-                        tuple.getT4(),
-                        tuple.getT5(),
-                        tuple.getT6(),
-                        statement.getVisible(),
-                        statement.getCreatedAt(),
-                        statement.getUpdatedAt()
-                ));
+    /**
+     * Count all active statements.
+     */
+    public Mono<Long> countActive() {
+        return statementRepository.countByDeletedAtIsNull();
     }
 
-    private SchoolYearResponse toSchoolYearResponse(SchoolYear sy) {
-        return new SchoolYearResponse(
-                sy.getId(), sy.getStartYear(), sy.getEndYear(),
-                sy.getCreatedAt(), sy.getUpdatedAt(), sy.getDeletedAt()
-        );
+    /**
+     * Count statements needing review.
+     */
+    public Mono<Long> countNeedingReview() {
+        return statementRepository.countByNeedsReviewTrueAndDeletedAtIsNull();
     }
 
-    private TermResponse toTermResponse(Term term) {
-        return new TermResponse(
-                term.getId(), term.getNumber(), term.getName(),
-                term.getCreatedAt(), term.getUpdatedAt(), term.getDeletedAt()
-        );
+    /**
+     * Count statements by source.
+     */
+    public Mono<Long> countBySource(String source) {
+        return statementRepository.countBySourceAndDeletedAtIsNull(source);
     }
 
-    private SubjectResponse toSubjectResponse(Subject subject) {
-        return new SubjectResponse(
-                subject.getId(), subject.getCode(), subject.getName(), subject.getShortName(),
-                subject.getCreatedAt(), subject.getUpdatedAt(), subject.getDeletedAt()
-        );
-    }
+    // =========================================================================
+    // DTOs
+    // =========================================================================
 
-    private ClassResponse toClassResponse(Class clazz) {
-        return new ClassResponse(
-                clazz.getId(), clazz.getCode(), clazz.getGrade(),
-                null, null, // course e schoolYear serão null aqui para evitar recursão
-                clazz.getCreatedAt(), clazz.getUpdatedAt(), clazz.getDeletedAt()
-        );
-    }
-
-    private CourseResponse toCourseResponse(Course course) {
-        return new CourseResponse(
-                course.getId(), course.getCode(), course.getName(), course.getDescription(),
-                course.getCreatedAt(), course.getUpdatedAt(), course.getDeletedAt()
-        );
-    }
-
-    private AccountBasicResponse toAccountResponse(Account account) {
-        return new AccountBasicResponse(
-                account.getId(), account.getUsername(), account.getEmail()
-        );
-    }
+    /**
+     * Record representing a statement with its questions and options.
+     */
+    public record StatementWithQuestions(
+            Statement statement,
+            List<Question> questions,
+            List<QuestionOption> options
+    ) {}
 }
