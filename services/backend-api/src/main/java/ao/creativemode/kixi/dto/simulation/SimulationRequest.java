@@ -1,9 +1,9 @@
 package ao.creativemode.kixi.dto.simulation;
 
+import java.time.LocalDateTime;
+
 import ao.creativemode.kixi.model.SimulationStatus;
 import jakarta.validation.constraints.NotNull;
-
-import java.time.LocalDateTime;
 
 public record SimulationRequest(
         @NotNull(message = "Account ID is required")
