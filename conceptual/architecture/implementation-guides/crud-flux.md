@@ -1,7 +1,3 @@
-Here’s a full English version of your CRUD implementation guide, adapted for the entities you listed:
-
----
-
 # Reactive CRUD Implementation Guide for the Project
 
 This guide details the standard pattern for implementing CRUD operations in the backend located at `services/backend-api`, using the `schoolYears` CRUD as a reference. To implement any new CRUD, replace `[EntityName]` with the name of your entity and refer to the `schoolYears` CRUD files for practical examples.
