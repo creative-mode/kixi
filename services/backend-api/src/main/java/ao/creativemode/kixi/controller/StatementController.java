@@ -1,12 +1,16 @@
 package ao.creativemode.kixi.controller;
 
-import ao.creativemode.kixi.model.Statement;
+import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.model.Question;
 import ao.creativemode.kixi.model.QuestionOption;
+import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.service.StatementService;
 import ao.creativemode.kixi.service.StatementService.StatementWithQuestions;
-import ao.creativemode.kixi.common.exception.ApiException;
-
+import java.net.URI;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -15,14 +19,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
-
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
-import java.net.URI;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * REST Controller for Statement (exam paper) management.
@@ -39,10 +37,19 @@ import java.util.Set;
 @RequestMapping("/api/v1/statements")
 public class StatementController {
 
-    private static final Logger log = LoggerFactory.getLogger(StatementController.class);
+    private static final Logger log = LoggerFactory.getLogger(
+        StatementController.class
+    );
 
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
-            ".jpg", ".jpeg", ".png", ".pdf", ".webp", ".bmp", ".tiff", ".tif"
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".pdf",
+        ".webp",
+        ".bmp",
+        ".tiff",
+        ".tif"
     );
 
     private static final int MAX_FILES = 10;
@@ -67,55 +74,80 @@ public class StatementController {
      * @param uriBuilder URI builder for location header
      * @return Created statement with questions and options
      */
-    @PostMapping(value = "/ocr/extract", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(
+        value = "/ocr/extract",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     public Mono<ResponseEntity<StatementOcrResponse>> createFromOcr(
-            @RequestPart("files") Flux<FilePart> files,
-            UriComponentsBuilder uriBuilder) {
-
+        @RequestPart("files") Flux<FilePart> files,
+        UriComponentsBuilder uriBuilder
+    ) {
         log.info("OCR statement creation request received");
 
         return files
-                .collectList()
-                .flatMap(fileList -> {
-                    // Validate file count
-                    if (fileList.isEmpty()) {
-                        return Mono.error(ApiException.badRequest("At least one file is required"));
+            .collectList()
+            .flatMap(fileList -> {
+                // Validate file count
+                if (fileList.isEmpty()) {
+                    return Mono.error(
+                        ApiException.badRequest("At least one file is required")
+                    );
+                }
+                if (fileList.size() > MAX_FILES) {
+                    return Mono.error(
+                        ApiException.badRequest(
+                            "Maximum " +
+                                MAX_FILES +
+                                " files allowed per request"
+                        )
+                    );
+                }
+
+                // Validate file types
+                for (FilePart file : fileList) {
+                    if (!isAllowedFileType(file.filename())) {
+                        return Mono.error(
+                            ApiException.badRequest(
+                                "Invalid file type: " +
+                                    file.filename() +
+                                    ". Allowed: " +
+                                    String.join(", ", ALLOWED_EXTENSIONS)
+                            )
+                        );
                     }
-                    if (fileList.size() > MAX_FILES) {
-                        return Mono.error(ApiException.badRequest(
-                                "Maximum " + MAX_FILES + " files allowed per request"));
-                    }
+                }
 
-                    // Validate file types
-                    for (FilePart file : fileList) {
-                        if (!isAllowedFileType(file.filename())) {
-                            return Mono.error(ApiException.badRequest(
-                                    "Invalid file type: " + file.filename() +
-                                    ". Allowed: " + String.join(", ", ALLOWED_EXTENSIONS)));
-                        }
-                    }
+                log.info(
+                    "Processing {} file(s) for OCR-based statement creation",
+                    fileList.size()
+                );
 
-                    log.info("Processing {} file(s) for OCR-based statement creation", fileList.size());
+                // TODO: Get actual user ID from authentication context
+                Long createdBy = 1L; // Placeholder
 
-                    // TODO: Get actual user ID from authentication context
-                    Long createdBy = 1L; // Placeholder
+                return statementService.createFromOcr(fileList, createdBy);
+            })
+            .map(result -> {
+                URI location = uriBuilder
+                    .path("/api/v1/statements/{id}")
+                    .buildAndExpand(result.statement().getId())
+                    .toUri();
 
-                    return statementService.createFromOcr(fileList, createdBy);
-                })
-                .map(result -> {
-                    URI location = uriBuilder
-                            .path("/api/v1/statements/{id}")
-                            .buildAndExpand(result.statement().getId())
-                            .toUri();
+                StatementOcrResponse response = StatementOcrResponse.from(
+                    result
+                );
 
-                    StatementOcrResponse response = StatementOcrResponse.from(result);
-
-                    return ResponseEntity.created(location).body(response);
-                })
-                .doOnSuccess(response -> log.info(
-                        "Statement created from OCR: id={}",
-                        response.getBody() != null ? response.getBody().id() : null))
-                .doOnError(error -> log.error("OCR statement creation failed", error));
+                return ResponseEntity.created(location).body(response);
+            })
+            .doOnSuccess(response ->
+                log.info(
+                    "Statement created from OCR: id={}",
+                    response.getBody() != null ? response.getBody().id() : null
+                )
+            )
+            .doOnError(error ->
+                log.error("OCR statement creation failed", error)
+            );
     }
 
     /**
@@ -127,38 +159,57 @@ public class StatementController {
      * @param uriBuilder URI builder for location header
      * @return Created statement with questions and options
      */
-    @PostMapping(value = "/ocr/extract/single", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(
+        value = "/ocr/extract/single",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     public Mono<ResponseEntity<StatementOcrResponse>> createFromOcrSingle(
-            @RequestPart("file") FilePart file,
-            UriComponentsBuilder uriBuilder) {
-
-        log.info("Single-file OCR statement creation request received: {}", file.filename());
+        @RequestPart("file") FilePart file,
+        UriComponentsBuilder uriBuilder
+    ) {
+        log.info(
+            "Single-file OCR statement creation request received: {}",
+            file.filename()
+        );
 
         // Validate file type
         if (!isAllowedFileType(file.filename())) {
-            return Mono.error(ApiException.badRequest(
-                    "Invalid file type: " + file.filename() +
-                    ". Allowed: " + String.join(", ", ALLOWED_EXTENSIONS)));
+            return Mono.error(
+                ApiException.badRequest(
+                    "Invalid file type: " +
+                        file.filename() +
+                        ". Allowed: " +
+                        String.join(", ", ALLOWED_EXTENSIONS)
+                )
+            );
         }
 
         // TODO: Get actual user ID from authentication context
         Long createdBy = 1L; // Placeholder
 
-        return statementService.createFromOcr(List.of(file), createdBy)
-                .map(result -> {
-                    URI location = uriBuilder
-                            .path("/api/v1/statements/{id}")
-                            .buildAndExpand(result.statement().getId())
-                            .toUri();
+        return statementService
+            .createFromOcr(List.of(file), createdBy)
+            .map(result -> {
+                URI location = uriBuilder
+                    .path("/api/v1/statements/{id}")
+                    .buildAndExpand(result.statement().getId())
+                    .toUri();
 
-                    StatementOcrResponse response = StatementOcrResponse.from(result);
+                StatementOcrResponse response = StatementOcrResponse.from(
+                    result
+                );
 
-                    return ResponseEntity.created(location).body(response);
-                })
-                .doOnSuccess(response -> log.info(
-                        "Statement created from single-file OCR: id={}",
-                        response.getBody() != null ? response.getBody().id() : null))
-                .doOnError(error -> log.error("Single-file OCR statement creation failed", error));
+                return ResponseEntity.created(location).body(response);
+            })
+            .doOnSuccess(response ->
+                log.info(
+                    "Statement created from single-file OCR: id={}",
+                    response.getBody() != null ? response.getBody().id() : null
+                )
+            )
+            .doOnError(error ->
+                log.error("Single-file OCR statement creation failed", error)
+            );
     }
 
     // =========================================================================
@@ -170,10 +221,11 @@ public class StatementController {
      */
     @GetMapping
     public Mono<ResponseEntity<List<StatementSummary>>> listAllActive() {
-        return statementService.findAllActive()
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        return statementService
+            .findAllActive()
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -181,10 +233,11 @@ public class StatementController {
      */
     @GetMapping("/review")
     public Mono<ResponseEntity<List<StatementSummary>>> listNeedingReview() {
-        return statementService.findNeedingReview()
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        return statementService
+            .findNeedingReview()
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -192,10 +245,11 @@ public class StatementController {
      */
     @GetMapping("/from-ocr")
     public Mono<ResponseEntity<List<StatementSummary>>> listFromOcr() {
-        return statementService.findFromOcr()
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        return statementService
+            .findFromOcr()
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -203,30 +257,37 @@ public class StatementController {
      */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<StatementSummary>>> listTrashed() {
-        return statementService.findAllDeleted()
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        return statementService
+            .findAllDeleted()
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
      * Get a statement by ID.
      */
     @GetMapping("/{id}")
-    public Mono<ResponseEntity<StatementSummary>> getById(@PathVariable Long id) {
-        return statementService.findById(id)
-                .map(StatementSummary::from)
-                .map(ResponseEntity::ok);
+    public Mono<ResponseEntity<StatementSummary>> getById(
+        @PathVariable Long id
+    ) {
+        return statementService
+            .findById(id)
+            .map(StatementSummary::from)
+            .map(ResponseEntity::ok);
     }
 
     /**
      * Get a statement with all its questions and options.
      */
     @GetMapping("/{id}/full")
-    public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(@PathVariable Long id) {
-        return statementService.findByIdWithQuestions(id)
-                .map(StatementOcrResponse::from)
-                .map(ResponseEntity::ok);
+    public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(
+        @PathVariable Long id
+    ) {
+        return statementService
+            .findByIdWithQuestions(id)
+            .map(StatementOcrResponse::from)
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -234,11 +295,13 @@ public class StatementController {
      */
     @GetMapping("/search")
     public Mono<ResponseEntity<List<StatementSummary>>> searchByTitle(
-            @RequestParam String query) {
-        return statementService.searchByTitle(query)
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        @RequestParam String query
+    ) {
+        return statementService
+            .searchByTitle(query)
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -246,11 +309,13 @@ public class StatementController {
      */
     @GetMapping("/by-school-year/{schoolYearId}")
     public Mono<ResponseEntity<List<StatementSummary>>> getBySchoolYear(
-            @PathVariable Long schoolYearId) {
-        return statementService.findBySchoolYear(schoolYearId)
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        @PathVariable Long schoolYearId
+    ) {
+        return statementService
+            .findBySchoolYear(schoolYearId)
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -258,11 +323,13 @@ public class StatementController {
      */
     @GetMapping("/by-subject/{subjectId}")
     public Mono<ResponseEntity<List<StatementSummary>>> getBySubject(
-            @PathVariable Long subjectId) {
-        return statementService.findBySubject(subjectId)
-                .map(StatementSummary::from)
-                .collectList()
-                .map(ResponseEntity::ok);
+        @PathVariable Long subjectId
+    ) {
+        return statementService
+            .findBySubject(subjectId)
+            .map(StatementSummary::from)
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -270,8 +337,9 @@ public class StatementController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return statementService.softDelete(id)
-                .thenReturn(ResponseEntity.noContent().build());
+        return statementService
+            .softDelete(id)
+            .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
@@ -279,8 +347,9 @@ public class StatementController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return statementService.restore(id)
-                .thenReturn(ResponseEntity.ok().build());
+        return statementService
+            .restore(id)
+            .thenReturn(ResponseEntity.ok().build());
     }
 
     /**
@@ -288,18 +357,22 @@ public class StatementController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return statementService.hardDelete(id)
-                .thenReturn(ResponseEntity.noContent().build());
+        return statementService
+            .hardDelete(id)
+            .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
      * Approve review and make statement visible.
      */
     @PostMapping("/{id}/approve")
-    public Mono<ResponseEntity<StatementSummary>> approveReview(@PathVariable Long id) {
-        return statementService.approveReview(id)
-                .map(StatementSummary::from)
-                .map(ResponseEntity::ok);
+    public Mono<ResponseEntity<StatementSummary>> approveReview(
+        @PathVariable Long id
+    ) {
+        return statementService
+            .approveReview(id)
+            .map(StatementSummary::from)
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -307,11 +380,13 @@ public class StatementController {
      */
     @PatchMapping("/{id}/visibility")
     public Mono<ResponseEntity<StatementSummary>> setVisibility(
-            @PathVariable Long id,
-            @RequestParam boolean visible) {
-        return statementService.setVisible(id, visible)
-                .map(StatementSummary::from)
-                .map(ResponseEntity::ok);
+        @PathVariable Long id,
+        @RequestParam boolean visible
+    ) {
+        return statementService
+            .setVisible(id, visible)
+            .map(StatementSummary::from)
+            .map(ResponseEntity::ok);
     }
 
     // =========================================================================
@@ -324,16 +399,20 @@ public class StatementController {
     @GetMapping("/stats")
     public Mono<ResponseEntity<Map<String, Object>>> getStatistics() {
         return Mono.zip(
-                statementService.countActive(),
-                statementService.countNeedingReview(),
-                statementService.countBySource("ocr"),
-                statementService.countBySource("manual")
-        ).map(tuple -> Map.of(
-                "totalActive", tuple.getT1(),
-                "needingReview", tuple.getT2(),
-                "fromOcr", tuple.getT3(),
-                "manual", tuple.getT4()
-        )).map(ResponseEntity::ok);
+            statementService.countActive(),
+            statementService.countNeedingReview(),
+            statementService.countBySource("ocr"),
+            statementService.countBySource("manual")
+        )
+            .map(tuple -> {
+                Map<String, Object> stats = new HashMap<>();
+                stats.put("totalActive", tuple.getT1());
+                stats.put("needingReview", tuple.getT2());
+                stats.put("fromOcr", tuple.getT3());
+                stats.put("manual", tuple.getT4());
+                return stats;
+            })
+            .map(ResponseEntity::ok);
     }
 
     // =========================================================================
@@ -360,37 +439,37 @@ public class StatementController {
      * Summary response for statement listing.
      */
     public record StatementSummary(
-            Long id,
-            String title,
-            String examType,
-            Integer durationMinutes,
-            String variant,
-            Double totalMaxScore,
-            Boolean visible,
-            Boolean needsReview,
-            String source,
-            Double ocrConfidence,
-            Long schoolYearId,
-            Long termId,
-            Long subjectId,
-            Long classId
+        Long id,
+        String title,
+        String examType,
+        Integer durationMinutes,
+        String variant,
+        Double totalMaxScore,
+        Boolean visible,
+        Boolean needsReview,
+        String source,
+        Double ocrConfidence,
+        Long schoolYearId,
+        Long termId,
+        Long subjectId,
+        Long classId
     ) {
         public static StatementSummary from(Statement statement) {
             return new StatementSummary(
-                    statement.getId(),
-                    statement.getTitle(),
-                    statement.getExamType(),
-                    statement.getDurationMinutes(),
-                    statement.getVariant(),
-                    statement.getTotalMaxScore(),
-                    statement.getVisible(),
-                    statement.getNeedsReview(),
-                    statement.getSource(),
-                    statement.getOcrConfidence(),
-                    statement.getSchoolYearId(),
-                    statement.getTermId(),
-                    statement.getSubjectId(),
-                    statement.getClassId()
+                statement.getId(),
+                statement.getTitle(),
+                statement.getExamType(),
+                statement.getDurationMinutes(),
+                statement.getVariant(),
+                statement.getTotalMaxScore(),
+                statement.getVisible(),
+                statement.getNeedsReview(),
+                statement.getSource(),
+                statement.getOcrConfidence(),
+                statement.getSchoolYearId(),
+                statement.getTermId(),
+                statement.getSubjectId(),
+                statement.getClassId()
             );
         }
     }
@@ -399,57 +478,59 @@ public class StatementController {
      * Full response including questions and options.
      */
     public record StatementOcrResponse(
-            Long id,
-            String title,
-            String examType,
-            Integer durationMinutes,
-            String variant,
-            String instructions,
-            Double totalMaxScore,
-            Boolean visible,
-            Boolean needsReview,
-            String source,
-            Double ocrConfidence,
-            String ocrRequestId,
-            Long schoolYearId,
-            Long termId,
-            Long subjectId,
-            Long classId,
-            List<QuestionResponse> questions
+        Long id,
+        String title,
+        String examType,
+        Integer durationMinutes,
+        String variant,
+        String instructions,
+        Double totalMaxScore,
+        Boolean visible,
+        Boolean needsReview,
+        String source,
+        Double ocrConfidence,
+        String ocrRequestId,
+        Long schoolYearId,
+        Long termId,
+        Long subjectId,
+        Long classId,
+        List<QuestionResponse> questions
     ) {
         public static StatementOcrResponse from(StatementWithQuestions result) {
             Statement s = result.statement();
             List<Question> questions = result.questions();
             List<QuestionOption> allOptions = result.options();
 
-            List<QuestionResponse> questionResponses = questions.stream()
-                    .map(q -> {
-                        List<OptionResponse> options = allOptions.stream()
-                                .filter(opt -> opt.getQuestionId().equals(q.getId()))
-                                .map(OptionResponse::from)
-                                .toList();
-                        return QuestionResponse.from(q, options);
-                    })
-                    .toList();
+            List<QuestionResponse> questionResponses = questions
+                .stream()
+                .map(q -> {
+                    List<OptionResponse> options = allOptions
+                        .stream()
+                        .filter(opt -> opt.getQuestionId().equals(q.getId()))
+                        .map(OptionResponse::from)
+                        .toList();
+                    return QuestionResponse.from(q, options);
+                })
+                .toList();
 
             return new StatementOcrResponse(
-                    s.getId(),
-                    s.getTitle(),
-                    s.getExamType(),
-                    s.getDurationMinutes(),
-                    s.getVariant(),
-                    s.getInstructions(),
-                    s.getTotalMaxScore(),
-                    s.getVisible(),
-                    s.getNeedsReview(),
-                    s.getSource(),
-                    s.getOcrConfidence(),
-                    s.getOcrRequestId(),
-                    s.getSchoolYearId(),
-                    s.getTermId(),
-                    s.getSubjectId(),
-                    s.getClassId(),
-                    questionResponses
+                s.getId(),
+                s.getTitle(),
+                s.getExamType(),
+                s.getDurationMinutes(),
+                s.getVariant(),
+                s.getInstructions(),
+                s.getTotalMaxScore(),
+                s.getVisible(),
+                s.getNeedsReview(),
+                s.getSource(),
+                s.getOcrConfidence(),
+                s.getOcrRequestId(),
+                s.getSchoolYearId(),
+                s.getTermId(),
+                s.getSubjectId(),
+                s.getClassId(),
+                questionResponses
             );
         }
     }
@@ -458,29 +539,32 @@ public class StatementController {
      * Question response DTO.
      */
     public record QuestionResponse(
-            Long id,
-            Integer number,
-            String text,
-            String questionType,
-            Double maxScore,
-            Integer orderIndex,
-            Double ocrConfidence,
-            Integer pageIndex,
-            Boolean needsReview,
-            List<OptionResponse> options
+        Long id,
+        Integer number,
+        String text,
+        String questionType,
+        Double maxScore,
+        Integer orderIndex,
+        Double ocrConfidence,
+        Integer pageIndex,
+        Boolean needsReview,
+        List<OptionResponse> options
     ) {
-        public static QuestionResponse from(Question q, List<OptionResponse> options) {
+        public static QuestionResponse from(
+            Question q,
+            List<OptionResponse> options
+        ) {
             return new QuestionResponse(
-                    q.getId(),
-                    q.getNumber(),
-                    q.getText(),
-                    q.getQuestionType(),
-                    q.getMaxScore(),
-                    q.getOrderIndex(),
-                    q.getOcrConfidence(),
-                    q.getPageIndex(),
-                    q.getNeedsReview(),
-                    options
+                q.getId(),
+                q.getNumber(),
+                q.getText(),
+                q.getQuestionType(),
+                q.getMaxScore(),
+                q.getOrderIndex(),
+                q.getOcrConfidence(),
+                q.getPageIndex(),
+                q.getNeedsReview(),
+                options
             );
         }
     }
@@ -489,21 +573,21 @@ public class StatementController {
      * Option response DTO.
      */
     public record OptionResponse(
-            Long id,
-            String optionLabel,
-            String optionText,
-            Boolean isCorrect,
-            Integer orderIndex,
-            Double ocrConfidence
+        Long id,
+        String optionLabel,
+        String optionText,
+        Boolean isCorrect,
+        Integer orderIndex,
+        Double ocrConfidence
     ) {
         public static OptionResponse from(QuestionOption o) {
             return new OptionResponse(
-                    o.getId(),
-                    o.getOptionLabel(),
-                    o.getOptionText(),
-                    o.getIsCorrect(),
-                    o.getOrderIndex(),
-                    o.getOcrConfidence()
+                o.getId(),
+                o.getOptionLabel(),
+                o.getOptionText(),
+                o.getIsCorrect(),
+                o.getOrderIndex(),
+                o.getOcrConfidence()
             );
         }
     }
