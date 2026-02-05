@@ -1,22 +1,249 @@
+# =============================================================================
+# Docker Compose Configuration for Kixi Platform
+# =============================================================================
+#
+# This file defines all services for the Kixi platform:
+#   - postgres: PostgreSQL 16 database
+#   - backend-api: Spring Boot WebFlux API (Java 17)
+#   - ocr-service: FastAPI OCR service with PaddleOCR-VL (Python 3.11)
+#
+# Usage:
+#   docker-compose up --build           # Start all services
+#   docker-compose up -d postgres       # Start only database
+#   docker-compose up ocr-service       # Start OCR service with dependencies
+#   docker-compose logs -f backend-api  # Follow backend logs
+#   docker-compose down -v              # Stop and remove volumes
+#
+# Profiles:
+#   docker-compose --profile gpu up     # Start with GPU-enabled OCR
+#   docker-compose --profile cache up   # Start with Redis cache
+#
+# Environment Variables:
+#   Copy .env.example to .env and customize as needed
+#
+# =============================================================================
+
 services:
-  kixi_postgres:
-    image: postgres:15.15-alpine
-    container_name: kixi_postgres
+  # ===========================================================================
+  # PostgreSQL Database
+  # ===========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: kixi-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: kixi_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-kixi}
+      POSTGRES_USER: ${POSTGRES_USER:-kixi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kixi_secret}
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - kixi_postgres_data:/var/lib/postgresql/data
-      - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/backend-api/docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:z
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-kixi} -d ${POSTGRES_DB:-kixi}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
-      - kixi_network
+      - kixi-network
 
-volumes:
-  kixi_postgres_data:
+  # ===========================================================================
+  # Backend API (Spring Boot WebFlux)
+  # ===========================================================================
+  # Build uses Dockerfile from infra/docker/ with project root as context
+  # This allows access to all project files during build
+  backend-api:
+    build:
+      context: .
+      dockerfile: infra/docker/backend.Dockerfile
+    container_name: kixi-backend-api
+    restart: unless-stopped
+    environment:
+      # Database Configuration
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/${POSTGRES_DB:-kixi}
+      SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-kixi}
+      SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:-kixi_secret}
+      # OCR Service Configuration
+      OCR_SERVICE_URL: http://ocr-service:8000
+      OCR_SERVICE_TIMEOUT_MS: ${OCR_SERVICE_TIMEOUT_MS:-120000}
+      # Application Configuration
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+      SERVER_PORT: 8080
+      # Logging Configuration
+      LOGGING_LEVEL_ROOT: ${LOG_LEVEL:-INFO}
+      LOGGING_LEVEL_AO_CREATIVEMODE: ${APP_LOG_LEVEL:-DEBUG}
+      # JWT Configuration (optional)
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ocr-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - kixi-network
 
+  # ===========================================================================
+  # OCR Service (FastAPI + PaddleOCR-VL)
+  # ===========================================================================
+  # Build uses Dockerfile from infra/docker/ with project root as context
+  # For local development, you can use the Dockerfile in services/ocr-service/
+  ocr-service:
+    build:
+      context: .
+      dockerfile: infra/docker/ocr.Dockerfile
+      # Alternative: Use local Dockerfile for development
+      # context: ./services/ocr-service
+      # dockerfile: Dockerfile
+    container_name: kixi-ocr-service
+    restart: unless-stopped
+    environment:
+      # Service Configuration
+      SERVICE_NAME: ocr-service
+      SERVICE_VERSION: 1.0.0
+      ENVIRONMENT: ${ENVIRONMENT:-docker}
+      DEBUG: ${OCR_DEBUG:-false}
+      # Server Configuration
+      HOST: 0.0.0.0
+      PORT: 8000
+      WORKERS: ${OCR_WORKERS:-1}
+      # OCR Configuration
+      OCR_LANG: ${OCR_LANG:-pt}
+      OCR_USE_GPU: ${OCR_USE_GPU:-false}
+      OCR_USE_ANGLE_CLS: ${OCR_USE_ANGLE_CLS:-true}
+      OCR_SHOW_LOG: ${OCR_SHOW_LOG:-false}
+      # Processing Configuration
+      MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB:-20.0}
+      MAX_IMAGES_PER_REQUEST: ${MAX_IMAGES_PER_REQUEST:-10}
+      PROCESSING_TIMEOUT_SECONDS: ${PROCESSING_TIMEOUT_SECONDS:-120}
+      MIN_CONFIDENCE_THRESHOLD: ${MIN_CONFIDENCE_THRESHOLD:-0.5}
+      # Preprocessing Configuration
+      ENABLE_DESKEW: ${ENABLE_DESKEW:-true}
+      ENABLE_DENOISE: ${ENABLE_DENOISE:-true}
+      TARGET_DPI: ${TARGET_DPI:-300}
+      # Logging Configuration
+      LOG_LEVEL: ${OCR_LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${OCR_LOG_FORMAT:-json}
+      # Metrics Configuration
+      ENABLE_METRICS: ${ENABLE_METRICS:-true}
+    ports:
+      - "${OCR_PORT:-8000}:8000"
+    volumes:
+      # Persist PaddleOCR models between container restarts
+      - ocr_models:/home/ocr/.paddleocr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    networks:
+      - kixi-network
+
+  # ===========================================================================
+  # OCR Service with GPU Support (Optional Profile)
+  # ===========================================================================
+  # Start with: docker-compose --profile gpu up
+  # Requires NVIDIA Docker runtime and CUDA-compatible GPU
+  ocr-service-gpu:
+    build:
+      context: .
+      dockerfile: infra/docker/ocr.Dockerfile
+    container_name: kixi-ocr-service-gpu
+    profiles:
+      - gpu
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: ocr-service-gpu
+      SERVICE_VERSION: 1.0.0
+      ENVIRONMENT: ${ENVIRONMENT:-docker}
+      DEBUG: ${OCR_DEBUG:-false}
+      HOST: 0.0.0.0
+      PORT: 8000
+      WORKERS: ${OCR_WORKERS:-1}
+      # Enable GPU acceleration
+      OCR_LANG: ${OCR_LANG:-pt}
+      OCR_USE_GPU: "true"
+      OCR_USE_ANGLE_CLS: "true"
+      OCR_SHOW_LOG: "false"
+      MAX_IMAGE_SIZE_MB: "20.0"
+      MAX_IMAGES_PER_REQUEST: "10"
+      PROCESSING_TIMEOUT_SECONDS: "120"
+      MIN_CONFIDENCE_THRESHOLD: "0.5"
+      ENABLE_DESKEW: "true"
+      ENABLE_DENOISE: "true"
+      TARGET_DPI: "300"
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      ENABLE_METRICS: "true"
+    ports:
+      - "${OCR_GPU_PORT:-8001}:8000"
+    volumes:
+      - ocr_models_gpu:/home/ocr/.paddleocr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - kixi-network
+
+  # ===========================================================================
+  # Redis Cache (Optional Profile)
+  # ===========================================================================
+  # Start with: docker-compose --profile cache up
+  # Used for caching OCR results and session management
+  redis:
+    image: redis:7-alpine
+    container_name: kixi-redis
+    profiles:
+      - cache
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kixi-network
+
+# =============================================================================
+# Networks
+# =============================================================================
 networks:
   kixi_network:
     driver: bridge

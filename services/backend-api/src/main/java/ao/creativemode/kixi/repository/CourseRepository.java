@@ -6,7 +6,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 public interface CourseRepository extends ReactiveCrudRepository<Course, Long> {
-
     Mono<Course> findByIdAndDeletedAtIsNull(Long id);
 
     Flux<Course> findAllByDeletedAtIsNull();
@@ -18,4 +17,14 @@ public interface CourseRepository extends ReactiveCrudRepository<Course, Long> {
     Mono<Course> findByCodeAndDeletedAtIsNull(String code);
 
     Mono<Course> findByCodeAndIdNotAndDeletedAtIsNull(String code, Long id);
+
+    /**
+     * Find a course by name (case-insensitive)
+     */
+    Mono<Course> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
+
+    /**
+     * Find courses by name containing (case-insensitive)
+     */
+    Flux<Course> findByNameContainingIgnoreCaseAndDeletedAtIsNull(String name);
 }
