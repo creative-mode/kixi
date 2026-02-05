@@ -4,9 +4,7 @@ import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
 import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.common.dto.ProblemDetail;
 import java.net.URI;
-import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,13 +28,7 @@ public class GlobalExceptionHandler {
     );
 
     private static final URI DEFAULT_TYPE = URI.create(
-        "https://api.kixi.ao/errors"
-    );
-    private static final URI VALIDATION_ERROR_TYPE = URI.create(
-        "https://api.kixi.ao/errors/validation-error"
-    );
-    private static final URI OCR_ERROR_TYPE = URI.create(
-        "https://api.kixi.ao/errors/ocr-error"
+        "https://api.kixi.com/errors"
     );
 
     /**
@@ -47,24 +39,19 @@ public class GlobalExceptionHandler {
         ApiException ex,
         ServerWebExchange exchange
     ) {
-        HttpStatus status = ex.getStatus();
-
-        log.warn(
-            "API exception: status={}, message={}",
-            status.value(),
-            ex.getMessage()
-        );
+        HttpStatus status =
+            ex.getStatus() != null
+                ? ex.getStatus()
+                : HttpStatus.INTERNAL_SERVER_ERROR;
+        int statusCode = status.value();
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-            status.value(),
-            ex.getMessage() != null ? ex.getMessage() : "An error occurred"
-        ).withTitle(
-            ex.getTitle() != null ? ex.getTitle() : status.getReasonPhrase()
-        );
-
+            statusCode,
+            ex.getMessage() != null ? ex.getMessage() : "API Error occurred"
+        ).withTitle(status.getReasonPhrase());
         problem = addInstance(exchange, problem);
 
-        return Mono.just(ResponseEntity.status(status).body(problem));
+        return Mono.just(ResponseEntity.status(statusCode).body(problem));
     }
 
     /**
@@ -75,8 +62,6 @@ public class GlobalExceptionHandler {
         WebExchangeBindException ex,
         ServerWebExchange exchange
     ) {
-        log.warn("Validation error: {}", ex.getMessage());
-
         Map<String, Object> fieldErrors = ex
             .getFieldErrors()
             .stream()
@@ -97,8 +82,7 @@ public class GlobalExceptionHandler {
                             );
                         }
                         return msg;
-                    },
-                    (existing, replacement) -> existing // Handle duplicate keys
+                    }
                 )
             );
 
@@ -226,38 +210,35 @@ public class GlobalExceptionHandler {
         log.error("Unhandled exception occurred", ex);
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
-            HttpStatus.INTERNAL_SERVER_ERROR.value(),
+            500,
             "An unexpected error occurred on the server. Please try again later."
         ).withTitle("Internal Server Error");
-
         problem = addInstance(exchange, problem);
 
         return Mono.just(ResponseEntity.internalServerError().body(problem));
     }
 
     /**
-     * Adds the 'instance' field with the URI of the current request (RFC 9457 recommended).
+     * Adds the 'instance' field with the URI of the current request (RFC 9457
+     * recommended)
      */
     private ProblemDetail addInstance(
         ServerWebExchange exchange,
         ProblemDetail problem
     ) {
         String requestUri = exchange.getRequest().getURI().toString();
-
         Map<String, Object> currentProps =
-            problem.properties() != null
-                ? new java.util.HashMap<>(problem.properties())
-                : new java.util.HashMap<>();
-
-        currentProps.put("instance", requestUri);
-        currentProps.put("timestamp", java.time.Instant.now().toString());
-
+            problem.properties() != null ? problem.properties() : Map.of();
+        Map<String, Object> updatedProps = new java.util.HashMap<>(
+            currentProps
+        );
+        updatedProps.put("instance", requestUri);
         return new ProblemDetail(
-            problem.type() != null ? problem.type() : DEFAULT_TYPE,
+            problem.type(),
             problem.title(),
             problem.status(),
             problem.detail(),
-            currentProps
+            updatedProps
         );
     }
 }
