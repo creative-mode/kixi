@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.model;
 
+import java.time.LocalDateTime;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
@@ -7,18 +8,18 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
-import java.time.LocalDateTime;
-
 @Data
 @Table("classes")
 public class Class {
+
     @Id
     private Long id;
+
     @Column("code")
     private String code;
 
     @Column("grade")
-    private String grade;
+    private Integer grade;
 
     @Column("course_id")
     private Long courseId;
@@ -48,5 +49,4 @@ public class Class {
     public boolean isDeleted() {
         return deletedAt != null;
     }
-
 }

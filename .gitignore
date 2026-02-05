@@ -41,3 +41,9 @@ application.properties
 Kixi
 demo.iml
 docker-compose.yml
+
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
