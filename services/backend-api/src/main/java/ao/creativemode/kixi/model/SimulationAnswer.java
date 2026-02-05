@@ -1,16 +1,17 @@
 package ao.creativemode.kixi.model;
 
+import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
-import java.time.LocalDateTime;
 
 @Getter
 @Setter
-@Table("simulation_answer")
+@Table("simulation_answers")
 public class SimulationAnswer {
+
     @Id
     private Long id;
 
@@ -23,8 +24,11 @@ public class SimulationAnswer {
     @Column("selected_option_id")
     private Long selectedOptionId;
 
+    @Column("answer_text")
+    private String answerText;
+
     @Column("score_obtained")
-    private float scoreObtained;
+    private Float scoreObtained;
 
     @Column("is_correct")
     private Boolean isCorrect;
@@ -52,6 +56,4 @@ public class SimulationAnswer {
     public boolean isDeleted() {
         return deletedAt != null;
     }
-
 }
-
