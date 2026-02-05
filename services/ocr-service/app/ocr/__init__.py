@@ -31,13 +31,13 @@ from .postprocessing import (
     ExtractedMetadata,
     ExtractedQuestion,
     ExtractedOption,
+    ImageToUpload,
     UnmappedContent,
     Warning,
     QuestionType,
     MetadataField,
     normalize_text,
     detect_language,
-    default_postprocessor,
 )
 
 __all__ = [
@@ -61,11 +61,11 @@ __all__ = [
     "ExtractedMetadata",
     "ExtractedQuestion",
     "ExtractedOption",
+    "ImageToUpload",
     "UnmappedContent",
     "Warning",
     "QuestionType",
     "MetadataField",
     "normalize_text",
     "detect_language",
-    "default_postprocessor",
 ]

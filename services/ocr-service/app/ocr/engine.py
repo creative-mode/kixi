@@ -28,6 +28,7 @@ from app.ocr.postprocessing import (
     TextBlock,
     ExtractedMetadata,
     ExtractedQuestion,
+    ImageToUpload,
     UnmappedContent,
     Warning,
     detect_language,
@@ -56,6 +57,7 @@ class OCRResult:
     document: DocumentInfo
     metadata: ExtractedMetadata
     questions: List[ExtractedQuestion]
+    images_to_upload: List[ImageToUpload]
     unmapped_content: List[UnmappedContent]
     warnings: List[Warning]
     error_message: Optional[str] = None
@@ -74,6 +76,15 @@ class OCRResult:
             },
             "metadata": self.metadata.to_dict(),
             "questions": [q.to_dict() for q in self.questions],
+            "imagesToUpload": [
+                {
+                    "suggestedFilename": img.suggested_filename,
+                    "description": img.description,
+                    "region": img.region,
+                    "pageIndex": img.page_index,
+                }
+                for img in self.images_to_upload
+            ],
             "unmappedContent": [u.to_dict() for u in self.unmapped_content],
             "warnings": [w.to_dict() for w in self.warnings],
             **({"errorMessage": self.error_message} if self.error_message else {}),
@@ -301,9 +312,10 @@ class OCREngine:
 
         # Add metadata confidences
         for field in [
-            metadata.school_year,
-            metadata.term,
-            metadata.subject,
+            metadata.school_year_start,
+            metadata.school_year_end,
+            metadata.subject_name,
+            metadata.class_grade,
             metadata.exam_type,
         ]:
             if field.value is not None:
@@ -377,7 +389,7 @@ class OCREngine:
             main_language = detect_language(full_text) if full_text else self.lang
 
             # Postprocess to extract structured data
-            metadata, questions, unmapped, warnings = self.postprocessor.process(
+            metadata, questions, images_to_upload, unmapped, warnings = self.postprocessor.process(
                 text_blocks,
                 page_count=1,
             )
@@ -409,6 +421,7 @@ class OCREngine:
                 ),
                 metadata=metadata,
                 questions=questions,
+                images_to_upload=images_to_upload,
                 unmapped_content=unmapped,
                 warnings=warnings,
             )
@@ -441,6 +454,7 @@ class OCREngine:
                 document=DocumentInfo(page_count=0, main_language=self.lang, has_tables=False),
                 metadata=ExtractedMetadata(),
                 questions=[],
+                images_to_upload=[],
                 unmapped_content=[],
                 warnings=[],
                 error_message=str(e),
@@ -505,6 +519,7 @@ class OCREngine:
                 document=DocumentInfo(page_count=0, main_language=self.lang, has_tables=False),
                 metadata=ExtractedMetadata(),
                 questions=[],
+                images_to_upload=[],
                 unmapped_content=[],
                 warnings=[],
                 error_message="No images provided",
@@ -512,6 +527,7 @@ class OCREngine:
 
         all_text_blocks = []
         all_questions = []
+        all_images_to_upload = []
         all_unmapped = []
         all_warnings = []
         has_tables = False
@@ -522,6 +538,7 @@ class OCREngine:
 
             # Merge results
             all_questions.extend(result.questions)
+            all_images_to_upload.extend(result.images_to_upload)
             all_unmapped.extend(result.unmapped_content)
             all_warnings.extend(result.warnings)
 
@@ -564,6 +581,7 @@ class OCREngine:
             ),
             metadata=metadata if 'metadata' in dir() else ExtractedMetadata(),
             questions=all_questions,
+            images_to_upload=all_images_to_upload,
             unmapped_content=all_unmapped,
             warnings=all_warnings,
         )
