@@ -2,25 +2,21 @@ package ao.creativemode.kixi.dto.ocr;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
-import java.util.Map;
 
 /**
  * OCR Service Response DTO
  *
  * Maps the JSON response from the OCR microservice to Java objects.
- * This is the main response wrapper containing all extracted data.
+ * Optimized for Angolan exam papers (12ª classe).
  */
 public record OcrResponse(
     String status,
 
-    @JsonProperty("requestId")
-    String requestId,
+    @JsonProperty("requestId") String requestId,
 
-    @JsonProperty("processingTimeMs")
-    Integer processingTimeMs,
+    @JsonProperty("processingTimeMs") Integer processingTimeMs,
 
-    @JsonProperty("overallConfidence")
-    Double overallConfidence,
+    @JsonProperty("overallConfidence") Double overallConfidence,
 
     DocumentInfo document,
 
@@ -28,13 +24,13 @@ public record OcrResponse(
 
     List<ExtractedQuestion> questions,
 
-    @JsonProperty("unmappedContent")
-    List<UnmappedContent> unmappedContent,
+    @JsonProperty("imagesToUpload") List<ImageToUpload> imagesToUpload,
+
+    @JsonProperty("unmappedContent") List<UnmappedContent> unmappedContent,
 
     List<OcrWarning> warnings,
 
-    @JsonProperty("errorMessage")
-    String errorMessage
+    @JsonProperty("errorMessage") String errorMessage
 ) {
     /**
      * Check if the OCR processing was successful.
@@ -61,108 +57,157 @@ public record OcrResponse(
      * Check if the result needs human review (low confidence or warnings).
      */
     public boolean needsReview() {
-        return isPartial() ||
-               (overallConfidence != null && overallConfidence < 0.8) ||
-               (warnings != null && !warnings.isEmpty());
+        return (
+            isPartial() ||
+            (overallConfidence != null && overallConfidence < 0.8) ||
+            (warnings != null && !warnings.isEmpty())
+        );
     }
 
     /**
      * Document information from OCR.
      */
     public record DocumentInfo(
-        @JsonProperty("pageCount")
-        Integer pageCount,
-
-        @JsonProperty("mainLanguage")
-        String mainLanguage,
-
-        @JsonProperty("hasTables")
-        Boolean hasTables
+        @JsonProperty("pageCount") Integer pageCount,
+        @JsonProperty("mainLanguage") String mainLanguage,
+        @JsonProperty("hasTables") Boolean hasTables
     ) {}
 
     /**
-     * Extracted metadata with confidence scores.
+     * Extracted metadata with confidence scores - Angolan exam format.
      */
     public record OcrMetadata(
-        @JsonProperty("schoolYear")
-        ConfidenceField<String> schoolYear,
-
-        @JsonProperty("term")
-        ConfidenceField<String> term,
-
-        @JsonProperty("subject")
-        ConfidenceField<String> subject,
-
-        @JsonProperty("course")
-        ConfidenceField<String> course,
-
-        @JsonProperty("class")
-        ConfidenceField<String> classInfo,
-
-        @JsonProperty("examType")
-        ConfidenceField<String> examType,
+        // New structured fields
+        @JsonProperty("examType") ConfidenceField<String> examType,
 
         @JsonProperty("durationMinutes")
         ConfidenceField<Integer> durationMinutes,
 
-        @JsonProperty("variant")
-        ConfidenceField<String> variant,
+        @JsonProperty("variant") ConfidenceField<String> variant,
 
-        @JsonProperty("title")
-        ConfidenceField<String> title,
+        @JsonProperty("title") ConfidenceField<String> title,
 
-        @JsonProperty("instructions")
-        ConfidenceField<String> instructions
-    ) {}
+        @JsonProperty("instructions") ConfidenceField<String> instructions,
+
+        @JsonProperty("schoolYearStart")
+        ConfidenceField<Integer> schoolYearStart,
+
+        @JsonProperty("schoolYearEnd") ConfidenceField<Integer> schoolYearEnd,
+
+        @JsonProperty("classGrade") ConfidenceField<String> classGrade,
+
+        @JsonProperty("courseName") ConfidenceField<String> courseName,
+
+        @JsonProperty("subjectName") ConfidenceField<String> subjectName,
+
+        @JsonProperty("totalMaxScore") ConfidenceField<Double> totalMaxScore,
+
+        // Legacy fields for compatibility
+        @JsonProperty("schoolYear") ConfidenceField<String> schoolYear,
+
+        @JsonProperty("term") ConfidenceField<String> term,
+
+        @JsonProperty("subject") ConfidenceField<String> subject,
+
+        @JsonProperty("course") ConfidenceField<String> course,
+
+        @JsonProperty("class") ConfidenceField<String> classInfo
+    ) {
+        /**
+         * Get the school year start value, returning null if not present.
+         */
+        public Integer getSchoolYearStartValue() {
+            return schoolYearStart != null ? schoolYearStart.value() : null;
+        }
+
+        /**
+         * Get the school year end value, returning null if not present.
+         */
+        public Integer getSchoolYearEndValue() {
+            return schoolYearEnd != null ? schoolYearEnd.value() : null;
+        }
+
+        /**
+         * Get the class grade value, returning null if not present.
+         */
+        public String getClassGradeValue() {
+            return classGrade != null ? classGrade.value() : null;
+        }
+
+        /**
+         * Get the course name value, returning null if not present.
+         */
+        public String getCourseNameValue() {
+            return courseName != null ? courseName.value() : null;
+        }
+
+        /**
+         * Get the subject name value, returning null if not present.
+         */
+        public String getSubjectNameValue() {
+            return subjectName != null ? subjectName.value() : null;
+        }
+
+        /**
+         * Get the total max score value, returning null if not present.
+         */
+        public Double getTotalMaxScoreValue() {
+            return totalMaxScore != null ? totalMaxScore.value() : null;
+        }
+    }
 
     /**
      * Generic confidence field for any value type.
      */
-    public record ConfidenceField<T>(
-        T value,
-        Double confidence
-    ) {
+    public record ConfidenceField<T>(T value, Double confidence) {
         /**
          * Check if the field has a value with sufficient confidence.
          */
         public boolean isConfident(double threshold) {
-            return value != null && confidence != null && confidence >= threshold;
+            return (
+                value != null && confidence != null && confidence >= threshold
+            );
         }
 
         /**
          * Check if the field has low confidence (needs review).
          */
         public boolean isLowConfidence(double threshold) {
-            return value != null && confidence != null && confidence < threshold;
+            return (
+                value != null && confidence != null && confidence < threshold
+            );
         }
     }
 
     /**
-     * Extracted question with all components.
+     * Extracted question with all components - Angolan exam format.
      */
     public record ExtractedQuestion(
-        Integer number,
+        @JsonProperty("number") String number,
 
         Double confidence,
 
+        @JsonProperty("subitems") List<String> subitems,
+
+        @JsonProperty("subitemsContent") List<SubitemContent> subitemsContent,
+
         ConfidenceField<String> text,
 
-        @JsonProperty("questionType")
-        ConfidenceField<String> questionType,
+        @JsonProperty("type") String type,
 
-        @JsonProperty("maxScore")
-        ConfidenceField<Double> maxScore,
+        @JsonProperty("cotacao") Double cotacao,
 
         List<ExtractedOption> options,
 
-        @JsonProperty("pageIndex")
-        Integer pageIndex,
+        @JsonProperty("hasImage") Boolean hasImage,
 
-        @JsonProperty("startY")
-        Integer startY,
+        @JsonProperty("imageDescription") String imageDescription,
 
-        @JsonProperty("endY")
-        Integer endY
+        @JsonProperty("pageIndex") Integer pageIndex,
+
+        @JsonProperty("startY") Integer startY,
+
+        @JsonProperty("endY") Integer endY
     ) {
         /**
          * Check if this is a multiple choice question.
@@ -172,37 +217,105 @@ public record OcrResponse(
         }
 
         /**
-         * Get the question type value, defaulting to "unknown".
+         * Check if this is a dissertativa (essay/development) question.
          */
-        public String getQuestionTypeValue() {
-            return questionType != null && questionType.value() != null
-                ? questionType.value()
-                : "unknown";
+        public boolean isDissertativa() {
+            return "dissertativa".equals(type);
+        }
+
+        /**
+         * Get the question type value.
+         */
+        public String getTypeValue() {
+            return type != null ? type : "unknown";
+        }
+
+        /**
+         * Get the text value, returning empty string if not present.
+         */
+        public String getTextValue() {
+            return text != null && text.value() != null ? text.value() : "";
+        }
+
+        /**
+         * Get the cotação (score) as a Double, returning null if not present.
+         */
+        public Double getCotacaoValue() {
+            return cotacao;
+        }
+
+        /**
+         * Check if the question has visual content.
+         */
+        public boolean hasVisualContent() {
+            return hasImage != null && hasImage;
         }
     }
+
+    /**
+     * Subitem content with label, text and optional cotação.
+     */
+    public record SubitemContent(String label, String text, Double cotacao) {}
 
     /**
      * Extracted question option.
      */
     public record ExtractedOption(
-        @JsonProperty("optionLabel")
-        String optionLabel,
-
-        @JsonProperty("optionText")
-        String optionText,
-
+        @JsonProperty("optionLabel") String optionLabel,
+        @JsonProperty("optionText") String optionText,
         Double confidence
     ) {}
+
+    /**
+     * Image region to be uploaded.
+     */
+    public record ImageToUpload(
+        @JsonProperty("suggestedFilename") String suggestedFilename,
+
+        String description,
+
+        String region,
+
+        @JsonProperty("pageIndex") Integer pageIndex
+    ) {
+        /**
+         * Check if this is a header/logo image.
+         */
+        public boolean isHeader() {
+            return "cabecalho".equals(region);
+        }
+
+        /**
+         * Check if this is a footer/coordination signature image.
+         */
+        public boolean isFooter() {
+            return "rodape".equals(region);
+        }
+
+        /**
+         * Check if this is a question-related image.
+         */
+        public boolean isQuestionImage() {
+            return region != null && region.startsWith("questao_");
+        }
+
+        /**
+         * Get the question number if this is a question image.
+         */
+        public String getQuestionNumber() {
+            if (isQuestionImage() && region.length() > 8) {
+                return region.substring(8);
+            }
+            return null;
+        }
+    }
 
     /**
      * Unmapped content that couldn't be categorized.
      */
     public record UnmappedContent(
-        @JsonProperty("pageIndex")
-        Integer pageIndex,
-
+        @JsonProperty("pageIndex") Integer pageIndex,
         String text,
-
         Double confidence
     ) {}
 
