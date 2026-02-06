@@ -38,7 +38,7 @@ build/
 application.properties
 
 .env
-Kixi
+uploads
 demo.iml
 docker-compose.yml
 
