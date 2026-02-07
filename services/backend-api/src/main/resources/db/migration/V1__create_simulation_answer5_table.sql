@@ -1,4 +1,4 @@
-CREATE TABLE simulation_answer(
+CREATE TABLE simulation_answers(
     id BIGSERIAL PRIMARY KEY,
     simulation_id BIGINT NOT NULL,
     question_id BIGINT NOT NULL,
@@ -18,6 +18,6 @@ CREATE TABLE simulation_answer(
     CONSTRAINT uq_simulation_question UNIQUE(simulation_id, question_id)
 );
 
-CREATE INDEX idx_simulation_answer_simulation_id ON simulation_answer(simulation_id);
-CREATE INDEX idx_simulation_answer_question_id ON simulation_answer(question_id);
-CREATE INDEX idx_simulation_answer_deleted_at ON simulation_answer(deleted_at);
+CREATE INDEX idx_simulation_answers_simulation_id ON simulation_answers(simulation_id);
+CREATE INDEX idx_simulation_answers_question_id ON simulation_answers(question_id);
+CREATE INDEX idx_simulation_answers_deleted_at ON simulation_answers(deleted_at);
