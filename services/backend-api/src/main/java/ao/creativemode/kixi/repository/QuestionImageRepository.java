@@ -1,6 +1,5 @@
 package ao.creativemode.kixi.repository;
 
-import java.util.UUID;
 
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 
@@ -8,7 +7,7 @@ import ao.creativemode.kixi.model.QuestionImage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-public interface QuestionImageRepository extends ReactiveCrudRepository<QuestionImage, UUID> {
+public interface QuestionImageRepository extends ReactiveCrudRepository<QuestionImage, Long> {
     
     Flux<QuestionImage> findAllByDeletedAtIsNull();
     
@@ -21,5 +20,5 @@ public interface QuestionImageRepository extends ReactiveCrudRepository<Question
     /**
      * Busca todas as imagens associadas a uma questão específica que não foram deletadas.
      */
-    Flux<QuestionImage> findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(UUID questionId);
+    Flux<QuestionImage> findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(Long questionId);
 }

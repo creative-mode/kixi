@@ -56,7 +56,7 @@ public class QuestionImageService {
     /**
      * Finds all images associated with a specific question that have not been deleted
      */
-    public Flux<QuestionImageResponse> findByQuestionId(UUID questionId) {
+    public Flux<QuestionImageResponse> findByQuestionId(Long questionId) {
         return repository.findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(questionId)
                 .map(this::toResponse);
     }

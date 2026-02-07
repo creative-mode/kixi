@@ -1,7 +1,7 @@
 -- Create table for storing question-related images
 CREATE TABLE question_images (
     id BIGSERIAL PRIMARY KEY,
-    question_id BIGINT NOT NULL,
+    question_id BIGSERIAL NOT NULL,
     image_url TEXT NOT NULL,
     caption TEXT,
     order_index INTEGER DEFAULT 0,

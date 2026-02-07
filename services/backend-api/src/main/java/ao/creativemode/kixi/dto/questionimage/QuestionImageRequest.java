@@ -1,7 +1,6 @@
 package ao.creativemode.kixi.dto.questionimage;
 
 import jakarta.validation.constraints.NotNull;
-import java.util.UUID;
 
 /**
  * DTO for creating or updating QuestionImage metadata.
@@ -9,7 +8,7 @@ import java.util.UUID;
  */
 public record QuestionImageRequest(
         @NotNull(message = "Question ID is required")
-        UUID questionId,
+        Long questionId,
 
         String caption,
 

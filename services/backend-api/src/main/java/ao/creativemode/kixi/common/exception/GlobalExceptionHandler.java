@@ -1,9 +1,5 @@
 package ao.creativemode.kixi.common.exception;
 
-import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
-import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
-import ao.creativemode.kixi.common.dto.ProblemDetail;
-
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
@@ -18,6 +14,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ServerWebExchange;
 
+import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
+import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
+import ao.creativemode.kixi.common.dto.ProblemDetail;
 import reactor.core.publisher.Mono;
 
 /**
@@ -34,6 +33,8 @@ public class GlobalExceptionHandler {
     private static final URI DEFAULT_TYPE = URI.create(
         "https://api.kixi.com/errors"
     );
+    // Adiciona URI para erros OCR
+    private static final URI OCR_ERROR_TYPE = URI.create("https://api.kixi.ao/errors/ocr-error");
 
     /**
      * Handle custom API exceptions with proper status codes.
