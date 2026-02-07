@@ -8,9 +8,7 @@ Este documento descreve como os dados extraídos via OCR são mapeados para as e
 Imagem/PDF → OCR Service (Python) → Backend API (Spring) → Banco de Dados (PostgreSQL)
 ```
 
-## Estrutura da Prova Angolana (12ª Classe)
-
-### Exemplo de Cabeçalho
+### Exemplo de estrutura de prova
 
 ```
 REPÚBLICA DE ANGOLA
