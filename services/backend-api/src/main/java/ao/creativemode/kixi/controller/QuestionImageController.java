@@ -12,7 +12,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.util.List;
-import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
@@ -40,7 +39,7 @@ public class QuestionImageController {
      * Retrieves images associated with a specific question.
      */
     @GetMapping("/question/{questionId}")
-    public Mono<ResponseEntity<List<QuestionImageResponse>>> listByQuestion(@PathVariable UUID questionId) {
+    public Mono<ResponseEntity<List<QuestionImageResponse>>> listByQuestion(@PathVariable Long questionId) {
         return service.findByQuestionId(questionId)
                 .collectList()
                 .map(ResponseEntity::ok);
