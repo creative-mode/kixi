@@ -6,7 +6,7 @@ import ao.creativemode.kixi.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.model.Account;
 import ao.creativemode.kixi.repository.AccountRepository;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -17,11 +17,11 @@ import java.time.LocalDateTime;
 public class AccountService {
 
     private final AccountRepository repository;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
 
-    public AccountService(AccountRepository repository) {
+    public AccountService(AccountRepository repository, PasswordEncoder passwordEncoder) {
         this.repository = repository;
-        this.passwordEncoder = new BCryptPasswordEncoder();
+        this.passwordEncoder = passwordEncoder;
     }
 
     public Flux<AccountResponse> findAllActive() {
