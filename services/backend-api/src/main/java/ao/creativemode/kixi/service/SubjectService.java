@@ -31,7 +31,17 @@ public class SubjectService {
         return repository
             .findByCodeAndDeletedAtIsNull(code)
             .switchIfEmpty(
-                Mono.error(ApiException.notFound("Subject not found"))
+                Mono.error(ApiException.notFound("Subject with code " + code + " not found"))
+            )
+            .map(this::toResponse);
+    }
+
+    public Mono<SubjectResponse> findByIdActive(Long id) {
+        return repository
+            .findById(id)
+            .filter(s -> !s.isDeleted())
+            .switchIfEmpty(
+                Mono.error(ApiException.notFound("Subject with ID " + id + " not found"))
             )
             .map(this::toResponse);
     }
@@ -53,34 +63,32 @@ public class SubjectService {
             );
     }
 
-    public Mono<SubjectResponse> update(String code, SubjectRequest data) {
+    public Mono<SubjectResponse> update(Long id, SubjectRequest data) {
         return repository
-            .findByCodeAndDeletedAtIsNull(code)
+            .findById(id)
+            .filter(s -> !s.isDeleted())
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Subject not found"))
             )
             .flatMap(subject -> {
-                String newCode = data.code();
-                String newName = data.name();
-                String newShortName = data.shortName();
-
-                subject.setCode(newCode);
-                subject.setName(newName);
-                subject.setShortName(newShortName);
+                subject.setCode(data.code());
+                subject.setName(data.name());
+                subject.setShortName(data.shortName());
                 return repository
                     .save(subject)
                     .onErrorMap(DataIntegrityViolationException.class, e ->
                         ApiException.conflict(
-                            "Another subject with this code already exists, please choose a different code."
+                            "Another subject with this code already exists."
                         )
                     );
             })
             .map(this::toResponse);
     }
 
-    public Mono<Void> softDelete(String code) {
+    public Mono<Void> softDelete(Long id) {
         return repository
-            .findByCodeAndDeletedAtIsNull(code)
+            .findById(id)
+            .filter(s -> !s.isDeleted())
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Subject not found"))
             )
@@ -91,11 +99,12 @@ public class SubjectService {
             .then();
     }
 
-    public Mono<Void> restore(String code) {
+    public Mono<Void> restore(Long id) {
         return repository
-            .findByCodeAndDeletedAtIsNotNull(code)
+            .findById(id)
+            .filter(Subject::isDeleted)
             .switchIfEmpty(
-                Mono.error(ApiException.notFound("Subject not found"))
+                Mono.error(ApiException.notFound("Deleted Subject not found"))
             )
             .flatMap(subject -> {
                 subject.restore();
@@ -104,9 +113,10 @@ public class SubjectService {
             .then();
     }
 
-    public Mono<Void> hardDelete(String code) {
+    public Mono<Void> hardDelete(Long id) {
         return repository
-            .findByCodeAndDeletedAtIsNotNull(code)
+            .findById(id)
+            .filter(Subject::isDeleted)
             .switchIfEmpty(
                 Mono.error(
                     ApiException.notFound(

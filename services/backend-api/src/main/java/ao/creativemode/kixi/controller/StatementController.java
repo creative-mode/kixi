@@ -6,6 +6,7 @@ import ao.creativemode.kixi.model.QuestionOption;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.service.StatementService;
 import ao.creativemode.kixi.service.StatementService.StatementWithQuestions;
+import java.security.Principal;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
@@ -80,7 +81,8 @@ public class StatementController {
     )
     public Mono<ResponseEntity<StatementOcrResponse>> createFromOcr(
         @RequestPart("files") Flux<FilePart> files,
-        UriComponentsBuilder uriBuilder
+        UriComponentsBuilder uriBuilder,
+        Principal principal
     ) {
         log.info("OCR statement creation request received");
 
@@ -122,8 +124,7 @@ public class StatementController {
                     fileList.size()
                 );
 
-                // TODO: Get actual user ID from authentication context
-                Long createdBy = 1L; // Placeholder
+                Long createdBy = Long.valueOf(principal.getName());
 
                 return statementService.createFromOcr(fileList, createdBy);
             })
@@ -165,7 +166,8 @@ public class StatementController {
     )
     public Mono<ResponseEntity<StatementOcrResponse>> createFromOcrSingle(
         @RequestPart("file") FilePart file,
-        UriComponentsBuilder uriBuilder
+        UriComponentsBuilder uriBuilder,
+        Principal principal
     ) {
         log.info(
             "Single-file OCR statement creation request received: {}",
@@ -184,8 +186,7 @@ public class StatementController {
             );
         }
 
-        // TODO: Get actual user ID from authentication context
-        Long createdBy = 1L; // Placeholder
+        Long createdBy = Long.valueOf(principal.getName());
 
         return statementService
             .createFromOcr(List.of(file), createdBy)

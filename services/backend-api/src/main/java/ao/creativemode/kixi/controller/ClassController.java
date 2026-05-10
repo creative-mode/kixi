@@ -15,16 +15,15 @@ import java.util.List;
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
 @RestController
-@RequestMapping("api/v1/classes")
+@RequestMapping("/api/v1/classes")
 public class ClassController {
 
     private final ClassService service;
 
     public ClassController(ClassService service){this.service = service;}
 
-
     /**
-     * Retrieves all active (non-deleted) class.
+     * Retrieves all active (non-deleted) classes.
      */
     @GetMapping
     public Mono<ResponseEntity<List<ClassResponse>>> listAllActive(){
@@ -33,16 +32,14 @@ public class ClassController {
                 .map(ResponseEntity::ok);
     }
 
-
     /**
-     * Retrieves all soft-deleted (trashed) class.
+     * Retrieves all soft-deleted (trashed) classes.
      */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<ClassResponse>>> listTrashed(){
         return service.findAllDeteted()
                 .collectList().map(ResponseEntity::ok);
     }
-
 
     /**
      * Retrieves a single active class by ID.
@@ -64,21 +61,19 @@ public class ClassController {
         return service.create(request)
                 .map(created -> {
                     URI location = uriBuilder
-                            .path("/api/v1/class/{id}")
-                            .buildAndExpand(created.code())
+                            .path("/api/v1/classes/{id}")
+                            .buildAndExpand(created.id())
                             .toUri();
 
                     return ResponseEntity.created(location).body(created);
                 });
     }
 
-
     /**
      * Soft-deletes a class (moves it to trash).
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id){
-
         return service.softDelete(id)
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }

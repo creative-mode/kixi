@@ -6,6 +6,7 @@ import ao.creativemode.kixi.dto.ocr.ExamExtractionResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.service.OcrPersistenceService;
 import ao.creativemode.kixi.service.OcrPersistenceService.StatementWithRelations;
+import java.security.Principal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -313,8 +314,12 @@ public class OcrController {
         ResponseEntity<StatementWithRelationsResponse>
     > extractAndPersist(
         @RequestPart("files") Flux<FilePart> files,
-        @RequestParam(value = "createdBy", required = false) Long createdBy
+        @RequestParam(value = "createdBy", required = false) Long createdBy,
+        Principal principal
     ) {
+        if (createdBy == null && principal != null) {
+            createdBy = Long.valueOf(principal.getName());
+        }
         log.info(
             "OCR extraction and persistence request received, createdBy={}",
             createdBy
