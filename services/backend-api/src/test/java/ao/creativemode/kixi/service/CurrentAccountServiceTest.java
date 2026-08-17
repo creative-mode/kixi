@@ -2,10 +2,13 @@ package ao.creativemode.kixi.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ao.creativemode.kixi.common.exception.ApiException;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import reactor.test.StepVerifier;
 
@@ -50,5 +53,22 @@ class CurrentAccountServiceTest {
                     assertEquals(401, exception.getStatusCode());
                 })
                 .verify();
+    }
+
+    @Test
+    void matchesRolesUsingSpringSecurityAuthorities() {
+        var authentication = new UsernamePasswordAuthenticationToken(
+                "42", null, AuthorityUtils.createAuthorityList("ROLE_STUDENT")
+        );
+
+        StepVerifier.create(service.hasAnyRole("ADMIN", "TEACHER")
+                .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication)))
+                .assertNext(result -> assertFalse(result))
+                .verifyComplete();
+
+        StepVerifier.create(service.hasAnyRole("STUDENT")
+                .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication)))
+                .assertNext(result -> assertTrue(result))
+                .verifyComplete();
     }
 }

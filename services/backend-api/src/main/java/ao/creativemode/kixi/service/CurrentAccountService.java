@@ -2,6 +2,7 @@ package ao.creativemode.kixi.service;
 
 import ao.creativemode.kixi.common.exception.ApiException;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -19,6 +20,21 @@ public class CurrentAccountService {
                 .switchIfEmpty(Mono.error(
                         ApiException.unauthorized("An authenticated account is required")
                 ));
+    }
+
+    public Mono<Boolean> hasAnyRole(String... roles) {
+        var requiredAuthorities = AuthorityUtils.createAuthorityList(
+                java.util.Arrays.stream(roles)
+                        .map(role -> role.startsWith("ROLE_") ? role : "ROLE_" + role)
+                        .toArray(String[]::new)
+        );
+
+        return ReactiveSecurityContextHolder.getContext()
+                .map(context -> context.getAuthentication())
+                .filter(this::isAuthenticated)
+                .map(authentication -> authentication.getAuthorities().stream()
+                        .anyMatch(requiredAuthorities::contains))
+                .defaultIfEmpty(false);
     }
 
     private boolean isAuthenticated(Authentication authentication) {

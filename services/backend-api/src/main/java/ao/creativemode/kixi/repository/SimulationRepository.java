@@ -11,6 +11,8 @@ import reactor.core.publisher.Mono;
 public interface SimulationRepository extends ReactiveCrudRepository<Simulation, Long> {
     Flux<Simulation> findByDeletedAtIsNull();
     Flux<Simulation> findByDeletedAtIsNotNull();
+    Flux<Simulation> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNull(Long id);
+    Mono<Simulation> findByIdAndAccountIdAndDeletedAtIsNull(Long id, Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNotNull(Long id);
 }

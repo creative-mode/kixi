@@ -40,6 +40,12 @@ public class SecurityConfig {
                                 "/api/v1/roles", "/api/v1/roles/**",
                                 "/api/v1/sessions", "/api/v1/sessions/**")
                         .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/statements/review",
+                                "/api/v1/statements/from-ocr",
+                                "/api/v1/statements/trash",
+                                "/api/v1/statements/stats")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET, "/api/v1/statements/**")
                         .authenticated()
                         .pathMatchers("/api/v1/statements/**")
@@ -63,11 +69,35 @@ public class SecurityConfig {
                                 "/api/v1/classes", "/api/v1/classes/**",
                                 "/api/v1/question-images", "/api/v1/question-images/**")
                         .hasAnyRole("ADMIN", "TEACHER")
-                        .pathMatchers(HttpMethod.GET, "/api/v1/simulation-answers/**",
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/simulation-answers/trash",
+                                "/api/simulations/trash")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/simulation-answers",
+                                "/api/v1/simulation-answers/**",
+                                "/api/simulations",
                                 "/api/simulations/**")
                         .authenticated()
-                        .pathMatchers("/api/v1/simulation-answers/**", "/api/simulations/**")
+                        .pathMatchers(HttpMethod.POST,
+                                "/api/v1/simulation-answers/*/restore")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.POST,
+                                "/api/v1/simulation-answers",
+                                "/api/v1/simulation-answers/**",
+                                "/api/simulations",
+                                "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        .pathMatchers(HttpMethod.PUT,
+                                "/api/simulations/*/restore")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.PUT,
+                                "/api/v1/simulation-answers/*",
+                                "/api/simulations/*")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        .pathMatchers("/api/v1/simulation-answers", "/api/v1/simulation-answers/**",
+                                "/api/simulations", "/api/simulations/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling
