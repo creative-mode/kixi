@@ -252,6 +252,19 @@ pytest --cov=app --cov-report=html
 pytest tests/test_engine.py -v
 ```
 
+### Real OCR Integration
+
+The deterministic suite intentionally does not download PaddleOCR models. The
+real engine test is isolated in the `OCR integration` workflow and can be
+started manually from GitHub Actions. Locally, run:
+
+```bash
+pytest -m integration --runintegration --runslow -v
+```
+
+This test is slower and requires model downloads; it is not a required pull
+request check.
+
 ### Manual Testing
 
 ```bash
