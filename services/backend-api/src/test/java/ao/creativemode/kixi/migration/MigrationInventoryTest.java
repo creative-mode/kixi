@@ -42,7 +42,7 @@ class MigrationInventoryTest {
                 versions,
                 "Flyway migrations must have one contiguous version sequence"
         );
-        assertTrue(latestVersion >= 16, "The current schema baseline must include V16");
+        assertTrue(latestVersion >= 18, "The current schema baseline must include V18");
     }
 
     @Test

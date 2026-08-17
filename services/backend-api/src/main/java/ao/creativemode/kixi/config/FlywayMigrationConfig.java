@@ -33,10 +33,18 @@ public class FlywayMigrationConfig {
                 environment.getProperty("spring.flyway.password"),
                 environment.getProperty("spring.r2dbc.password")
         );
+        boolean baselineOnMigrate = environment.getProperty(
+                "spring.flyway.baseline-on-migrate",
+                Boolean.class,
+                false
+        );
+        String baselineVersion = environment.getProperty("spring.flyway.baseline-version", "16");
 
         return Flyway.configure()
                 .dataSource(jdbcUrl, username, password)
                 .locations("classpath:db/migration")
+                .baselineOnMigrate(baselineOnMigrate)
+                .baselineVersion(baselineVersion)
                 .validateMigrationNaming(true)
                 .load();
     }

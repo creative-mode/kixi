@@ -132,11 +132,53 @@ def test_process_detects_header_question_and_footer_image_regions():
     assert len(questions) == 1
     assert questions[0].has_image is True
     assert questions[0].cotacao == 3.0
+    assert questions[0].question_type == QuestionType.MULTIPLA_ESCOLHA
+    assert [(option.option_label, option.option_text) for option in questions[0].options] == [
+        ("A", "cinco"),
+        ("B", "dez"),
+    ]
     assert any(image.region == "cabecalho" for image in images)
     assert any(image.region == "questao_1" for image in images)
     assert any(image.region == "rodape" for image in images)
     assert unmapped == []
     assert isinstance(warnings, list)
+
+
+def test_process_keeps_lowercase_multipart_items_as_subitems():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Resolva os itens seguintes.", 10),
+        block("a) Calcule 2 + 2.", 50),
+        block("b) Determine o valor de x.", 90),
+    ]
+
+    _, questions, *_ = processor.process(blocks)
+
+    assert len(questions) == 1
+    assert questions[0].question_type == QuestionType.DISSERTATIVA
+    assert questions[0].options is None
+    assert questions[0].subitems == ["a)", "b)"]
+    assert [item.text for item in questions[0].subitems_content] == [
+        "Calcule 2 + 2.",
+        "Determine o valor de x.",
+    ]
+
+
+def test_process_keeps_lowercase_choice_labels_when_prompt_requires_choice():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Assinale a alternativa correta.", 10),
+        block("a) cinco", 50),
+        block("b) dez", 90),
+    ]
+
+    _, questions, *_ = processor.process(blocks)
+
+    assert questions[0].question_type == QuestionType.MULTIPLA_ESCOLHA
+    assert [(option.option_label, option.option_text) for option in questions[0].options] == [
+        ("A", "cinco"),
+        ("B", "dez"),
+    ]
 
 
 def test_process_does_not_use_exam_type_as_subject_when_discipline_is_labelled():

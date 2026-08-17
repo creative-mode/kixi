@@ -981,8 +981,18 @@ class OCRPostprocessor:
                     current_question.image_description = image_desc
 
             elif current_question is not None:
-                # Check if this is an option (for multiple choice)
-                if self._is_option_block(text):
+                subitem_info = self._detect_subitem_with_text(text)
+                is_subitem = subitem_info is not None and self._is_subitem_context(
+                    text,
+                    current_question,
+                    cotacao_map,
+                    question_text_parts,
+                    current_subitems,
+                )
+
+                # Lowercase alíneas and an established subitem context take
+                # precedence over the permissive option regex (a) also matches.
+                if not is_subitem and self._is_option_block(text):
                     option = self._detect_option(text)
                     if option:
                         if current_question.options is None:
@@ -993,8 +1003,6 @@ class OCRPostprocessor:
                             confidence=block.confidence,
                         ))
                 else:
-                    # Check if this is a subitem start
-                    subitem_info = self._detect_subitem_with_text(text)
                     if subitem_info:
                         subitem_label, subitem_remainder = subitem_info
 
@@ -1203,6 +1211,44 @@ class OCRPostprocessor:
                 return (label, remainder)
 
         return None
+
+    def _is_subitem_context(
+        self,
+        text: str,
+        question: ExtractedQuestion,
+        cotacao_map: Dict[str, float],
+        question_text_parts: List[str],
+        current_subitems: List[str],
+    ) -> bool:
+        """Disambiguate lowercase alíneas from multiple-choice options."""
+        label_match = re.match(
+            r"^\(?([A-Za-z])\)?[.):]\s*|^([A-Za-z])\s*[-–—]\s*",
+            text.strip(),
+        )
+        if not label_match:
+            return False
+
+        label = next(group for group in label_match.groups() if group is not None)
+        prompt = " ".join(question_text_parts).lower()
+        multiple_choice_hint = any(
+            keyword in prompt
+            for keyword in self.QUESTION_TYPE_KEYWORDS[QuestionType.MULTIPLA_ESCOLHA]
+        )
+
+        # A prompt such as "assinale a alternativa" makes lowercase labels
+        # valid options. Existing options also establish that interpretation.
+        if question.options or multiple_choice_hint:
+            return False
+
+        if label.islower():
+            return True
+
+        # OCR may normalize a) to A). Cotação per alínea or a prior subitem
+        # gives enough context to retain it as a multipart question.
+        score_key = f"{question.number}{label.lower()}"
+        return bool(current_subitems) or (
+            score_key in cotacao_map and question.number not in cotacao_map
+        )
 
     def _extract_inline_cotacao(self, text: str) -> Optional[float]:
         """Extract inline cotação like (3V), (2,5V), (4 valores) from text."""
