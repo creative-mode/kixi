@@ -1,0 +1,15 @@
+{
+  "name": "Prova de Matemática da 12ª classe",
+  "expected": {
+    "subject": "Matemática",
+    "question_count": 1,
+    "question_type": "dissertativa"
+  },
+  "blocks": [
+    {"text": "PROVA DE EXAME DE MATEMÁTICA", "confidence": 0.98, "bbox": [10, 10, 500, 35]},
+    {"text": "Ano Letivo: 2024/2025", "confidence": 0.96, "bbox": [10, 45, 350, 70]},
+    {"text": "12ª Classe", "confidence": 0.96, "bbox": [10, 80, 180, 105]},
+    {"text": "Duração: 120 minutos", "confidence": 0.94, "bbox": [10, 115, 300, 140]},
+    {"text": "1. Resolva a equação 2x + 5 = 15. (5 valores)", "confidence": 0.93, "bbox": [10, 180, 600, 210]}
+  ]
+}

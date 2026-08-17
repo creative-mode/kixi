@@ -1,0 +1,16 @@
+{
+  "name": "Prova de Física com figura",
+  "expected": {
+    "subject": "Física",
+    "question_count": 1,
+    "question_type": "dissertativa",
+    "has_image": true
+  },
+  "blocks": [
+    {"text": "PROVA DE EXAME DE FÍSICA", "confidence": 0.98, "bbox": [10, 10, 500, 35]},
+    {"text": "Ano Letivo: 2024/2025", "confidence": 0.96, "bbox": [10, 45, 350, 70]},
+    {"text": "12ª Classe", "confidence": 0.96, "bbox": [10, 80, 180, 105]},
+    {"text": "1. Observe a figura que mostra o movimento de um corpo. (4 valores)", "confidence": 0.93, "bbox": [10, 180, 680, 210]},
+    {"text": "A COORDENAÇÃO", "confidence": 0.91, "bbox": [10, 260, 250, 285]}
+  ]
+}

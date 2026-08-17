@@ -229,7 +229,7 @@ ocr-service/
 │       ├── preprocessing.py # Image preprocessing
 │       └── postprocessing.py# OCR result parsing
 ├── tests/
-│   ├── fixtures/            # Test images
+│   ├── fixtures/            # Representative exam OCR fixtures
 │   └── test_engine.py       # Unit tests
 ├── Dockerfile
 ├── requirements.txt
@@ -255,9 +255,9 @@ pytest tests/test_engine.py -v
 ### Manual Testing
 
 ```bash
-# Test with a sample image
+# Test with a local exam image
 curl -X POST http://localhost:8000/ocr/v1/extract/simple \
-  -F "image=@tests/fixtures/sample_exam.jpg"
+  -F "image=@/path/to/exam.png"
 ```
 
 ## Performance Considerations

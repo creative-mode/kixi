@@ -1,0 +1,14 @@
+{
+  "name": "Prova de Recurso de Matemática",
+  "expected": {
+    "subject": "Matemática",
+    "exam_type_contains": "recurso",
+    "question_count": 1
+  },
+  "blocks": [
+    {"text": "PROVA DE RECURSO DE MATEMÁTICA", "confidence": 0.98, "bbox": [10, 10, 560, 35]},
+    {"text": "Ano Lectivo: 2024/2025", "confidence": 0.96, "bbox": [10, 45, 350, 70]},
+    {"text": "12ª Classe", "confidence": 0.96, "bbox": [10, 80, 180, 105]},
+    {"text": "1. Determine o domínio da função apresentada. (6 valores)", "confidence": 0.93, "bbox": [10, 180, 650, 210]}
+  ]
+}
