@@ -420,6 +420,13 @@ public class StatementService {
     }
 
     /**
+     * Find all visible active statements for student-facing reads.
+     */
+    public Flux<Statement> findAllVisible() {
+        return statementRepository.findAllByVisibleTrueAndDeletedAtIsNull();
+    }
+
+    /**
      * Find all soft-deleted statements.
      */
     public Flux<Statement> findAllDeleted() {
@@ -438,10 +445,32 @@ public class StatementService {
     }
 
     /**
+     * Find a visible active statement by ID.
+     */
+    public Mono<Statement> findByIdVisible(Long id) {
+        return statementRepository
+            .findByIdAndVisibleTrueAndDeletedAtIsNull(id)
+            .switchIfEmpty(
+                Mono.error(ApiException.notFound("Statement not found: " + id))
+            );
+    }
+
+    /**
      * Find a statement with its questions.
      */
     public Mono<StatementWithQuestions> findByIdWithQuestions(Long id) {
-        return findById(id).flatMap(statement ->
+        return findByIdWithQuestions(findById(id));
+    }
+
+    /**
+     * Find a visible statement with its questions.
+     */
+    public Mono<StatementWithQuestions> findByIdWithQuestionsVisible(Long id) {
+        return findByIdWithQuestions(findByIdVisible(id));
+    }
+
+    private Mono<StatementWithQuestions> findByIdWithQuestions(Mono<Statement> statementMono) {
+        return statementMono.flatMap(statement ->
             questionRepository
                 .findAllByStatementIdOrderByOrderIndex(statement.getId())
                 .collectList()
@@ -499,6 +528,15 @@ public class StatementService {
     }
 
     /**
+     * Find visible statements by school year.
+     */
+    public Flux<Statement> findBySchoolYearVisible(Long schoolYearId) {
+        return statementRepository.findAllByVisibleTrueAndSchoolYearIdAndDeletedAtIsNull(
+            schoolYearId
+        );
+    }
+
+    /**
      * Find statements by subject.
      */
     public Flux<Statement> findBySubject(Long subjectId) {
@@ -508,10 +546,26 @@ public class StatementService {
     }
 
     /**
+     * Find visible statements by subject.
+     */
+    public Flux<Statement> findBySubjectVisible(Long subjectId) {
+        return statementRepository.findAllByVisibleTrueAndSubjectIdAndDeletedAtIsNull(
+            subjectId
+        );
+    }
+
+    /**
      * Search statements by title.
      */
     public Flux<Statement> searchByTitle(String searchTerm) {
         return statementRepository.searchByTitle(searchTerm);
+    }
+
+    /**
+     * Search only visible active statements by title.
+     */
+    public Flux<Statement> searchByTitleVisible(String searchTerm) {
+        return statementRepository.searchVisibleByTitle(searchTerm);
     }
 
     /**

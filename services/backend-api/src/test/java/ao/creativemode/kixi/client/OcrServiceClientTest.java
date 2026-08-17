@@ -81,6 +81,29 @@ class OcrServiceClientTest {
     }
 
     @Test
+    void sendsInternalApiKeyWhenConfigured() throws Exception {
+        server.enqueue(jsonResponse("""
+            {
+              "status": "success",
+              "requestId": "req-authenticated",
+              "questions": [],
+              "imagesToUpload": [],
+              "unmappedContent": [],
+              "warnings": []
+            }
+            """));
+
+        OcrServiceClient client = new OcrServiceClient(
+            server.url("/").toString(), 5000, 0, "internal-ocr-key");
+
+        client.extractTextFromBytes(new byte[] {1, 2, 3}, "exam.png").block();
+
+        RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(request).isNotNull();
+        assertThat(request.getHeader("X-OCR-API-Key")).isEqualTo("internal-ocr-key");
+    }
+
+    @Test
     void mapsClientErrorWithoutRetrying() {
         server.enqueue(
             new MockResponse()

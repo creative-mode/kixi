@@ -8,7 +8,7 @@ Supports .env files and environment variables.
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     api_key: Optional[str] = Field(default=None, description="API key for simple authentication")
     enable_auth: bool = Field(default=False, description="Enable authentication")
+    cors_origins: str = Field(default="", description="Comma-separated allowed CORS origins")
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
@@ -79,6 +80,20 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """Check if running in production environment."""
         return self.environment.lower() == "production"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Return configured CORS origins without empty entries."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def validate_production_auth(self) -> "Settings":
+        """Production must not start with an unauthenticated extraction API."""
+        if self.environment.lower() in {"staging", "production"} and (
+            not self.enable_auth or not self.api_key
+        ):
+            raise ValueError("ENABLE_AUTH=true and API_KEY are required in deployed environments")
+        return self
 
     @property
     def is_development(self) -> bool:

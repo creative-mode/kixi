@@ -21,6 +21,7 @@ from app.ocr import (
     load_image_from_bytes,
 )
 from app.api.pdf_handler import extract_images_from_pdf, is_pdf
+from app.api.security import require_ocr_api_key
 
 import structlog
 
@@ -153,6 +154,7 @@ async def health_check(engine: OCREngine = Depends(get_ocr_engine)) -> HealthRes
 async def extract_text(
     images: List[UploadFile] = File(..., description="Image files to process"),
     context: Optional[str] = Form(default=None, description="JSON context string"),
+    _: None = Depends(require_ocr_api_key),
     engine: OCREngine = Depends(get_ocr_engine),
 ) -> JSONResponse:
     """
@@ -303,6 +305,7 @@ async def extract_text(
 @router.post("/v1/extract/simple")
 async def extract_text_simple(
     image: UploadFile = File(..., description="Single image file to process"),
+    _: None = Depends(require_ocr_api_key),
     engine: OCREngine = Depends(get_ocr_engine),
 ) -> JSONResponse:
     """

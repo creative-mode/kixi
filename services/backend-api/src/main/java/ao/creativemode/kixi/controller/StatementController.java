@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -221,8 +222,7 @@ public class StatementController {
      */
     @GetMapping
     public Mono<ResponseEntity<List<StatementSummary>>> listAllActive() {
-        return statementService
-            .findAllActive()
+        return readableStatements(statementService::findAllActive, statementService::findAllVisible)
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -271,8 +271,7 @@ public class StatementController {
     public Mono<ResponseEntity<StatementSummary>> getById(
         @PathVariable Long id
     ) {
-        return statementService
-            .findById(id)
+        return readableStatement(() -> statementService.findById(id), () -> statementService.findByIdVisible(id))
             .map(StatementSummary::from)
             .map(ResponseEntity::ok);
     }
@@ -284,8 +283,9 @@ public class StatementController {
     public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(
         @PathVariable Long id
     ) {
-        return statementService
-            .findByIdWithQuestions(id)
+        return readableStatementWithQuestions(
+                () -> statementService.findByIdWithQuestions(id),
+                () -> statementService.findByIdWithQuestionsVisible(id))
             .map(StatementOcrResponse::from)
             .map(ResponseEntity::ok);
     }
@@ -297,8 +297,9 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> searchByTitle(
         @RequestParam String query
     ) {
-        return statementService
-            .searchByTitle(query)
+        return readableStatements(
+                () -> statementService.searchByTitle(query),
+                () -> statementService.searchByTitleVisible(query))
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -311,8 +312,9 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> getBySchoolYear(
         @PathVariable Long schoolYearId
     ) {
-        return statementService
-            .findBySchoolYear(schoolYearId)
+        return readableStatements(
+                () -> statementService.findBySchoolYear(schoolYearId),
+                () -> statementService.findBySchoolYearVisible(schoolYearId))
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -325,11 +327,36 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> getBySubject(
         @PathVariable Long subjectId
     ) {
-        return statementService
-            .findBySubject(subjectId)
+        return readableStatements(
+                () -> statementService.findBySubject(subjectId),
+                () -> statementService.findBySubjectVisible(subjectId))
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
+    }
+
+    private Flux<Statement> readableStatements(
+        Supplier<Flux<Statement>> staffQuery,
+        Supplier<Flux<Statement>> studentQuery
+    ) {
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
+            .flatMapMany(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+    }
+
+    private Mono<Statement> readableStatement(
+        Supplier<Mono<Statement>> staffQuery,
+        Supplier<Mono<Statement>> studentQuery
+    ) {
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
+            .flatMap(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+    }
+
+    private Mono<StatementWithQuestions> readableStatementWithQuestions(
+        Supplier<Mono<StatementWithQuestions>> staffQuery,
+        Supplier<Mono<StatementWithQuestions>> studentQuery
+    ) {
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
+            .flatMap(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
     }
 
     /**

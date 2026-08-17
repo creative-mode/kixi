@@ -103,10 +103,10 @@ OCR Service for extracting structured text from exam images.
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.debug else settings.service_name,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origin_list if settings.cors_origin_list else (["*"] if settings.debug else []),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-OCR-API-Key"],
 )
 
 

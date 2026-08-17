@@ -14,6 +14,7 @@ public class GoogleOAuth2Properties {
     private String tokenUri = "https://oauth2.googleapis.com/token";
     private String userInfoUri = "https://www.googleapis.com/oauth2/v2/userinfo";
     private String scope = "openid email profile";
+    private boolean stateCookieSecure = true;
 
     public String getClientId() {
         return clientId;
@@ -69,6 +70,14 @@ public class GoogleOAuth2Properties {
 
     public void setScope(String scope) {
         this.scope = scope;
+    }
+
+    public boolean isStateCookieSecure() {
+        return stateCookieSecure;
+    }
+
+    public void setStateCookieSecure(boolean stateCookieSecure) {
+        this.stateCookieSecure = stateCookieSecure;
     }
 
     public String buildAuthorizationUrl(String state) {

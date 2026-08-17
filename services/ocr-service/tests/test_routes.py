@@ -12,6 +12,7 @@ import io
 from PIL import Image
 
 from app.main import app
+from app.config import settings
 from app.api.routes import get_ocr_engine as route_get_ocr_engine
 from app.ocr.engine import OCRResult, DocumentInfo
 from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType
@@ -55,6 +56,36 @@ def sample_jpeg_bytes():
     img.save(buffer, format="JPEG")
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def test_extraction_requires_internal_api_key_when_authentication_is_enabled(
+    client, engine_override, sample_image_bytes, monkeypatch
+):
+    engine_override(MagicMock())
+    monkeypatch.setattr(settings, "enable_auth", True)
+    monkeypatch.setattr(settings, "api_key", "internal-ocr-key")
+
+    response = client.post(
+        "/ocr/v1/extract/simple",
+        files={"image": ("exam.png", sample_image_bytes, "image/png")},
+    )
+
+    assert response.status_code == 401
+
+
+def test_extraction_rejects_missing_server_api_key_configuration(
+    client, engine_override, sample_image_bytes, monkeypatch
+):
+    engine_override(MagicMock())
+    monkeypatch.setattr(settings, "enable_auth", True)
+    monkeypatch.setattr(settings, "api_key", None)
+
+    response = client.post(
+        "/ocr/v1/extract/simple",
+        files={"image": ("exam.png", sample_image_bytes, "image/png")},
+    )
+
+    assert response.status_code == 503
 
 
 @pytest.fixture
