@@ -1,0 +1,19 @@
+{
+  "name": "Prova de Matemática de múltipla escolha",
+  "expected": {
+    "subject": "Matemática",
+    "question_count": 1,
+    "question_type": "multipla_escolha",
+    "option_count": 4
+  },
+  "blocks": [
+    {"text": "PROVA DE EXAME DE MATEMÁTICA", "confidence": 0.98, "bbox": [10, 10, 500, 35]},
+    {"text": "Ano Letivo: 2024/2025", "confidence": 0.96, "bbox": [10, 45, 350, 70]},
+    {"text": "12ª Classe Série B", "confidence": 0.96, "bbox": [10, 80, 300, 105]},
+    {"text": "1. Assinale a alternativa correta. (4 valores)", "confidence": 0.93, "bbox": [10, 180, 500, 210]},
+    {"text": "A) 5", "confidence": 0.92, "bbox": [30, 230, 150, 255]},
+    {"text": "B) 10", "confidence": 0.92, "bbox": [30, 265, 150, 290]},
+    {"text": "C) 15", "confidence": 0.92, "bbox": [30, 300, 150, 325]},
+    {"text": "D) 20", "confidence": 0.92, "bbox": [30, 335, 150, 360]}
+  ]
+}
