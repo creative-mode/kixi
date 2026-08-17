@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.config;
 
 import ao.creativemode.kixi.security.JwtAuthenticationFilter;
+import ao.creativemode.kixi.security.RequestIdWebFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -20,9 +21,12 @@ import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RequestIdWebFilter requestIdWebFilter;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          RequestIdWebFilter requestIdWebFilter) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.requestIdWebFilter = requestIdWebFilter;
     }
 
     @Bean
@@ -104,6 +108,7 @@ public class SecurityConfig {
                         .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED))
                         .accessDeniedHandler(new HttpStatusServerAccessDeniedHandler(HttpStatus.FORBIDDEN))
                 )
+                .addFilterAt(requestIdWebFilter, SecurityWebFiltersOrder.FIRST)
                 .addFilterAt(jwtAuthenticationFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
     }

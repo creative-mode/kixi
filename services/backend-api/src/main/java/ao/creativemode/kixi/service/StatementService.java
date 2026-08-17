@@ -119,9 +119,9 @@ public class StatementService {
                     result.questions().size()
                 )
             )
-            .doOnError(error ->
-                log.error("Failed to create statement from OCR", error)
-            );
+            .doOnError(error -> log.error(
+                "Failed to create statement from OCR: type={}",
+                error.getClass().getSimpleName()));
     }
 
     /**

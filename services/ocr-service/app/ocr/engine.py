@@ -195,7 +195,7 @@ class OCREngine:
             logger.info("PaddleOCR engine initialized successfully")
 
         except Exception as e:
-            logger.error("Failed to initialize PaddleOCR engine", error=str(e))
+            logger.error("Failed to initialize PaddleOCR engine", error_type=type(e).__name__)
             raise RuntimeError(f"Failed to initialize OCR engine: {e}")
 
     def _ensure_initialized(self) -> None:
@@ -455,7 +455,7 @@ class OCREngine:
             logger.error(
                 "Image processing failed",
                 request_id=request_id,
-                error=str(e),
+                error_type=type(e).__name__,
             )
 
             return OCRResult(
@@ -469,7 +469,7 @@ class OCREngine:
                 images_to_upload=[],
                 unmapped_content=[],
                 warnings=[],
-                error_message=str(e),
+                error_message="Image processing failed",
             )
 
     async def process_image_async(
@@ -651,7 +651,7 @@ class OCREngine:
                 images_to_upload=[],
                 unmapped_content=[],
                 warnings=[],
-                error_message=f"Failed to load image: {e}",
+                error_message="Failed to load image",
             )
 
     async def process_bytes_async(

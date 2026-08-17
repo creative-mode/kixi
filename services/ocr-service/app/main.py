@@ -6,6 +6,7 @@ Provides endpoints for extracting structured text from images and PDFs.
 """
 
 import sys
+import uuid
 from contextlib import asynccontextmanager
 
 import structlog
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
             initialize_engine()
             logger.info("OCR engine initialized successfully")
     except Exception as e:
-        logger.error("Failed to initialize OCR engine", error=str(e))
+        logger.error("Failed to initialize OCR engine", error_type=type(e).__name__)
         # Don't fail startup - engine will initialize on first request
 
     yield
@@ -110,16 +111,27 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    """Attach a server-generated correlation ID to every response and log context."""
+    request_id = f"req-{uuid.uuid4().hex[:12]}"
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Handle uncaught exceptions globally."""
     logger.error(
         "Unhandled exception",
+        request_id=getattr(request.state, "request_id", None),
         path=request.url.path,
         method=request.method,
-        error=str(exc),
-        exc_info=True,
+        error_type=type(exc).__name__,
+        exc_info=settings.debug,
     )
 
     return JSONResponse(
@@ -197,6 +209,8 @@ def main():
         workers=settings.workers if not settings.debug else 1,
         reload=settings.debug,
         log_level=settings.log_level.lower(),
+        proxy_headers=bool(settings.trusted_proxy_list),
+        forwarded_allow_ips=settings.trusted_proxy_ips or "",
     )
 
 

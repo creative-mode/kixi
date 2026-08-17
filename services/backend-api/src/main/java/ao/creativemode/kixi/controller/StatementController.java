@@ -112,14 +112,7 @@ public class StatementController {
                 // Validate file types
                 for (FilePart file : fileList) {
                     if (!isAllowedFileType(file.filename())) {
-                        return Mono.error(
-                            ApiException.badRequest(
-                                "Invalid file type: " +
-                                    file.filename() +
-                                    ". Allowed: " +
-                                    String.join(", ", ALLOWED_EXTENSIONS)
-                            )
-                        );
+                        return Mono.error(invalidFileTypeException());
                     }
                 }
 
@@ -148,9 +141,9 @@ public class StatementController {
                     response.getBody() != null ? response.getBody().id() : null
                 )
             )
-            .doOnError(error ->
-                log.error("OCR statement creation failed", error)
-            );
+            .doOnError(error -> log.error(
+                "OCR statement creation failed: type={}",
+                error.getClass().getSimpleName()));
     }
 
     /**
@@ -172,18 +165,13 @@ public class StatementController {
     ) {
         log.info(
             "Single-file OCR statement creation request received: {}",
-            file.filename()
+            safeFilename(file.filename())
         );
 
         // Validate file type
         if (!isAllowedFileType(file.filename())) {
             return Mono.error(
-                ApiException.badRequest(
-                    "Invalid file type: " +
-                        file.filename() +
-                        ". Allowed: " +
-                        String.join(", ", ALLOWED_EXTENSIONS)
-                )
+                invalidFileTypeException()
             );
         }
 
@@ -208,9 +196,9 @@ public class StatementController {
                     response.getBody() != null ? response.getBody().id() : null
                 )
             )
-            .doOnError(error ->
-                log.error("Single-file OCR statement creation failed", error)
-            );
+            .doOnError(error -> log.error(
+                "Single-file OCR statement creation failed: type={}",
+                error.getClass().getSimpleName()));
     }
 
     // =========================================================================
@@ -456,6 +444,19 @@ public class StatementController {
 
         String lowerFilename = filename.toLowerCase();
         return ALLOWED_EXTENSIONS.stream().anyMatch(lowerFilename::endsWith);
+    }
+
+    private static ApiException invalidFileTypeException() {
+        return ApiException.badRequest(
+            "Invalid file type. Allowed: " + String.join(", ", ALLOWED_EXTENSIONS));
+    }
+
+    private static String safeFilename(String filename) {
+        if (filename == null || filename.isBlank()) {
+            return "<unnamed>";
+        }
+        String sanitized = filename.replace("\r", "").replace("\n", "");
+        return sanitized.substring(0, Math.min(sanitized.length(), 255));
     }
 
     // =========================================================================

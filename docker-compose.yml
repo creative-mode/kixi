@@ -127,6 +127,7 @@ services:
       ENABLE_AUTH: "true"
       API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
       CORS_ORIGINS: ${OCR_CORS_ORIGINS:-}
+      TRUSTED_PROXY_IPS: ${OCR_TRUSTED_PROXY_IPS:-}
       # Server Configuration
       HOST: 0.0.0.0
       PORT: 8000
@@ -188,6 +189,10 @@ services:
       SERVICE_VERSION: 1.0.0
       ENVIRONMENT: ${ENVIRONMENT:-docker}
       DEBUG: ${OCR_DEBUG:-false}
+      ENABLE_AUTH: "true"
+      API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
+      CORS_ORIGINS: ${OCR_CORS_ORIGINS:-}
+      TRUSTED_PROXY_IPS: ${OCR_TRUSTED_PROXY_IPS:-}
       HOST: 0.0.0.0
       PORT: 8000
       WORKERS: ${OCR_WORKERS:-1}
@@ -207,7 +212,7 @@ services:
       LOG_FORMAT: json
       ENABLE_METRICS: "true"
     ports:
-      - "${OCR_GPU_PORT:-8001}:8000"
+      - "${OCR_GPU_BIND_ADDRESS:-127.0.0.1}:${OCR_GPU_PORT:-8001}:8000"
     volumes:
       - ocr_models_gpu:/home/ocr/.paddleocr
     healthcheck:
