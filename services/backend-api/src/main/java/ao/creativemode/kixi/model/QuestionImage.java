@@ -21,6 +21,9 @@ public class QuestionImage {
     @Column("image_url")
     private String imageUrl;
 
+    @Column("storage_key")
+    private String storageKey;
+
     @Column("caption")
     private String caption;
 
