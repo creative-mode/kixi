@@ -62,6 +62,11 @@ public class SimulationService {
                     return Mono.just(true);
                 }))
                 .then(Mono.defer(() -> {
+                    return statementRepository.findById(dto.statementId())
+                            .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+                            .then(Mono.just(true));
+                }))
+                .then(Mono.defer(() -> {
                     Simulation simulation = new Simulation();
                     simulation.setAccountId(dto.accountId());
                     simulation.setSchoolYearId(dto.schoolYearId());

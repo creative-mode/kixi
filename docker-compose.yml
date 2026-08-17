@@ -70,6 +70,10 @@ services:
       SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/${POSTGRES_DB:-kixi}
       SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-kixi}
       SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:-kixi_secret}
+      # Existing databases created by the legacy init.sql are baselined at V16;
+      # fresh databases are empty and run the complete migration chain.
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: ${SPRING_FLYWAY_BASELINE_ON_MIGRATE:-true}
+      SPRING_FLYWAY_BASELINE_VERSION: ${SPRING_FLYWAY_BASELINE_VERSION:-16}
       # OCR Service Configuration
       OCR_SERVICE_URL: http://ocr-service:8000
       OCR_SERVICE_TIMEOUT_MS: ${OCR_SERVICE_TIMEOUT_MS:-120000}

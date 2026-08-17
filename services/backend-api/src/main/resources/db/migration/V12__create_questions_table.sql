@@ -3,20 +3,20 @@ CREATE TABLE questions (
     statement_id BIGINT NOT NULL,
     number INTEGER NOT NULL,
     text TEXT NOT NULL,
-    question_type VARCHAR(50) NOT NULL,
-    max_score DECIMAL(10, 2) NOT NULL,
+    question_type VARCHAR(50) NOT NULL DEFAULT 'unknown',
+    max_score DECIMAL(10, 2),
     order_index INTEGER,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP,
+    ocr_confidence DECIMAL(5, 4),
+    page_index INTEGER NOT NULL DEFAULT 0,
+    needs_review BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
 
-    -- Ensures a unique sequence of question numbers within a specific statement
     CONSTRAINT uk_questions_statement_number UNIQUE (statement_id, number),
-    CONSTRAINT fk_statement_statement FOREIGN KEY (statement_id) REFERENCES statement(id)
+    CONSTRAINT fk_questions_statement
+        FOREIGN KEY (statement_id) REFERENCES statements(id) ON DELETE CASCADE
 );
 
--- Optimization for foreign key lookups
 CREATE INDEX idx_questions_statement_id ON questions(statement_id);
-
--- Partial index for Soft Delete performance (optimizes retrieval of active records)
 CREATE INDEX idx_questions_deleted_at ON questions(deleted_at) WHERE deleted_at IS NULL;

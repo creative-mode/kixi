@@ -227,7 +227,7 @@ class TestOCRPostprocessor:
     def test_process_extracts_metadata(self, text_blocks):
         """Test that postprocessing extracts metadata."""
         postprocessor = OCRPostprocessor()
-        metadata, questions, unmapped, warnings = postprocessor.process(text_blocks)
+        metadata, questions, images_to_upload, unmapped, warnings = postprocessor.process(text_blocks)
 
         assert isinstance(metadata, ExtractedMetadata)
         assert metadata.school_year.value == "2024/2025"
@@ -236,27 +236,27 @@ class TestOCRPostprocessor:
     def test_process_extracts_questions(self, text_blocks):
         """Test that postprocessing extracts questions."""
         postprocessor = OCRPostprocessor()
-        metadata, questions, unmapped, warnings = postprocessor.process(text_blocks)
+        metadata, questions, images_to_upload, unmapped, warnings = postprocessor.process(text_blocks)
 
         assert len(questions) >= 1
         assert isinstance(questions[0], ExtractedQuestion)
-        assert questions[0].number == 1
+        assert questions[0].number == "1"
 
     def test_process_detects_multiple_choice(self, text_blocks):
         """Test detection of multiple choice questions."""
         postprocessor = OCRPostprocessor()
-        metadata, questions, unmapped, warnings = postprocessor.process(text_blocks)
+        metadata, questions, images_to_upload, unmapped, warnings = postprocessor.process(text_blocks)
 
         # First question should be multiple choice (has options A, B, C, D)
         if len(questions) > 0:
             first_question = questions[0]
             if first_question.options:
-                assert first_question.question_type == QuestionType.MULTIPLE_CHOICE
+                assert first_question.question_type == QuestionType.MULTIPLA_ESCOLHA
 
     def test_process_generates_warnings(self, text_blocks):
         """Test that warnings are generated for low confidence fields."""
         postprocessor = OCRPostprocessor(low_confidence_threshold=0.95)
-        metadata, questions, unmapped, warnings = postprocessor.process(text_blocks)
+        metadata, questions, images_to_upload, unmapped, warnings = postprocessor.process(text_blocks)
 
         # With threshold of 0.95, most fields should trigger warnings
         assert isinstance(warnings, list)
@@ -273,7 +273,7 @@ class TestTextNormalization:
 
     def test_normalize_text_normalizes_quotes(self):
         """Test quote normalization."""
-        text = '"Hello" and 'world'"
+        text = "\"Hello\" and 'world'"
         normalized = normalize_text(text)
         assert '"' in normalized
         assert "'" in normalized
@@ -312,10 +312,8 @@ class TestQuestionType:
 
     def test_question_type_values(self):
         """Test QuestionType enum values."""
-        assert QuestionType.MULTIPLE_CHOICE.value == "multiple_choice"
-        assert QuestionType.SHORT_ANSWER.value == "short_answer"
-        assert QuestionType.DEVELOPMENT.value == "development"
-        assert QuestionType.TRUE_FALSE.value == "true_false"
+        assert QuestionType.MULTIPLA_ESCOLHA.value == "multipla_escolha"
+        assert QuestionType.DISSERTATIVA.value == "dissertativa"
         assert QuestionType.UNKNOWN.value == "unknown"
 
 
@@ -328,7 +326,7 @@ class TestExtractedQuestion:
             number=1,
             text="Test question",
             text_confidence=0.9,
-            question_type=QuestionType.SHORT_ANSWER,
+            question_type=QuestionType.DISSERTATIVA,
             question_type_confidence=0.85,
         )
 
@@ -342,7 +340,7 @@ class TestExtractedQuestion:
             number=1,
             text="Test question",
             text_confidence=0.9,
-            question_type=QuestionType.MULTIPLE_CHOICE,
+            question_type=QuestionType.MULTIPLA_ESCOLHA,
             question_type_confidence=0.95,
             options=[
                 ExtractedOption("A", "Option 1", 0.88),
@@ -359,18 +357,18 @@ class TestExtractedQuestion:
             number=1,
             text="What is 2+2?",
             text_confidence=0.95,
-            question_type=QuestionType.SHORT_ANSWER,
+            question_type=QuestionType.DISSERTATIVA,
             question_type_confidence=0.9,
-            max_score=5.0,
-            max_score_confidence=0.85,
+            cotacao=5.0,
+            cotacao_confidence=0.85,
         )
 
         result = question.to_dict()
 
         assert result["number"] == 1
         assert result["text"]["value"] == "What is 2+2?"
-        assert result["questionType"]["value"] == "short_answer"
-        assert result["maxScore"]["value"] == 5.0
+        assert result["type"] == "dissertativa"
+        assert result["cotacao"] == 5.0
 
 
 # =============================================================================
@@ -517,6 +515,7 @@ class TestOCRResult:
             ),
             metadata=ExtractedMetadata(),
             questions=[],
+            images_to_upload=[],
             unmapped_content=[],
             warnings=[],
         )
@@ -540,6 +539,7 @@ class TestOCRResult:
             document=DocumentInfo(page_count=0, main_language="pt", has_tables=False),
             metadata=ExtractedMetadata(),
             questions=[],
+            images_to_upload=[],
             unmapped_content=[],
             warnings=[],
             error_message="Processing failed",

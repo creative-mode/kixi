@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     deleted_at TIMESTAMP,
+    CONSTRAINT uk_users_account UNIQUE (account_id),
     CONSTRAINT fk_users_account_id FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
 

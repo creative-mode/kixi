@@ -265,11 +265,11 @@ class OCRPostprocessor:
             r"prova\s+de\s+recurso\s+de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             # "EXAME DE MATEMÁTICA"
             r"exame\s+de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
-            # "PROVA DE MATEMÁTICA"
-            r"prova\s+de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             # Generic patterns
             r"(?:recurso\s+de\s+)([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             r"(?:disciplina|subject|matéria|cadeira)[:\s]+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s\-]+)",
+            # "PROVA DE MATEMÁTICA"; never treat the exam type as a subject.
+            r"prova\s+de\s+(?!exame\b|recurso\b)([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
         ],
         # Duration patterns (e.g., "90 Min", "Duração: 90 minutos")
         "duration": [
@@ -931,8 +931,9 @@ class OCRPostprocessor:
             if question_info is not None:
                 # Save current subitem if exists
                 if current_subitem_label and current_subitem_text_parts:
-                    subitem_text = self._clean_text(" ".join(current_subitem_text_parts))
-                    subitem_cotacao = self._extract_inline_cotacao(subitem_text)
+                    raw_subitem_text = " ".join(current_subitem_text_parts)
+                    subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
+                    subitem_text = self._clean_text(raw_subitem_text)
                     if subitem_cotacao:
                         subitem_text = self._remove_inline_cotacao(subitem_text)
                     current_subitems_content.append(SubitemContent(
@@ -943,7 +944,12 @@ class OCRPostprocessor:
 
                 # Save previous question if exists
                 if current_question is not None:
-                    current_question.text = self._clean_text(" ".join(question_text_parts))
+                    raw_question_text = " ".join(question_text_parts)
+                    inline_cotacao = self._extract_inline_cotacao(raw_question_text)
+                    current_question.text = self._clean_text(raw_question_text)
+                    if inline_cotacao is not None and current_question.cotacao is None:
+                        current_question.cotacao = inline_cotacao
+                        current_question.cotacao_confidence = 0.8
                     current_question.subitems = current_subitems
                     current_question.subitems_content = current_subitems_content
                     self._finalize_question(current_question, cotacao_map)
@@ -975,34 +981,18 @@ class OCRPostprocessor:
                     current_question.image_description = image_desc
 
             elif current_question is not None:
-                # Check if this is a subitem start
                 subitem_info = self._detect_subitem_with_text(text)
-                if subitem_info:
-                    subitem_label, subitem_remainder = subitem_info
+                is_subitem = subitem_info is not None and self._is_subitem_context(
+                    text,
+                    current_question,
+                    cotacao_map,
+                    question_text_parts,
+                    current_subitems,
+                )
 
-                    # Save previous subitem if exists
-                    if current_subitem_label and current_subitem_text_parts:
-                        subitem_text = self._clean_text(" ".join(current_subitem_text_parts))
-                        subitem_cotacao = self._extract_inline_cotacao(subitem_text)
-                        if subitem_cotacao:
-                            subitem_text = self._remove_inline_cotacao(subitem_text)
-                        current_subitems_content.append(SubitemContent(
-                            label=current_subitem_label,
-                            text=self._clean_footer_garbage(subitem_text),
-                            cotacao=subitem_cotacao,
-                        ))
-
-                    # Start new subitem
-                    if subitem_label not in current_subitems:
-                        current_subitems.append(subitem_label)
-                    current_subitem_label = subitem_label
-                    current_subitem_text_parts = [subitem_remainder] if subitem_remainder else []
-
-                    # Still add full text to question
-                    question_text_parts.append(text)
-
-                # Check if this is an option (for multiple choice)
-                elif self._is_option_block(text):
+                # Lowercase alíneas and an established subitem context take
+                # precedence over the permissive option regex (a) also matches.
+                if not is_subitem and self._is_option_block(text):
                     option = self._detect_option(text)
                     if option:
                         if current_question.options is None:
@@ -1013,11 +1003,36 @@ class OCRPostprocessor:
                             confidence=block.confidence,
                         ))
                 else:
-                    # Add to question text
-                    question_text_parts.append(text)
-                    # Also add to current subitem if we're in one
-                    if current_subitem_label:
-                        current_subitem_text_parts.append(text)
+                    if subitem_info:
+                        subitem_label, subitem_remainder = subitem_info
+
+                        # Save previous subitem if exists
+                        if current_subitem_label and current_subitem_text_parts:
+                            raw_subitem_text = " ".join(current_subitem_text_parts)
+                            subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
+                            subitem_text = self._clean_text(raw_subitem_text)
+                            if subitem_cotacao:
+                                subitem_text = self._remove_inline_cotacao(subitem_text)
+                            current_subitems_content.append(SubitemContent(
+                                label=current_subitem_label,
+                                text=self._clean_footer_garbage(subitem_text),
+                                cotacao=subitem_cotacao,
+                            ))
+
+                        # Start new subitem
+                        if subitem_label not in current_subitems:
+                            current_subitems.append(subitem_label)
+                        current_subitem_label = subitem_label
+                        current_subitem_text_parts = [subitem_remainder] if subitem_remainder else []
+
+                        # Still add full text to question
+                        question_text_parts.append(text)
+                    else:
+                        # Add to question text
+                        question_text_parts.append(text)
+                        # Also add to current subitem if we're in one
+                        if current_subitem_label:
+                            current_subitem_text_parts.append(text)
 
                 # Update end position
                 current_question.end_y = max(current_question.end_y, block.bbox[3])
@@ -1030,8 +1045,9 @@ class OCRPostprocessor:
 
         # Save last subitem
         if current_subitem_label and current_subitem_text_parts:
-            subitem_text = self._clean_text(" ".join(current_subitem_text_parts))
-            subitem_cotacao = self._extract_inline_cotacao(subitem_text)
+            raw_subitem_text = " ".join(current_subitem_text_parts)
+            subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
+            subitem_text = self._clean_text(raw_subitem_text)
             if subitem_cotacao:
                 subitem_text = self._remove_inline_cotacao(subitem_text)
             current_subitems_content.append(SubitemContent(
@@ -1042,7 +1058,12 @@ class OCRPostprocessor:
 
         # Save last question
         if current_question is not None:
-            current_question.text = self._clean_text(" ".join(question_text_parts))
+            raw_question_text = " ".join(question_text_parts)
+            inline_cotacao = self._extract_inline_cotacao(raw_question_text)
+            current_question.text = self._clean_text(raw_question_text)
+            if inline_cotacao is not None and current_question.cotacao is None:
+                current_question.cotacao = inline_cotacao
+                current_question.cotacao_confidence = 0.8
             current_question.subitems = current_subitems
             current_question.subitems_content = current_subitems_content
             self._finalize_question(current_question, cotacao_map)
@@ -1190,6 +1211,44 @@ class OCRPostprocessor:
                 return (label, remainder)
 
         return None
+
+    def _is_subitem_context(
+        self,
+        text: str,
+        question: ExtractedQuestion,
+        cotacao_map: Dict[str, float],
+        question_text_parts: List[str],
+        current_subitems: List[str],
+    ) -> bool:
+        """Disambiguate lowercase alíneas from multiple-choice options."""
+        label_match = re.match(
+            r"^\(?([A-Za-z])\)?[.):]\s*|^([A-Za-z])\s*[-–—]\s*",
+            text.strip(),
+        )
+        if not label_match:
+            return False
+
+        label = next(group for group in label_match.groups() if group is not None)
+        prompt = " ".join(question_text_parts).lower()
+        multiple_choice_hint = any(
+            keyword in prompt
+            for keyword in self.QUESTION_TYPE_KEYWORDS[QuestionType.MULTIPLA_ESCOLHA]
+        )
+
+        # A prompt such as "assinale a alternativa" makes lowercase labels
+        # valid options. Existing options also establish that interpretation.
+        if question.options or multiple_choice_hint:
+            return False
+
+        if label.islower():
+            return True
+
+        # OCR may normalize a) to A). Cotação per alínea or a prior subitem
+        # gives enough context to retain it as a multipart question.
+        score_key = f"{question.number}{label.lower()}"
+        return bool(current_subitems) or (
+            score_key in cotacao_map and question.number not in cotacao_map
+        )
 
     def _extract_inline_cotacao(self, text: str) -> Optional[float]:
         """Extract inline cotação like (3V), (2,5V), (4 valores) from text."""
@@ -1584,7 +1643,8 @@ def detect_language(text: str) -> str:
     """
     # Portuguese indicators
     pt_words = ["prova", "exame", "classe", "ano", "duração", "valores", "questão",
-                "calcule", "determine", "resolva", "trimestre", "letivo"]
+                "questões", "calcule", "calcular", "determine", "determinar", "resolva",
+                "resolver", "trimestre", "letivo", "aluno", "matemática", "atenção"]
 
     # English indicators
     en_words = ["exam", "class", "year", "duration", "points", "question",

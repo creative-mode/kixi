@@ -9,6 +9,7 @@ public record SimulationRequest(
         @NotNull(message = "Account ID is required")
         Long accountId,
 
+        @NotNull(message = "Statement ID is required")
         Long statementId,
 
         Long schoolYearId,

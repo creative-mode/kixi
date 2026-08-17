@@ -38,6 +38,20 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# PaddleOCR is loaded lazily because model dependencies are expensive and the
+# service must remain importable for unit tests and health endpoints.
+PaddleOCR = None
+
+
+def _get_paddle_ocr():
+    """Load PaddleOCR lazily and expose a patchable seam for unit tests."""
+    global PaddleOCR
+    if PaddleOCR is None:
+        from paddleocr import PaddleOCR as PaddleOCRClass
+
+        PaddleOCR = PaddleOCRClass
+    return PaddleOCR
+
 
 @dataclass
 class DocumentInfo:
@@ -162,10 +176,8 @@ class OCREngine:
         )
 
         try:
-            from paddleocr import PaddleOCR
-
             # Initialize PaddleOCR with configured options
-            self._ocr = PaddleOCR(
+            self._ocr = _get_paddle_ocr()(
                 lang=self.lang,
                 use_gpu=self.use_gpu,
                 use_angle_cls=self.use_angle_cls,
@@ -636,6 +648,7 @@ class OCREngine:
                 document=DocumentInfo(page_count=0, main_language=self.lang, has_tables=False),
                 metadata=ExtractedMetadata(),
                 questions=[],
+                images_to_upload=[],
                 unmapped_content=[],
                 warnings=[],
                 error_message=f"Failed to load image: {e}",
