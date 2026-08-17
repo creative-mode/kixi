@@ -83,7 +83,7 @@ class OcrPersistenceServiceTest {
                 ApiException apiException = (ApiException) error;
                 assertThat(apiException.getStatusCode()).isEqualTo(400);
                 assertThat(apiException.getMessage())
-                    .isEqualTo("OCR extraction failed: Unreadable document");
+                    .isEqualTo("OCR extraction failed");
             })
             .verify();
 

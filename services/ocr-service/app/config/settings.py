@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     api_key: Optional[str] = Field(default=None, description="API key for simple authentication")
     enable_auth: bool = Field(default=False, description="Enable authentication")
     cors_origins: str = Field(default="", description="Comma-separated allowed CORS origins")
+    trusted_proxy_ips: str = Field(default="", description="Comma-separated trusted proxy IPs or CIDRs")
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
@@ -85,6 +86,11 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """Return configured CORS origins without empty entries."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_proxy_list(self) -> list[str]:
+        """Return explicitly configured trusted proxy addresses."""
+        return [ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip()]
 
     @model_validator(mode="after")
     def validate_production_auth(self) -> "Settings":

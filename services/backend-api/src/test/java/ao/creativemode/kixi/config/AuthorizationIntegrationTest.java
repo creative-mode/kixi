@@ -12,6 +12,7 @@ import ao.creativemode.kixi.controller.StatementController;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.security.JwtAuthenticationFilter;
+import ao.creativemode.kixi.security.RequestIdWebFilter;
 import ao.creativemode.kixi.service.CurrentAccountService;
 import ao.creativemode.kixi.service.JwtService;
 import ao.creativemode.kixi.service.OcrPersistenceService;
@@ -45,7 +46,8 @@ import reactor.core.publisher.Mono;
         "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
         "app.jwt.expiration-ms=86400000"
 })
-@Import({SecurityConfig.class, CurrentAccountService.class, JwtAuthenticationFilter.class})
+@Import({SecurityConfig.class, CurrentAccountService.class, JwtAuthenticationFilter.class,
+        RequestIdWebFilter.class})
 class AuthorizationIntegrationTest {
 
     @Autowired
@@ -73,8 +75,10 @@ class AuthorizationIntegrationTest {
     void rejectsAnonymousSimulationReads() {
         client.get()
                 .uri("/api/simulations")
+                .header("X-Request-ID", "spoofed")
                 .exchange()
-                .expectStatus().isUnauthorized();
+                .expectStatus().isUnauthorized()
+                .expectHeader().valueMatches("X-Request-ID", "req-[0-9a-f]+");
     }
 
     @Test

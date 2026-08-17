@@ -128,15 +128,15 @@ public class OcrServiceClient {
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
                         .filter(this::isRetryable)
                         .doBeforeRetry(signal -> log.warn(
-                                "Retrying OCR request, attempt {}: {}",
+                                "Retrying OCR request, attempt {}: type={}",
                                 signal.totalRetries() + 1,
-                                signal.failure().getMessage())))
+                                signal.failure().getClass().getSimpleName())))
                 .doOnSuccess(response -> log.info(
                         "OCR request successful: requestId={}, status={}, confidence={}",
                         response.requestId(),
                         response.status(),
                         response.overallConfidence()))
-                .doOnError(error -> log.error("OCR request failed", error));
+                .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
     }
 
     /**
@@ -151,7 +151,8 @@ public class OcrServiceClient {
             return Mono.error(new IllegalArgumentException("Image bytes cannot be empty"));
         }
 
-        log.info("Sending OCR request for single image: {} ({} bytes)", filename, imageBytes.length);
+        log.info("Sending OCR request for single image: {} ({} bytes)",
+                safeFilename(filename), imageBytes.length);
 
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("images", imageBytes)
@@ -182,13 +183,21 @@ public class OcrServiceClient {
                         "OCR request successful: requestId={}, status={}",
                         response.requestId(),
                         response.status()))
-                .doOnError(error -> log.error("OCR request failed", error));
+                .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
     }
 
     private void applyAuthentication(HttpHeaders headers) {
         if (!apiKey.isBlank()) {
             headers.set("X-OCR-API-Key", apiKey);
         }
+    }
+
+    private static String safeFilename(String filename) {
+        if (filename == null || filename.isBlank()) {
+            return "<unnamed>";
+        }
+        String sanitized = filename.replace("\r", "").replace("\n", "");
+        return sanitized.substring(0, Math.min(sanitized.length(), 255));
     }
 
     /**

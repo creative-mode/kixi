@@ -105,14 +105,7 @@ public class OcrController {
                 // Validate file types
                 for (FilePart file : fileList) {
                     if (!isAllowedFileType(file.filename())) {
-                        return Mono.error(
-                            ApiException.badRequest(
-                                "Invalid file type: " +
-                                    file.filename() +
-                                    ". Allowed: " +
-                                    String.join(", ", ALLOWED_EXTENSIONS)
-                            )
-                        );
+                        return Mono.error(invalidFileTypeException());
                     }
                 }
 
@@ -144,7 +137,8 @@ public class OcrController {
                     response.getStatusCode()
                 )
             )
-            .doOnError(error -> log.error("OCR extraction failed", error));
+            .doOnError(error -> log.error(
+                "OCR extraction failed: type={}", error.getClass().getSimpleName()));
     }
 
     /**
@@ -162,18 +156,13 @@ public class OcrController {
     ) {
         log.info(
             "Single-file OCR extraction request received: {}",
-            file.filename()
+            safeFilename(file.filename())
         );
 
         // Validate file type
         if (!isAllowedFileType(file.filename())) {
             return Mono.error(
-                ApiException.badRequest(
-                    "Invalid file type: " +
-                        file.filename() +
-                        ". Allowed: " +
-                        String.join(", ", ALLOWED_EXTENSIONS)
-                )
+                invalidFileTypeException()
             );
         }
 
@@ -199,7 +188,8 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("Single-file OCR extraction failed", error)
+                log.error("Single-file OCR extraction failed: type={}",
+                    error.getClass().getSimpleName())
             );
     }
 
@@ -248,14 +238,7 @@ public class OcrController {
                 // Validate file types
                 for (FilePart file : fileList) {
                     if (!isAllowedFileType(file.filename())) {
-                        return Mono.error(
-                            ApiException.badRequest(
-                                "Invalid file type: " +
-                                    file.filename() +
-                                    ". Allowed: " +
-                                    String.join(", ", ALLOWED_EXTENSIONS)
-                            )
-                        );
+                        return Mono.error(invalidFileTypeException());
                     }
                 }
 
@@ -291,7 +274,8 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("Angolan exam extraction failed", error)
+                log.error("Angolan exam extraction failed: type={}",
+                    error.getClass().getSimpleName())
             );
     }
 
@@ -340,14 +324,7 @@ public class OcrController {
                 // Validate file types
                 for (FilePart file : fileList) {
                     if (!isAllowedFileType(file.filename())) {
-                        return Mono.error(
-                            ApiException.badRequest(
-                                "Invalid file type: " +
-                                    file.filename() +
-                                    ". Allowed: " +
-                                    String.join(", ", ALLOWED_EXTENSIONS)
-                            )
-                        );
+                        return Mono.error(invalidFileTypeException());
                     }
                 }
 
@@ -427,7 +404,8 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("OCR extraction and persistence failed", error)
+                log.error("OCR extraction and persistence failed: type={}",
+                    error.getClass().getSimpleName())
             );
     }
 
@@ -456,16 +434,15 @@ public class OcrController {
                       ).body(response);
             })
             .onErrorResume(error -> {
-                log.error("OCR health check failed", error);
+                log.error("OCR health check failed: type={}",
+                    error.getClass().getSimpleName());
                 Map<String, Object> response = Map.of(
                     "service",
                     "ocr-service",
                     "status",
                     "unavailable",
                     "available",
-                    false,
-                    "error",
-                    error.getMessage()
+                    false
                 );
                 return Mono.just(
                     ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(
@@ -488,7 +465,8 @@ public class OcrController {
             .getSupportedLanguages()
             .map(ResponseEntity::ok)
             .onErrorResume(error -> {
-                log.error("Failed to get supported languages", error);
+                log.error("Failed to get supported languages: type={}",
+                    error.getClass().getSimpleName());
                 return Mono.error(
                     ApiException.badRequest(
                         "Failed to retrieve supported languages"
@@ -555,6 +533,19 @@ public class OcrController {
 
         String lowerFilename = filename.toLowerCase();
         return ALLOWED_EXTENSIONS.stream().anyMatch(lowerFilename::endsWith);
+    }
+
+    private static ApiException invalidFileTypeException() {
+        return ApiException.badRequest(
+            "Invalid file type. Allowed: " + String.join(", ", ALLOWED_EXTENSIONS));
+    }
+
+    private static String safeFilename(String filename) {
+        if (filename == null || filename.isBlank()) {
+            return "<unnamed>";
+        }
+        String sanitized = filename.replace("\r", "").replace("\n", "");
+        return sanitized.substring(0, Math.min(sanitized.length(), 255));
     }
 
     // =========================================================================

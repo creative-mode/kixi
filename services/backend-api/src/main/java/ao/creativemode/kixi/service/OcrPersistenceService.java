@@ -110,15 +110,10 @@ public class OcrPersistenceService {
             .extractText(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
-                    log.error(
-                        "OCR extraction failed: {}",
-                        ocrResponse.errorMessage()
-                    );
+                    log.error("OCR extraction failed: requestId={}",
+                        ocrResponse.requestId());
                     return Mono.error(
-                        ApiException.badRequest(
-                            "OCR extraction failed: " +
-                                ocrResponse.errorMessage()
-                        )
+                        ApiException.badRequest("OCR extraction failed")
                     );
                 }
 
@@ -139,9 +134,9 @@ public class OcrPersistenceService {
                     result.statement().getId()
                 )
             )
-            .doOnError(error ->
-                log.error("Failed to process and persist OCR", error)
-            );
+            .doOnError(error -> log.error(
+                "Failed to process and persist OCR: type={}",
+                error.getClass().getSimpleName()));
     }
 
     /**
@@ -291,7 +286,7 @@ public class OcrPersistenceService {
             .findByNameIgnoreCaseAndDeletedAtIsNull(normalizedName)
             .switchIfEmpty(
                 Mono.defer(() -> {
-                    log.info("Creating new course: {}", finalCourseName);
+                    log.info("Creating new course from OCR metadata");
                     Course newCourse = new Course();
                     newCourse.setName(finalCourseName);
                     newCourse.setCode(generateCourseCode(finalCourseName));
@@ -322,7 +317,7 @@ public class OcrPersistenceService {
             .findByNameIgnoreCaseAndDeletedAtIsNull(normalizedName)
             .switchIfEmpty(
                 Mono.defer(() -> {
-                    log.info("Creating new subject: {}", finalSubjectName);
+                    log.info("Creating new subject from OCR metadata");
                     Subject newSubject = new Subject();
                     newSubject.setName(finalSubjectName);
                     newSubject.setCode(generateSubjectCode(finalSubjectName));
@@ -346,7 +341,7 @@ public class OcrPersistenceService {
 
         if (gradeStr == null || gradeStr.isBlank()) {
             gradeStr = "12"; // Default to 12th grade for exams
-            log.warn("Class grade not extracted, using default: {}", gradeStr);
+            log.warn("Class grade not extracted, using default");
         }
 
         // Parse grade to Integer
@@ -355,7 +350,7 @@ public class OcrPersistenceService {
             grade = Integer.parseInt(gradeStr.replaceAll("[^0-9]", ""));
         } catch (NumberFormatException e) {
             grade = 12; // Default to 12th grade
-            log.warn("Could not parse grade '{}', using default: 12", gradeStr);
+            log.warn("Could not parse OCR class grade, using default: 12");
         }
 
         final Integer finalGrade = grade;

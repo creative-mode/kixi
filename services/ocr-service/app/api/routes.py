@@ -6,10 +6,9 @@ Provides the main API for document processing.
 """
 
 import time
-import uuid
 from typing import Optional, List
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form, Query
+from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -110,6 +109,13 @@ def validate_file_type(filename: str) -> str:
         )
 
 
+def safe_filename(filename: Optional[str]) -> str:
+    """Keep filenames safe for logs and public error details."""
+    if not filename:
+        return "<unnamed>"
+    return filename.replace("\r", "").replace("\n", "")[:255]
+
+
 def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
     """Validate file size."""
     max_size = max_size_mb or settings.max_image_size_mb
@@ -152,6 +158,7 @@ async def health_check(engine: OCREngine = Depends(get_ocr_engine)) -> HealthRes
 
 @router.post("/v1/extract")
 async def extract_text(
+    request: Request,
     images: List[UploadFile] = File(..., description="Image files to process"),
     context: Optional[str] = Form(default=None, description="JSON context string"),
     _: None = Depends(require_ocr_api_key),
@@ -172,7 +179,7 @@ async def extract_text(
     **Response:**
     - Structured JSON with extracted metadata, questions, and confidence scores
     """
-    request_id = f"req-{uuid.uuid4().hex[:12]}"
+    request_id = request.state.request_id
     start_time = time.time()
 
     logger.info(
@@ -202,7 +209,7 @@ async def extract_text(
             logger.warning(
                 "Failed to parse context",
                 request_id=request_id,
-                error=str(e),
+                error_type=type(e).__name__,
             )
 
     # Process images
@@ -222,7 +229,7 @@ async def extract_text(
             logger.debug(
                 "Processing file",
                 request_id=request_id,
-                filename=upload_file.filename,
+                filename=safe_filename(upload_file.filename),
                 file_type=file_type,
                 size_bytes=len(content),
             )
@@ -243,18 +250,18 @@ async def extract_text(
 
         except HTTPException:
             raise
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid uploaded file")
         except Exception as e:
             logger.error(
                 "Failed to process uploaded file",
                 request_id=request_id,
-                filename=upload_file.filename,
-                error=str(e),
+                filename=safe_filename(upload_file.filename),
+                error_type=type(e).__name__,
             )
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to process file '{upload_file.filename}': {str(e)}"
+                detail="Failed to process uploaded file"
             )
 
     if not all_images:
@@ -294,16 +301,17 @@ async def extract_text(
         logger.error(
             "OCR processing failed",
             request_id=request_id,
-            error=str(e),
+            error_type=type(e).__name__,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"OCR processing failed: {str(e)}"
+            detail="OCR processing failed"
         )
 
 
 @router.post("/v1/extract/simple")
 async def extract_text_simple(
+    request: Request,
     image: UploadFile = File(..., description="Single image file to process"),
     _: None = Depends(require_ocr_api_key),
     engine: OCREngine = Depends(get_ocr_engine),
@@ -316,12 +324,12 @@ async def extract_text_simple(
 
     **Supported formats:** JPEG, PNG, WebP, BMP
     """
-    request_id = f"req-{uuid.uuid4().hex[:12]}"
+    request_id = request.state.request_id
 
     logger.info(
         "Simple OCR extraction request received",
         request_id=request_id,
-        filename=image.filename,
+        filename=safe_filename(image.filename),
     )
 
     # Validate file type
@@ -355,17 +363,17 @@ async def extract_text_simple(
 
     except HTTPException:
         raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid image")
     except Exception as e:
         logger.error(
             "Simple OCR extraction failed",
             request_id=request_id,
-            error=str(e),
+            error_type=type(e).__name__,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"OCR processing failed: {str(e)}"
+            detail="OCR processing failed"
         )
 
 

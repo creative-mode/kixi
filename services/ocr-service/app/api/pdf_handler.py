@@ -68,8 +68,8 @@ def extract_images_from_pdf(
                 "Install either PyMuPDF (fitz) or pdf2image with poppler."
             )
     except Exception as e:
-        logger.error("PDF extraction failed", error=str(e))
-        raise ValueError(f"Failed to extract images from PDF: {e}")
+        logger.error("PDF extraction failed", error_type=type(e).__name__)
+        raise ValueError("Failed to extract images from PDF")
 
     if not images:
         raise ValueError("No pages could be extracted from PDF")
@@ -251,8 +251,8 @@ def get_pdf_info(pdf_content: bytes) -> dict:
             raise ValueError("Invalid PDF file")
 
     except Exception as e:
-        logger.error("Failed to get PDF info", error=str(e))
-        raise ValueError(f"Failed to read PDF: {e}")
+        logger.error("Failed to get PDF info", error_type=type(e).__name__)
+        raise ValueError("Failed to read PDF")
 
     return info
 

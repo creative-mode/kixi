@@ -17,6 +17,7 @@ import org.springframework.web.server.ServerWebExchange;
 import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
 import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.common.dto.ProblemDetail;
+import ao.creativemode.kixi.security.RequestIdWebFilter;
 import reactor.core.publisher.Mono;
 
 /**
@@ -79,12 +80,7 @@ public class GlobalExceptionHandler {
                                 ? fieldError.getDefaultMessage()
                                 : "Invalid value";
                         if (fieldError.getRejectedValue() != null) {
-                            return Map.of(
-                                "message",
-                                msg,
-                                "rejectedValue",
-                                fieldError.getRejectedValue()
-                            );
+                            return Map.of("message", msg);
                         }
                         return msg;
                     }
@@ -110,16 +106,17 @@ public class GlobalExceptionHandler {
         ServerWebExchange exchange
     ) {
         log.warn(
-            "OCR client error: status={}, message={}",
+            "OCR client error: status={}, type={}, requestId={}",
             ex.getStatusCode(),
-            ex.getMessage()
+            ex.getClass().getSimpleName(),
+            RequestIdWebFilter.requestId(exchange)
         );
 
         ProblemDetail problem = new ProblemDetail(
             OCR_ERROR_TYPE,
             "OCR Processing Error",
             ex.getStatusCode(),
-            ex.getMessage(),
+            "The OCR request was rejected. Please verify the uploaded file and try again.",
             Map.of("service", "ocr-service", "errorType", "client_error")
         );
 
@@ -139,9 +136,10 @@ public class GlobalExceptionHandler {
         ServerWebExchange exchange
     ) {
         log.error(
-            "OCR server error: status={}, message={}",
+            "OCR server error: status={}, type={}, requestId={}",
             ex.getStatusCode(),
-            ex.getMessage()
+            ex.getClass().getSimpleName(),
+            RequestIdWebFilter.requestId(exchange)
         );
 
         ProblemDetail problem = new ProblemDetail(
@@ -167,7 +165,8 @@ public class GlobalExceptionHandler {
         TimeoutException ex,
         ServerWebExchange exchange
     ) {
-        log.error("Request timeout: {}", ex.getMessage());
+        log.error("Request timeout: type={}, requestId={}",
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
 
         ProblemDetail problem = new ProblemDetail(
             URI.create("https://api.kixi.ao/errors/timeout"),
@@ -192,7 +191,8 @@ public class GlobalExceptionHandler {
         IllegalArgumentException ex,
         ServerWebExchange exchange
     ) {
-        log.warn("Illegal argument: {}", ex.getMessage());
+        log.warn("Illegal argument: type={}, requestId={}",
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
             HttpStatus.BAD_REQUEST.value(),
@@ -212,7 +212,8 @@ public class GlobalExceptionHandler {
         Exception ex,
         ServerWebExchange exchange
     ) {
-        log.error("Unhandled exception occurred", ex);
+        log.error("Unhandled exception: type={}, requestId={}",
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
             500,
@@ -231,13 +232,14 @@ public class GlobalExceptionHandler {
         ServerWebExchange exchange,
         ProblemDetail problem
     ) {
-        String requestUri = exchange.getRequest().getURI().toString();
+        String requestUri = exchange.getRequest().getPath().value();
         Map<String, Object> currentProps =
             problem.properties() != null ? problem.properties() : Map.of();
         Map<String, Object> updatedProps = new java.util.HashMap<>(
             currentProps
         );
         updatedProps.put("instance", requestUri);
+        updatedProps.put("requestId", RequestIdWebFilter.requestId(exchange));
         return new ProblemDetail(
             problem.type(),
             problem.title(),
