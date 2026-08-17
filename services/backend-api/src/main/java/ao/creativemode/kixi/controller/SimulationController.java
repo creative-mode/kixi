@@ -8,6 +8,8 @@ import ao.creativemode.kixi.dto.simulation.SimulationRequest;
 import jakarta.validation.Valid;
 import ao.creativemode.kixi.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.service.SimulationService;
+import ao.creativemode.kixi.service.CurrentAccountService;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -17,14 +19,22 @@ import java.util.List;
 public class SimulationController {
 
     private final SimulationService service;
+    private final CurrentAccountService currentAccountService;
 
-    public SimulationController(SimulationService service) {
+    public SimulationController(
+            SimulationService service,
+            CurrentAccountService currentAccountService
+    ) {
         this.service = service;
+        this.currentAccountService = currentAccountService;
     }
 
     @GetMapping
     public Mono<ResponseEntity<List<SimulationResponse>>> findAll() {
-        return service.findAllActive()
+        return accountScoped(
+                service::findAllActive,
+                service::findAllActiveForAccount
+        )
                 .collectList()
                 .map(ResponseEntity::ok);
     }
@@ -38,14 +48,22 @@ public class SimulationController {
 
     @GetMapping("/{id}")
     public Mono<ResponseEntity<SimulationResponse>> findById(@PathVariable Long id) {
-        return service.findById(id)
+        return accountScoped(
+                () -> service.findById(id).flux(),
+                accountId -> service.findByIdForAccount(id, accountId).flux()
+        )
+                .next()
                 .map(ResponseEntity::ok)
-                .defaultIfEmpty(ResponseEntity.notFound().build());
+                .defaultIfEmpty(ResponseEntity.<SimulationResponse>notFound().build());
     }
 
     @PostMapping
     public Mono<ResponseEntity<SimulationResponse>> create(@Valid @RequestBody SimulationRequest dto) {
-        return service.create(dto)
+        return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+                .flatMap(tuple -> tuple.getT2()
+                        ? service.create(dto)
+                        : service.createForAccount(dto, tuple.getT1()))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
 
@@ -53,7 +71,11 @@ public class SimulationController {
     public Mono<ResponseEntity<SimulationResponse>> update(
             @PathVariable Long id,
             @Valid @RequestBody SimulationRequest dto) {
-        return service.update(id, dto)
+        return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+                .flatMap(tuple -> tuple.getT2()
+                        ? service.update(id, dto)
+                        : service.updateForAccount(id, dto, tuple.getT1()))
                 .map(ResponseEntity::ok);
     }
 
@@ -73,5 +95,16 @@ public class SimulationController {
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
         return service.hardDelete(id)
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
+    }
+
+    private <T> Flux<T> accountScoped(
+            java.util.function.Supplier<Flux<T>> staffQuery,
+            java.util.function.Function<Long, Flux<T>> accountQuery
+    ) {
+        return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+                .flatMapMany(tuple -> tuple.getT2()
+                        ? staffQuery.get()
+                        : accountQuery.apply(tuple.getT1()));
     }
 }

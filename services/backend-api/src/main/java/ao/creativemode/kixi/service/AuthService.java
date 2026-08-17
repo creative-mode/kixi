@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @Service
 public class AuthService {
 
-    private static final String DEFAULT_ROLE_NAME = "USER";
+    private static final String DEFAULT_ROLE_NAME = "STUDENT";
 
     private final AccountRepository accountRepository;
     private final AccountRoleRepository accountRoleRepository;
@@ -118,15 +118,17 @@ public class AuthService {
         account.setActive(true);
         account.setDeletedAt(null);
 
-        return accountRepository.save(account)
-                .flatMap(savedAccount -> Mono.when(
-                        roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
-                                .flatMap(role -> {
-                                    AccountRole ar = new AccountRole(savedAccount.getId(), role.getId());
-                                    return accountRoleRepository.save(ar);
-                                }),
-                        createUserFromGoogle(savedAccount.getId(), info)
-                ).thenReturn(savedAccount));
+        return roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
+                .switchIfEmpty(Mono.error(ApiException.conflict(
+                        "Default role is not configured: " + DEFAULT_ROLE_NAME
+                )))
+                .flatMap(role -> accountRepository.save(account)
+                        .flatMap(savedAccount -> Mono.when(
+                                accountRoleRepository.save(
+                                        new AccountRole(savedAccount.getId(), role.getId())
+                                ),
+                                createUserFromGoogle(savedAccount.getId(), info)
+                        ).thenReturn(savedAccount)));
     }
 
     private Mono<User> createUserFromGoogle(Long accountId, GoogleUserInfo info) {

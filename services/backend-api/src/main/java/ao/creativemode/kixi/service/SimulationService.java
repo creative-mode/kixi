@@ -40,6 +40,11 @@ public class SimulationService {
                 .flatMap(this::toResponse);
     }
 
+    public Flux<SimulationResponse> findAllActiveForAccount(Long accountId) {
+        return repository.findByAccountIdAndDeletedAtIsNull(accountId)
+                .flatMap(this::toResponse);
+    }
+
     public Flux<SimulationResponse> findAllTrashed() {
         return repository.findByDeletedAtIsNotNull()
                 .flatMap(this::toResponse);
@@ -47,6 +52,11 @@ public class SimulationService {
 
     public Mono<SimulationResponse> findById(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
+                .flatMap(this::toResponse);
+    }
+
+    public Mono<SimulationResponse> findByIdForAccount(Long id, Long accountId) {
+        return repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId)
                 .flatMap(this::toResponse);
     }
 
@@ -78,8 +88,23 @@ public class SimulationService {
                 .flatMap(this::toResponse);
     }
 
+    public Mono<SimulationResponse> createForAccount(SimulationRequest dto, Long accountId) {
+        if (!accountId.equals(dto.accountId())) {
+            return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
+        }
+        return create(dto);
+    }
+
     public Mono<SimulationResponse> update(Long id, SimulationRequest dto) {
-        return repository.findByIdAndDeletedAtIsNull(id)
+        return updateExisting(repository.findByIdAndDeletedAtIsNull(id), dto);
+    }
+
+    public Mono<SimulationResponse> updateForAccount(Long id, SimulationRequest dto, Long accountId) {
+        return updateExisting(repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId), dto);
+    }
+
+    private Mono<SimulationResponse> updateExisting(Mono<Simulation> simulationMono, SimulationRequest dto) {
+        return simulationMono
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(simulation -> {
                     if (!SimulationStatus.IN_PROGRESS.equals(simulation.getStatus())) {

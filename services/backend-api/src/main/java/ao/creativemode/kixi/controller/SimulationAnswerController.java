@@ -5,6 +5,7 @@ import static org.springframework.http.HttpStatus.NO_CONTENT;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
 import ao.creativemode.kixi.service.SimulationAnswerService;
+import ao.creativemode.kixi.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;
@@ -18,9 +19,14 @@ import reactor.core.publisher.Mono;
 public class SimulationAnswerController {
 
     private final SimulationAnswerService service;
+    private final CurrentAccountService currentAccountService;
 
-    public SimulationAnswerController(SimulationAnswerService service) {
+    public SimulationAnswerController(
+        SimulationAnswerService service,
+        CurrentAccountService currentAccountService
+    ) {
         this.service = service;
+        this.currentAccountService = currentAccountService;
     }
 
     /**
@@ -30,7 +36,13 @@ public class SimulationAnswerController {
     public Mono<
         ResponseEntity<List<SimulationAnswerResponse>>
     > listAllActive() {
-        return service.findAllActive().collectList().map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+            .flatMapMany(tuple -> tuple.getT2()
+                ? service.findAllActive()
+                : service.findAllActiveForAccount(tuple.getT1()))
+            .collectList()
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -48,7 +60,12 @@ public class SimulationAnswerController {
     public Mono<ResponseEntity<SimulationAnswerResponse>> getById(
         @PathVariable Long id
     ) {
-        return service.findByIdActive(id).map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+            .flatMap(tuple -> tuple.getT2()
+                ? service.findByIdActive(id)
+                : service.findByIdActiveForAccount(id, tuple.getT1()))
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -59,8 +76,11 @@ public class SimulationAnswerController {
         @Valid @RequestBody SimulationAnswerRequest request,
         UriComponentsBuilder uriBuilder
     ) {
-        return service
-            .create(request)
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+            .flatMap(tuple -> tuple.getT2()
+                ? service.create(request)
+                : service.createForAccount(request, tuple.getT1()))
             .map(created -> {
                 URI location = uriBuilder
                     .path("/api/v1/simulation-answers/{id}")
@@ -79,7 +99,12 @@ public class SimulationAnswerController {
         @PathVariable Long id,
         @Valid @RequestBody SimulationAnswerRequest request
     ) {
-        return service.update(id, request).map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+            .flatMap(tuple -> tuple.getT2()
+                ? service.update(id, request)
+                : service.updateForAccount(id, request, tuple.getT1()))
+            .map(ResponseEntity::ok);
     }
 
     /**

@@ -4,7 +4,9 @@ import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
 import ao.creativemode.kixi.model.SimulationAnswer;
+import ao.creativemode.kixi.model.Simulation;
 import ao.creativemode.kixi.repository.SimulationAnswerRepository;
+import ao.creativemode.kixi.repository.SimulationRepository;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -15,13 +17,28 @@ import reactor.core.publisher.Mono;
 public class SimulationAnswerService {
 
     private final SimulationAnswerRepository repository;
+    private final SimulationRepository simulationRepository;
 
-    public SimulationAnswerService(SimulationAnswerRepository repository) {
+    public SimulationAnswerService(
+        SimulationAnswerRepository repository,
+        SimulationRepository simulationRepository
+    ) {
         this.repository = repository;
+        this.simulationRepository = simulationRepository;
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull().map(this::toResponse);
+    }
+
+    public Flux<SimulationAnswerResponse> findAllActiveForAccount(Long accountId) {
+        return simulationRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .map(Simulation::getId)
+            .collectList()
+            .flatMapMany(simulationIds -> simulationIds.isEmpty()
+                ? Flux.empty()
+                : repository.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds))
+            .map(this::toResponse);
     }
 
     public Flux<SimulationAnswerResponse> findAllDeleted() {
@@ -34,6 +51,14 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
+            .map(this::toResponse);
+    }
+
+    public Mono<SimulationAnswerResponse> findByIdActiveForAccount(Long id, Long accountId) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
+            .flatMap(answer -> requireSimulationOwner(answer.getSimulationId(), accountId)
+                .thenReturn(answer))
             .map(this::toResponse);
     }
 
@@ -57,6 +82,14 @@ public class SimulationAnswerService {
             );
     }
 
+    public Mono<SimulationAnswerResponse> createForAccount(
+        SimulationAnswerRequest request,
+        Long accountId
+    ) {
+        return requireSimulationOwner(request.simulationId(), accountId)
+            .then(create(request));
+    }
+
     public Mono<SimulationAnswerResponse> update(
         Long id,
         SimulationAnswerRequest request
@@ -76,6 +109,24 @@ public class SimulationAnswerService {
 
                 return repository.save(answer);
             })
+            .map(this::toResponse)
+            .onErrorMap(DataIntegrityViolationException.class, e ->
+                ApiException.conflict(
+                    "A simulation answer with this parameter already exists."
+                )
+            );
+    }
+
+    public Mono<SimulationAnswerResponse> updateForAccount(
+        Long id,
+        SimulationAnswerRequest request,
+        Long accountId
+    ) {
+        return requireSimulationOwner(request.simulationId(), accountId)
+            .then(repository.findByIdAndDeletedAtIsNull(id))
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
+            .flatMap(answer -> requireSimulationOwner(answer.getSimulationId(), accountId)
+                .then(updateExisting(answer, request)))
             .map(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
@@ -140,5 +191,26 @@ public class SimulationAnswerService {
             entity.getUpdatedAt(),
             entity.getDeletedAt()
         );
+    }
+
+    private Mono<Void> requireSimulationOwner(Long simulationId, Long accountId) {
+        return simulationRepository.findByIdAndAccountIdAndDeletedAtIsNull(simulationId, accountId)
+            .switchIfEmpty(Mono.error(ApiException.forbidden(
+                "The simulation does not belong to the authenticated account"
+            )))
+            .then();
+    }
+
+    private Mono<SimulationAnswer> updateExisting(
+        SimulationAnswer answer,
+        SimulationAnswerRequest request
+    ) {
+        answer.setSimulationId(request.simulationId());
+        answer.setQuestionId(request.questionId());
+        answer.setSelectedOptionId(request.selectedOptionId());
+        answer.setAnswerText(request.answerText());
+        answer.setAnsweredAt(request.answeredAt());
+        answer.setUpdatedAt(LocalDateTime.now());
+        return repository.save(answer);
     }
 }

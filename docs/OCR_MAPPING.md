@@ -200,7 +200,7 @@ curl -X POST http://localhost:8080/api/v1/ocr/extract/exam \
   -F "files=@prova.pdf"
 
 # Extração e persistência no banco
-curl -X POST "http://localhost:8080/api/v1/ocr/extract-and-persist?createdBy=1" \
+curl -X POST http://localhost:8080/api/v1/ocr/extract-and-persist \
   -F "files=@prova.pdf"
 ```
 

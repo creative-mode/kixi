@@ -6,6 +6,7 @@ import ao.creativemode.kixi.dto.ocr.ExamExtractionResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.service.OcrPersistenceService;
 import ao.creativemode.kixi.service.OcrPersistenceService.StatementWithRelations;
+import ao.creativemode.kixi.service.CurrentAccountService;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -55,13 +56,16 @@ public class OcrController {
 
     private final OcrServiceClient ocrServiceClient;
     private final OcrPersistenceService ocrPersistenceService;
+    private final CurrentAccountService currentAccountService;
 
     public OcrController(
         OcrServiceClient ocrServiceClient,
-        OcrPersistenceService ocrPersistenceService
+        OcrPersistenceService ocrPersistenceService,
+        CurrentAccountService currentAccountService
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.ocrPersistenceService = ocrPersistenceService;
+        this.currentAccountService = currentAccountService;
     }
 
     /**
@@ -302,7 +306,6 @@ public class OcrController {
      * - Statement with Questions and Options
      *
      * @param files List of uploaded file parts (images or PDFs)
-     * @param createdBy Optional user ID who is creating the statement
      * @return Created statement with all related entities
      */
     @PostMapping(
@@ -312,17 +315,12 @@ public class OcrController {
     public Mono<
         ResponseEntity<StatementWithRelationsResponse>
     > extractAndPersist(
-        @RequestPart("files") Flux<FilePart> files,
-        @RequestParam(value = "createdBy", required = false) Long createdBy
+        @RequestPart("files") Flux<FilePart> files
     ) {
-        log.info(
-            "OCR extraction and persistence request received, createdBy={}",
-            createdBy
-        );
+        log.info("OCR extraction and persistence request received");
 
-        return files
-            .collectList()
-            .flatMap(fileList -> {
+        return currentAccountService.requiredAccountId()
+            .flatMap(createdBy -> files.collectList().flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
                     return Mono.error(
@@ -363,7 +361,7 @@ public class OcrController {
                     fileList,
                     createdBy
                 );
-            })
+            }))
             .map(result -> {
                 StatementWithRelationsResponse response =
                     new StatementWithRelationsResponse(
