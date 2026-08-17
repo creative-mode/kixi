@@ -47,3 +47,8 @@ docker-compose.yml
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Python test artifacts
+.coverage
+coverage.xml
+htmlcov/

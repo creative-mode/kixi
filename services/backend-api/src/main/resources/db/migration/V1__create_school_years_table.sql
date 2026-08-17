@@ -12,9 +12,3 @@ CREATE TABLE school_years (
 
 CREATE INDEX idx_school_years_active    ON school_years (deleted_at) WHERE deleted_at IS NULL;
 CREATE INDEX idx_school_years_start_end ON school_years (start_year, end_year);
-
-INSERT INTO school_years (start_year, end_year) VALUES
-(2023, 2024),
-(2024, 2025),
-(2025, 2026),
-(2026, 2027);

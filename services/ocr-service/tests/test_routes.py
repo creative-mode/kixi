@@ -5,12 +5,14 @@ Tests for the FastAPI endpoints of the OCR service.
 """
 
 import pytest
+from dataclasses import replace
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 import io
 from PIL import Image
 
 from app.main import app
+from app.api.routes import get_ocr_engine as route_get_ocr_engine
 from app.ocr.engine import OCRResult, DocumentInfo
 from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType
 
@@ -23,6 +25,16 @@ from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, Questio
 def client():
     """Create a test client for the FastAPI app."""
     return TestClient(app)
+
+
+@pytest.fixture
+def engine_override():
+    """Override the FastAPI dependency used by OCR routes."""
+    def override(engine):
+        app.dependency_overrides[route_get_ocr_engine] = lambda: engine
+
+    yield override
+    app.dependency_overrides.pop(route_get_ocr_engine, None)
 
 
 @pytest.fixture
@@ -64,10 +76,11 @@ def mock_ocr_result():
                 number=1,
                 text="What is 2+2?",
                 text_confidence=0.95,
-                question_type=QuestionType.SHORT_ANSWER,
+                question_type=QuestionType.DISSERTATIVA,
                 question_type_confidence=0.9,
             )
         ],
+        images_to_upload=[],
         unmapped_content=[],
         warnings=[],
     )
@@ -100,22 +113,21 @@ class TestRootEndpoints:
         assert "service" in data
         assert "version" in data
 
-    def test_ocr_health_endpoint(self, client):
+    def test_ocr_health_endpoint(self, client, engine_override):
         """Test the OCR-specific health endpoint."""
-        with patch("app.api.routes.get_ocr_engine") as mock_engine:
-            mock_instance = MagicMock()
-            mock_instance.health_check.return_value = {
-                "initialized": True,
-                "status": "healthy",
-                "message": "OCR engine is operational",
-            }
-            mock_engine.return_value = mock_instance
+        mock_instance = MagicMock()
+        mock_instance.health_check.return_value = {
+            "initialized": True,
+            "status": "healthy",
+            "message": "OCR engine is operational",
+        }
+        engine_override(mock_instance)
 
-            response = client.get("/ocr/health")
+        response = client.get("/ocr/health")
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["initialized"] is True
+        assert response.status_code == 200
+        data = response.json()
+        assert data["initialized"] is True
 
 
 # =============================================================================
@@ -125,13 +137,12 @@ class TestRootEndpoints:
 class TestExtractEndpoint:
     """Tests for the OCR extract endpoints."""
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_extract_single_image(self, mock_get_engine, client, sample_image_bytes, mock_ocr_result):
+    def test_extract_single_image(self, client, engine_override, sample_image_bytes, mock_ocr_result):
         """Test extracting text from a single image."""
         # Setup mock
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         # Make request
         files = {"images": ("test.png", sample_image_bytes, "image/png")}
@@ -142,12 +153,11 @@ class TestExtractEndpoint:
         assert "status" in data
         assert "requestId" in data
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_extract_jpeg_image(self, mock_get_engine, client, sample_jpeg_bytes, mock_ocr_result):
+    def test_extract_jpeg_image(self, client, engine_override, sample_jpeg_bytes, mock_ocr_result):
         """Test extracting text from a JPEG image."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         response = client.post(
             "/ocr/v1/extract",
@@ -155,6 +165,21 @@ class TestExtractEndpoint:
         )
 
         assert response.status_code in [200, 207]
+
+    def test_extract_engine_error_returns_server_error(self, client, engine_override, sample_image_bytes, mock_ocr_result):
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock(
+            return_value=replace(mock_ocr_result, status="error", error_message="engine failed")
+        )
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("test.png", sample_image_bytes, "image/png"))],
+        )
+
+        assert response.status_code == 500
+        assert response.json()["status"] == "error"
 
     def test_extract_no_files(self, client):
         """Test that extraction fails without files."""
@@ -174,18 +199,17 @@ class TestExtractEndpoint:
 
         assert response.status_code == 400
         data = response.json()
-        assert "Invalid file type" in data.get("detail", str(data))
+        assert "Unsupported file type" in data.get("detail", str(data))
 
 
 class TestSimpleExtractEndpoint:
     """Tests for the simplified single-image extract endpoint."""
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_simple_extract(self, mock_get_engine, client, sample_image_bytes, mock_ocr_result):
+    def test_simple_extract(self, client, engine_override, sample_image_bytes, mock_ocr_result):
         """Test simple extraction with a single image."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         response = client.post(
             "/ocr/v1/extract/simple",
@@ -256,7 +280,7 @@ class TestStatusEndpoint:
 class TestFileValidation:
     """Tests for file validation logic."""
 
-    def test_valid_extensions(self, client, sample_image_bytes):
+    def test_valid_extensions(self, client, engine_override, sample_image_bytes):
         """Test that valid extensions are accepted."""
         valid_extensions = [
             ("test.jpg", "image/jpeg"),
@@ -266,21 +290,20 @@ class TestFileValidation:
             ("test.bmp", "image/bmp"),
         ]
 
-        with patch("app.api.routes.get_ocr_engine") as mock_get_engine:
-            mock_engine = MagicMock()
-            mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
-                status="success",
-                to_dict=lambda: {"status": "success", "requestId": "test"}
-            ))
-            mock_get_engine.return_value = mock_engine
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
+            status="success",
+            to_dict=lambda: {"status": "success", "requestId": "test"}
+        ))
+        engine_override(mock_engine)
 
-            for filename, content_type in valid_extensions:
-                response = client.post(
-                    "/ocr/v1/extract",
-                    files=[("images", (filename, sample_image_bytes, content_type))]
-                )
-                # Should not return 400 for invalid file type
-                assert response.status_code != 400 or "Invalid file type" not in response.text
+        for filename, content_type in valid_extensions:
+            response = client.post(
+                "/ocr/v1/extract",
+                files=[("images", (filename, sample_image_bytes, content_type))]
+            )
+            # Should not return 400 for valid file extensions.
+            assert response.status_code != 400 or "Unsupported file type" not in response.text
 
     def test_invalid_extensions(self, client):
         """Test that invalid extensions are rejected."""
@@ -306,12 +329,11 @@ class TestFileValidation:
 class TestErrorHandling:
     """Tests for error handling in API routes."""
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_ocr_processing_error(self, mock_get_engine, client, sample_image_bytes):
+    def test_ocr_processing_error(self, client, engine_override, sample_image_bytes):
         """Test handling of OCR processing errors."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(side_effect=Exception("OCR failed"))
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         response = client.post(
             "/ocr/v1/extract",
@@ -320,14 +342,13 @@ class TestErrorHandling:
 
         assert response.status_code == 500
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_invalid_image_content(self, mock_get_engine, client):
+    def test_invalid_image_content(self, client, engine_override):
         """Test handling of invalid image content."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(
             side_effect=ValueError("Failed to decode image")
         )
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         # Send garbage data with valid extension
         response = client.post(
@@ -346,12 +367,11 @@ class TestErrorHandling:
 class TestResponseFormat:
     """Tests for response format correctness."""
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_success_response_format(self, mock_get_engine, client, sample_image_bytes, mock_ocr_result):
+    def test_success_response_format(self, client, engine_override, sample_image_bytes, mock_ocr_result):
         """Test that success response has correct format."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         response = client.post(
             "/ocr/v1/extract",
@@ -371,12 +391,11 @@ class TestResponseFormat:
         assert "questions" in data
         assert "warnings" in data
 
-    @patch("app.api.routes.get_ocr_engine")
-    def test_document_info_format(self, mock_get_engine, client, sample_image_bytes, mock_ocr_result):
+    def test_document_info_format(self, client, engine_override, sample_image_bytes, mock_ocr_result):
         """Test that document info has correct format."""
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
-        mock_get_engine.return_value = mock_engine
+        engine_override(mock_engine)
 
         response = client.post(
             "/ocr/v1/extract",

@@ -121,6 +121,15 @@ def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
         )
 
 
+def _status_code_for_result(status: str) -> int:
+    """Map an OCR result status to the HTTP status used by the API."""
+    if status == "success":
+        return 200
+    if status == "partial":
+        return 207
+    return 500
+
+
 # Routes
 @router.get("/health", response_model=HealthResponse)
 async def health_check(engine: OCREngine = Depends(get_ocr_engine)) -> HealthResponse:
@@ -276,7 +285,7 @@ async def extract_text(
 
         return JSONResponse(
             content=result.to_dict(),
-            status_code=200 if result.status == "success" else 207,
+            status_code=_status_code_for_result(result.status),
         )
 
     except Exception as e:
@@ -338,7 +347,7 @@ async def extract_text_simple(
 
         return JSONResponse(
             content=result.to_dict(),
-            status_code=200 if result.status == "success" else 207,
+            status_code=_status_code_for_result(result.status),
         )
 
     except HTTPException:
