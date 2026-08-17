@@ -6,6 +6,7 @@ import ao.creativemode.kixi.model.QuestionOption;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.service.StatementService;
 import ao.creativemode.kixi.service.StatementService.StatementWithQuestions;
+import ao.creativemode.kixi.service.CurrentAccountService;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
@@ -55,9 +56,14 @@ public class StatementController {
     private static final int MAX_FILES = 10;
 
     private final StatementService statementService;
+    private final CurrentAccountService currentAccountService;
 
-    public StatementController(StatementService statementService) {
+    public StatementController(
+        StatementService statementService,
+        CurrentAccountService currentAccountService
+    ) {
         this.statementService = statementService;
+        this.currentAccountService = currentAccountService;
     }
 
     // =========================================================================
@@ -84,9 +90,8 @@ public class StatementController {
     ) {
         log.info("OCR statement creation request received");
 
-        return files
-            .collectList()
-            .flatMap(fileList -> {
+        return currentAccountService.requiredAccountId()
+            .flatMap(createdBy -> files.collectList().flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
                     return Mono.error(
@@ -122,11 +127,8 @@ public class StatementController {
                     fileList.size()
                 );
 
-                // TODO: Get actual user ID from authentication context
-                Long createdBy = 1L; // Placeholder
-
                 return statementService.createFromOcr(fileList, createdBy);
-            })
+            }))
             .map(result -> {
                 URI location = uriBuilder
                     .path("/api/v1/statements/{id}")
@@ -184,11 +186,9 @@ public class StatementController {
             );
         }
 
-        // TODO: Get actual user ID from authentication context
-        Long createdBy = 1L; // Placeholder
-
-        return statementService
-            .createFromOcr(List.of(file), createdBy)
+        return currentAccountService.requiredAccountId()
+            .flatMap(createdBy -> statementService
+                .createFromOcr(List.of(file), createdBy))
             .map(result -> {
                 URI location = uriBuilder
                     .path("/api/v1/statements/{id}")
