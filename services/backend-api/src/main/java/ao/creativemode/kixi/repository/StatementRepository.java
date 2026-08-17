@@ -34,6 +34,11 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Mono<Statement> findByIdAndDeletedAtIsNull(Long id);
 
     /**
+     * Find a visible active statement by ID.
+     */
+    Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);
+
+    /**
      * Find a deleted statement by ID
      */
     Mono<Statement> findByIdAndDeletedAtIsNotNull(Long id);
@@ -54,9 +59,19 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Flux<Statement> findAllBySchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
 
     /**
+     * Find visible statements by school year.
+     */
+    Flux<Statement> findAllByVisibleTrueAndSchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
+
+    /**
      * Find statements by subject
      */
     Flux<Statement> findAllBySubjectIdAndDeletedAtIsNull(Long subjectId);
+
+    /**
+     * Find visible statements by subject.
+     */
+    Flux<Statement> findAllByVisibleTrueAndSubjectIdAndDeletedAtIsNull(Long subjectId);
 
     /**
      * Find statements by term
@@ -141,6 +156,12 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
      */
     @Query("SELECT * FROM statements WHERE LOWER(title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) AND deleted_at IS NULL ORDER BY created_at DESC")
     Flux<Statement> searchByTitle(String searchTerm);
+
+    /**
+     * Search only visible active statements by title.
+     */
+    @Query("SELECT * FROM statements WHERE visible = TRUE AND LOWER(title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) AND deleted_at IS NULL ORDER BY created_at DESC")
+    Flux<Statement> searchVisibleByTitle(String searchTerm);
 
     /**
      * Find recent statements with pagination

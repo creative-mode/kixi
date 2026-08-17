@@ -8,6 +8,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 
 import ao.creativemode.kixi.client.OcrServiceClient;
 import ao.creativemode.kixi.controller.OcrController;
+import ao.creativemode.kixi.controller.StatementController;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.security.JwtAuthenticationFilter;
@@ -29,6 +30,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.test.web.reactive.server.WebTestClientConfigurer;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.reactive.function.BodyInserters;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,7 +38,12 @@ import reactor.core.publisher.Mono;
 @WebFluxTest(controllers = {
         ao.creativemode.kixi.controller.SimulationController.class,
         ao.creativemode.kixi.controller.SimulationAnswerController.class,
-        OcrController.class
+        OcrController.class,
+        StatementController.class
+})
+@TestPropertySource(properties = {
+        "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
+        "app.jwt.expiration-ms=86400000"
 })
 @Import({SecurityConfig.class, CurrentAccountService.class, JwtAuthenticationFilter.class})
 class AuthorizationIntegrationTest {
@@ -58,6 +65,9 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private OcrPersistenceService ocrPersistenceService;
+
+    @MockBean
+    private ao.creativemode.kixi.service.StatementService statementService;
 
     @Test
     void rejectsAnonymousSimulationReads() {
@@ -180,6 +190,36 @@ class AuthorizationIntegrationTest {
                 .expectStatus().isCreated();
 
         verify(ocrPersistenceService).processAndPersist(anyList(), eq(7L));
+    }
+
+    @Test
+    void scopesStudentStatementReadsToVisibleStatements() {
+        when(statementService.findAllVisible()).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/statements")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(statementService).findAllVisible();
+        org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findAllActive();
+    }
+
+    @Test
+    void allowsStaffStatementReadsToIncludePendingStatements() {
+        when(statementService.findAllActive()).thenReturn(Flux.empty());
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/statements")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(statementService).findAllActive();
+        org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findAllVisible();
     }
 
     private static OcrResponse successfulOcrResponse() {

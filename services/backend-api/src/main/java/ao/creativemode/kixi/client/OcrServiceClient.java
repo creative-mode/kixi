@@ -5,6 +5,7 @@ import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
@@ -46,6 +47,7 @@ public class OcrServiceClient {
     private final WebClient webClient;
     private final Duration timeout;
     private final int maxRetries;
+    private final String apiKey;
 
     /**
      * Construct the OCR service client.
@@ -58,9 +60,19 @@ public class OcrServiceClient {
             @Value("${ocr.service.url:http://localhost:8000}") String ocrServiceUrl,
             @Value("${ocr.service.timeout-ms:120000}") long timeoutMs,
             @Value("${ocr.service.max-retries:2}") int maxRetries) {
+        this(ocrServiceUrl, timeoutMs, maxRetries, "");
+    }
+
+    @Autowired
+    public OcrServiceClient(
+            @Value("${ocr.service.url:http://localhost:8000}") String ocrServiceUrl,
+            @Value("${ocr.service.timeout-ms:120000}") long timeoutMs,
+            @Value("${ocr.service.max-retries:2}") int maxRetries,
+            @Value("${ocr.service.api-key:}") String apiKey) {
 
         this.timeout = Duration.ofMillis(timeoutMs);
         this.maxRetries = maxRetries;
+        this.apiKey = apiKey == null ? "" : apiKey.trim();
 
         this.webClient = WebClient.builder()
                 .baseUrl(ocrServiceUrl)
@@ -97,6 +109,7 @@ public class OcrServiceClient {
 
         return webClient.post()
                 .uri("/ocr/v1/extract")
+                .headers(this::applyAuthentication)
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))
                 .retrieve()
@@ -147,6 +160,7 @@ public class OcrServiceClient {
 
         return webClient.post()
                 .uri("/ocr/v1/extract")
+                .headers(this::applyAuthentication)
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))
                 .retrieve()
@@ -169,6 +183,12 @@ public class OcrServiceClient {
                         response.requestId(),
                         response.status()))
                 .doOnError(error -> log.error("OCR request failed", error));
+    }
+
+    private void applyAuthentication(HttpHeaders headers) {
+        if (!apiKey.isBlank()) {
+            headers.set("X-OCR-API-Key", apiKey);
+        }
     }
 
     /**
