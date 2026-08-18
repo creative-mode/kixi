@@ -214,8 +214,9 @@ async def extract_text(
 
     # Process images
     all_images = []
+    source_file_indices = []
 
-    for upload_file in images:
+    for source_file_index, upload_file in enumerate(images):
         try:
             # Validate file type
             file_type = validate_file_type(upload_file.filename)
@@ -238,6 +239,7 @@ async def extract_text(
             if file_type == 'pdf' or is_pdf(content):
                 pdf_images = extract_images_from_pdf(content)
                 all_images.extend(pdf_images)
+                source_file_indices.extend([source_file_index] * len(pdf_images))
                 logger.debug(
                     "Extracted images from PDF",
                     request_id=request_id,
@@ -247,6 +249,7 @@ async def extract_text(
                 # Load regular image
                 image = load_image_from_bytes(content)
                 all_images.append(image)
+                source_file_indices.append(source_file_index)
 
         except HTTPException:
             raise
@@ -274,11 +277,13 @@ async def extract_text(
                 all_images[0],
                 page_index=0,
                 request_id=request_id,
+                source_file_index=source_file_indices[0],
             )
         else:
             result = await engine.process_images_async(
                 all_images,
                 request_id=request_id,
+                source_file_indices=source_file_indices,
             )
 
         processing_time = int((time.time() - start_time) * 1000)

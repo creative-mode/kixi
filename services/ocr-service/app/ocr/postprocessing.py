@@ -52,6 +52,10 @@ class ImageToUpload:
     region: str  # questao_1, cabecalho, rodape, etc.
     bbox: Optional[Tuple[int, int, int, int]] = None
     page_index: int = 0
+    source_width: Optional[int] = None
+    source_height: Optional[int] = None
+    contract_version: int = 1
+    source_file_index: int = 0
 
 
 @dataclass
@@ -449,6 +453,8 @@ class OCRPostprocessor:
         self,
         text_blocks: List[TextBlock],
         page_count: int = 1,
+        page_dimensions: Optional[Dict[int, Tuple[int, int]]] = None,
+        source_file_indices: Optional[Dict[int, int]] = None,
     ) -> Tuple[ExtractedMetadata, List[ExtractedQuestion], List[ImageToUpload], List[UnmappedContent], List[Warning]]:
         """
         Process OCR text blocks into structured data.
@@ -496,7 +502,14 @@ class OCRPostprocessor:
                 metadata.total_max_score = MetadataField(round(total_from_map, 1), 0.85)
 
         # Detect images to upload
-        images_to_upload = self._detect_images_to_upload(metadata, questions, sorted_blocks, full_text)
+        images_to_upload = self._detect_images_to_upload(
+            metadata,
+            questions,
+            sorted_blocks,
+            full_text,
+            page_dimensions or {},
+            source_file_indices or {},
+        )
 
         # Collect unmapped content
         unmapped = self._collect_unmapped(sorted_blocks, metadata, questions)
@@ -1407,10 +1420,40 @@ class OCRPostprocessor:
         metadata: ExtractedMetadata,
         questions: List[ExtractedQuestion],
         blocks: List[TextBlock],
-        full_text: str
+        full_text: str,
+        page_dimensions: Dict[int, Tuple[int, int]],
+        source_file_indices: Dict[int, int],
     ) -> List[ImageToUpload]:
         """Detect regions that should be uploaded as images."""
         images = []
+
+        def dimensions(page_index: int) -> Tuple[Optional[int], Optional[int]]:
+            return page_dimensions.get(page_index, (None, None))
+
+        def source_file_index(page_index: int) -> int:
+            return source_file_indices.get(page_index, 0)
+
+        def region_bbox(
+            page_index: int,
+            y_start: int,
+            y_end: int,
+            full_width: bool = True,
+        ) -> Optional[Tuple[int, int, int, int]]:
+            page_blocks = [b for b in blocks if b.page_index == page_index]
+            selected = [
+                b for b in page_blocks
+                if b.bbox[3] >= y_start and b.bbox[1] <= y_end
+            ]
+            if not selected:
+                return None
+
+            width, height = dimensions(page_index)
+            padding = 24
+            x1 = 0 if full_width and width else min(b.bbox[0] for b in selected) - padding
+            x2 = width if full_width and width else max(b.bbox[2] for b in selected) + padding
+            top = max(0, y_start - padding)
+            bottom = min(height, y_end + padding) if height else y_end + padding
+            return (max(0, x1), top, max(x1 + 1, x2), max(top + 1, bottom))
 
         # Build base filename
         base_name = "prova"
@@ -1425,31 +1468,58 @@ class OCRPostprocessor:
         if blocks and len(blocks) > 5:
             header_text = " ".join(b.text for b in blocks[:5])
             if any(kw in header_text.lower() for kw in ["república", "angola", "ministério", "governo", "gabinete"]):
+                page_index = blocks[0].page_index
+                bbox = region_bbox(page_index, 0, max(b.bbox[3] for b in blocks[:5]))
+                source_width, source_height = dimensions(page_index)
                 images.append(ImageToUpload(
                     suggested_filename=f"{base_name}-cabecalho.png",
                     description="Cabeçalho oficial com brasão/logo institucional",
                     region="cabecalho",
-                    page_index=0,
+                    bbox=bbox,
+                    page_index=page_index,
+                    source_width=source_width,
+                    source_height=source_height,
+                    source_file_index=source_file_index(page_index),
                 ))
 
         # Add images for questions with visual content
         for question in questions:
             if question.has_image:
+                source_width, source_height = dimensions(question.page_index)
+                bbox = region_bbox(
+                    question.page_index,
+                    question.start_y,
+                    max(question.end_y, question.start_y + 1),
+                )
                 images.append(ImageToUpload(
                     suggested_filename=f"{base_name}-questao-{question.number}.png",
                     description=question.image_description or f"Imagem da questão {question.number}",
                     region=f"questao_{question.number}",
+                    bbox=bbox,
                     page_index=question.page_index,
+                    source_width=source_width,
+                    source_height=source_height,
+                    source_file_index=source_file_index(question.page_index),
                 ))
 
         # Check for coordination/signature at footer
         for pattern in self.PATTERNS["coordination"]:
             if re.search(pattern, full_text.lower()):
+                page_index = max((b.page_index for b in blocks), default=0)
+                footer_blocks = [b for b in blocks if b.page_index == page_index][-5:]
+                footer_start = min((b.bbox[1] for b in footer_blocks), default=0)
+                footer_end = max((b.bbox[3] for b in footer_blocks), default=footer_start)
+                bbox = region_bbox(page_index, footer_start, footer_end)
+                source_width, source_height = dimensions(page_index)
                 images.append(ImageToUpload(
                     suggested_filename=f"{base_name}-assinatura-coordenacao.png",
                     description="Assinatura da coordenação no rodapé da prova com texto A COORDENAÇÃO",
                     region="rodape",
-                    page_index=len(set(b.page_index for b in blocks)) - 1 if blocks else 0,
+                    bbox=bbox,
+                    page_index=page_index,
+                    source_width=source_width,
+                    source_height=source_height,
+                    source_file_index=source_file_index(page_index),
                 ))
                 break
 

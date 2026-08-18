@@ -140,6 +140,53 @@ public class OcrServiceClient {
     }
 
     /**
+     * Extract text from bytes retained by the persistence flow. This variant
+     * avoids replaying a consumed multipart stream when OCR regions are later
+     * associated with their source page.
+     */
+    public Mono<OcrResponse> extractTextFromUploadedFiles(List<OcrUploadedFile> files) {
+        if (files == null || files.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("At least one file is required"));
+        }
+
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        for (OcrUploadedFile file : files) {
+            builder.part("images", file.content())
+                    .filename(file.filename())
+                    .contentType(file.contentType() != null
+                            ? file.contentType()
+                            : getContentType(file.filename()));
+        }
+
+        log.info("Sending retained OCR request: {} file(s)", files.size());
+        return webClient.post()
+                .uri("/ocr/v1/extract")
+                .headers(this::applyAuthentication)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new OcrClientException(
+                                        "OCR request failed: " + body,
+                                        response.statusCode().value()))))
+                .onStatus(HttpStatusCode::is5xxServerError, response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new OcrServerException(
+                                        "OCR service error: " + body,
+                                        response.statusCode().value()))))
+                .bodyToMono(OcrResponse.class)
+                .timeout(timeout)
+                .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
+                        .filter(this::isRetryable))
+                .doOnSuccess(response -> log.info(
+                        "OCR retained request successful: requestId={}, status={}",
+                        response.requestId(), response.status()))
+                .doOnError(error -> log.error("OCR retained request failed: type={}",
+                        error.getClass().getSimpleName()));
+    }
+
+    /**
      * Extract text from raw image bytes.
      *
      * @param imageBytes Raw image bytes

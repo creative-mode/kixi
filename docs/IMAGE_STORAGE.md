@@ -29,9 +29,13 @@ endpoint through `STORAGE_PUBLIC_BASE_URL`.
 
 ## OCR boundary
 
-OCR currently returns image metadata (`suggestedFilename`, `region`, and page)
-but not the source bytes or a stable crop rectangle in its HTTP response. The
-backend therefore does not pretend that metadata is an uploaded image. Automatic
-crop/upload association remains the next contract change: OCR must return a
-versioned region contract and the backend must retain the corresponding source
-bytes before `QuestionImage` records can be created automatically.
+OCR returns a versioned region contract (`contractVersion: 1`) with page index,
+source-file index, source dimensions and a bounded crop rectangle. The
+persistence endpoint retains the submitted raster bytes, crops `questao_N`
+regions, stores the PNG through the same `ImageStorage` port and associates it
+with the persisted question.
+
+PDF sources and `cabecalho`/`rodape` regions remain metadata-only in this slice:
+the OCR service renders PDF pages internally and `question_images` requires a
+question association. A future statement-asset contract must define those
+cases before they are persisted automatically.

@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.controller;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
+import ao.creativemode.kixi.client.OcrUploadedFile;
 import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.dto.ocr.ExamExtractionResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
@@ -16,6 +17,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
+import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -52,6 +55,7 @@ public class OcrController {
     );
 
     private static final long MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+    private static final long MAX_PERSIST_SOURCE_SIZE = 50 * 1024 * 1024;
     private static final int MAX_FILES = 10;
 
     private final OcrServiceClient ocrServiceClient;
@@ -333,11 +337,12 @@ public class OcrController {
                     fileList.size()
                 );
 
-                // Process and persist
-                return ocrPersistenceService.processAndPersist(
-                    fileList,
-                    createdBy
-                );
+                // Retain the exact source bytes for OCR-region association.
+                return bufferFilesForPersistence(fileList)
+                    .flatMap(uploadedFiles -> ocrPersistenceService.processAndPersist(
+                        uploadedFiles,
+                        createdBy
+                    ));
             }))
             .map(result -> {
                 StatementWithRelationsResponse response =
@@ -387,7 +392,13 @@ public class OcrController {
                                       new ImageToUploadInfo(
                                           img.suggestedFilename(),
                                           img.description(),
-                                          img.region()
+                                          img.region(),
+                                          img.pageIndex(),
+                                          img.bbox(),
+                                          img.sourceWidth(),
+                                          img.sourceHeight(),
+                                          img.sourceFileIndex(),
+                                          img.contractVersion()
                                       )
                                   )
                                   .toList()
@@ -407,6 +418,37 @@ public class OcrController {
                 log.error("OCR extraction and persistence failed: type={}",
                     error.getClass().getSimpleName())
             );
+    }
+
+    private Mono<List<OcrUploadedFile>> bufferFilesForPersistence(List<FilePart> files) {
+        return Flux.fromIterable(files)
+            .concatMap(file -> DataBufferUtils.join(file.content(), (int) MAX_FILE_SIZE)
+                .map(buffer -> {
+                    try {
+                        byte[] content = new byte[buffer.readableByteCount()];
+                        buffer.read(content);
+                        return new OcrUploadedFile(
+                            file.filename(),
+                            file.headers().getContentType(),
+                            content
+                        );
+                    } finally {
+                        DataBufferUtils.release(buffer);
+                    }
+                }))
+            .collectList()
+            .flatMap(uploadedFiles -> {
+                long totalBytes = uploadedFiles.stream()
+                    .mapToLong(file -> file.content().length)
+                    .sum();
+                if (totalBytes > MAX_PERSIST_SOURCE_SIZE) {
+                    return Mono.error(ApiException.badRequest(
+                        "Persisted OCR input exceeds the 50 MB aggregate limit"));
+                }
+                return Mono.just(uploadedFiles);
+            })
+            .onErrorMap(DataBufferLimitException.class,
+                error -> ApiException.badRequest("File exceeds the 20 MB limit"));
     }
 
     /**
@@ -593,6 +635,12 @@ public class OcrController {
     public record ImageToUploadInfo(
         String suggestedFilename,
         String description,
-        String region
+        String region,
+        Integer pageIndex,
+        List<Integer> bbox,
+        Integer sourceWidth,
+        Integer sourceHeight,
+        Integer sourceFileIndex,
+        Integer contractVersion
     ) {}
 }
