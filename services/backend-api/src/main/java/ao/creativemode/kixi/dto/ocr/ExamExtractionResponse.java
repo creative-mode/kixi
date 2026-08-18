@@ -196,7 +196,19 @@ public record ExamExtractionResponse(
 
         String description,
 
-        String region
+        String region,
+
+        @JsonProperty("page_index") Integer pageIndex,
+
+        List<Integer> bbox,
+
+        @JsonProperty("source_width") Integer sourceWidth,
+
+        @JsonProperty("source_height") Integer sourceHeight,
+
+        @JsonProperty("source_file_index") Integer sourceFileIndex,
+
+        @JsonProperty("contract_version") Integer contractVersion
     ) {
         /**
          * Create from ImageToUpload.
@@ -207,7 +219,13 @@ public record ExamExtractionResponse(
             return new ImageToUploadData(
                 img.suggestedFilename(),
                 img.description(),
-                img.region()
+                img.region(),
+                img.pageIndex(),
+                img.bbox(),
+                img.sourceWidth(),
+                img.sourceHeight(),
+                img.sourceFileIndex(),
+                img.contractVersion()
             );
         }
 

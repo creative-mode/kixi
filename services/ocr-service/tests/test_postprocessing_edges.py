@@ -144,6 +144,34 @@ def test_process_detects_header_question_and_footer_image_regions():
     assert isinstance(warnings, list)
 
 
+def test_process_emits_versioned_raster_region_contract():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("República de Angola", 10),
+        block("Ministério da Educação", 30),
+        block("PROVA DE EXAME DE MATEMÁTICA", 50),
+        block("Ano Letivo: 2024/2025", 70),
+        block("12ª Classe Série B", 90),
+        block("1. Observe a figura que mostra uma reta", 120),
+        block("A) cinco", 150),
+        block("B) dez", 180),
+        block("A COORDENAÇÃO", 220),
+    ]
+
+    _, _, images, _, _ = processor.process(
+        blocks,
+        page_dimensions={0: (1000, 800)},
+    )
+
+    question_image = next(image for image in images if image.region == "questao_1")
+    assert question_image.contract_version == 1
+    assert question_image.bbox == (0, 96, 1000, 224)
+    assert question_image.page_index == 0
+    assert question_image.source_width == 1000
+    assert question_image.source_height == 800
+    assert question_image.source_file_index == 0
+
+
 def test_process_keeps_lowercase_multipart_items_as_subitems():
     processor = OCRPostprocessor()
     blocks = [

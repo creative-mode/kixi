@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.service;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
+import ao.creativemode.kixi.client.OcrUploadedFile;
 import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedOption;
@@ -24,7 +25,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -63,6 +63,7 @@ public class OcrPersistenceService {
     private final CourseRepository courseRepository;
     private final SubjectRepository subjectRepository;
     private final ClassRepository classRepository;
+    private final OcrImageAssociationService imageAssociationService;
 
     public OcrPersistenceService(
         OcrServiceClient ocrServiceClient,
@@ -72,7 +73,8 @@ public class OcrPersistenceService {
         SchoolYearRepository schoolYearRepository,
         CourseRepository courseRepository,
         SubjectRepository subjectRepository,
-        ClassRepository classRepository
+        ClassRepository classRepository,
+        OcrImageAssociationService imageAssociationService
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.statementRepository = statementRepository;
@@ -82,6 +84,7 @@ public class OcrPersistenceService {
         this.courseRepository = courseRepository;
         this.subjectRepository = subjectRepository;
         this.classRepository = classRepository;
+        this.imageAssociationService = imageAssociationService;
     }
 
     // =========================================================================
@@ -97,7 +100,7 @@ public class OcrPersistenceService {
      */
     @Transactional
     public Mono<StatementWithRelations> processAndPersist(
-        List<FilePart> files,
+        List<OcrUploadedFile> files,
         Long createdBy
     ) {
         log.info(
@@ -107,7 +110,7 @@ public class OcrPersistenceService {
         );
 
         return ocrServiceClient
-            .extractText(files)
+            .extractTextFromUploadedFiles(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
                     log.error("OCR extraction failed: requestId={}",
@@ -126,7 +129,7 @@ public class OcrPersistenceService {
                         : 0
                 );
 
-                return persistOcrResponse(ocrResponse, createdBy);
+                return persistOcrResponse(ocrResponse, createdBy, files);
             })
             .doOnSuccess(result ->
                 log.info(
@@ -149,7 +152,8 @@ public class OcrPersistenceService {
     @Transactional
     public Mono<StatementWithRelations> persistOcrResponse(
         OcrResponse ocrResponse,
-        Long createdBy
+        Long createdBy,
+        List<OcrUploadedFile> sourceFiles
     ) {
         OcrMetadata metadata = ocrResponse.metadata();
 
@@ -198,7 +202,13 @@ public class OcrPersistenceService {
                                     return optionRepository
                                         .findAllByQuestionIds(questionIds)
                                         .collectList()
-                                        .map(options ->
+                                        .flatMap(options -> imageAssociationService
+                                            .persistQuestionImages(
+                                                questions,
+                                                ocrResponse.imagesToUpload(),
+                                                sourceFiles
+                                            )
+                                            .map(ignoredImages ->
                                             new StatementWithRelations(
                                                 statement,
                                                 schoolYear,
@@ -208,8 +218,7 @@ public class OcrPersistenceService {
                                                 questions,
                                                 options,
                                                 ocrResponse.imagesToUpload()
-                                            )
-                                        );
+                                            )));
                                 });
                         });
                     }

@@ -276,7 +276,17 @@ public record OcrResponse(
 
         String region,
 
-        @JsonProperty("pageIndex") Integer pageIndex
+        @JsonProperty("pageIndex") Integer pageIndex,
+
+        List<Integer> bbox,
+
+        @JsonProperty("sourceWidth") Integer sourceWidth,
+
+        @JsonProperty("sourceHeight") Integer sourceHeight,
+
+        @JsonProperty("contractVersion") Integer contractVersion,
+
+        @JsonProperty("sourceFileIndex") Integer sourceFileIndex
     ) {
         /**
          * Check if this is a header/logo image.

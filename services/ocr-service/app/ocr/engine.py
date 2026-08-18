@@ -96,6 +96,11 @@ class OCRResult:
                     "description": img.description,
                     "region": img.region,
                     "pageIndex": img.page_index,
+                    "bbox": list(img.bbox) if img.bbox else None,
+                    "sourceWidth": img.source_width,
+                    "sourceHeight": img.source_height,
+                    "contractVersion": img.contract_version,
+                    "sourceFileIndex": img.source_file_index,
                 }
                 for img in self.images_to_upload
             ],
@@ -347,6 +352,7 @@ class OCREngine:
         image: np.ndarray,
         page_index: int = 0,
         request_id: Optional[str] = None,
+        source_file_index: int = 0,
     ) -> OCRResult:
         """
         Process a single image and extract text with structure.
@@ -404,6 +410,8 @@ class OCREngine:
             metadata, questions, images_to_upload, unmapped, warnings = self.postprocessor.process(
                 text_blocks,
                 page_count=1,
+                page_dimensions={page_index: (int(image.shape[1]), int(image.shape[0]))},
+                source_file_indices={page_index: source_file_index},
             )
 
             # Calculate confidence
@@ -477,6 +485,7 @@ class OCREngine:
         image: np.ndarray,
         page_index: int = 0,
         request_id: Optional[str] = None,
+        source_file_index: int = 0,
     ) -> OCRResult:
         """
         Asynchronously process a single image.
@@ -496,12 +505,14 @@ class OCREngine:
             image,
             page_index,
             request_id,
+            source_file_index,
         )
 
     def process_images(
         self,
         images: List[np.ndarray],
         request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
     ) -> OCRResult:
         """
         Process multiple images (multi-page document).
@@ -546,7 +557,14 @@ class OCREngine:
         languages = []
 
         for idx, image in enumerate(images):
-            result = self.process_image(image, page_index=idx, request_id=request_id)
+            result = self.process_image(
+                image,
+                page_index=idx,
+                request_id=request_id,
+                source_file_index=(source_file_indices[idx]
+                                   if source_file_indices and idx < len(source_file_indices)
+                                   else 0),
+            )
 
             # Merge results
             all_questions.extend(result.questions)
@@ -602,6 +620,7 @@ class OCREngine:
         self,
         images: List[np.ndarray],
         request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
     ) -> OCRResult:
         """
         Asynchronously process multiple images.
@@ -619,6 +638,7 @@ class OCREngine:
             self.process_images,
             images,
             request_id,
+            source_file_indices,
         )
 
     def process_bytes(

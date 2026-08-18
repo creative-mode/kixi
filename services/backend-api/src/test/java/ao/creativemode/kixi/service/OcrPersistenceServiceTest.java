@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
+import ao.creativemode.kixi.client.OcrUploadedFile;
 import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.repository.ClassRepository;
@@ -35,6 +36,7 @@ class OcrPersistenceServiceTest {
     private CourseRepository courseRepository;
     private SubjectRepository subjectRepository;
     private ClassRepository classRepository;
+    private OcrImageAssociationService imageAssociationService;
     private OcrPersistenceService service;
 
     @BeforeEach
@@ -47,6 +49,7 @@ class OcrPersistenceServiceTest {
         courseRepository = mock(CourseRepository.class);
         subjectRepository = mock(SubjectRepository.class);
         classRepository = mock(ClassRepository.class);
+        imageAssociationService = mock(OcrImageAssociationService.class);
 
         service = new OcrPersistenceService(
             ocrServiceClient,
@@ -56,7 +59,8 @@ class OcrPersistenceServiceTest {
             schoolYearRepository,
             courseRepository,
             subjectRepository,
-            classRepository
+            classRepository,
+            imageAssociationService
         );
     }
 
@@ -75,9 +79,15 @@ class OcrPersistenceServiceTest {
             List.of(),
             "Unreadable document"
         );
-        when(ocrServiceClient.extractText(anyList())).thenReturn(Mono.just(response));
+        when(ocrServiceClient.extractTextFromUploadedFiles(anyList())).thenReturn(Mono.just(response));
 
-        StepVerifier.create(service.processAndPersist(List.of(), 7L))
+        OcrUploadedFile source = new OcrUploadedFile(
+            "exam.png",
+            org.springframework.http.MediaType.IMAGE_PNG,
+            new byte[] {1}
+        );
+
+        StepVerifier.create(service.processAndPersist(List.of(source), 7L))
             .expectErrorSatisfies(error -> {
                 assertThat(error).isInstanceOf(ApiException.class);
                 ApiException apiException = (ApiException) error;
@@ -89,6 +99,6 @@ class OcrPersistenceServiceTest {
 
         verify(statementRepository, never()).save(org.mockito.ArgumentMatchers.any());
         verify(questionRepository, never()).save(org.mockito.ArgumentMatchers.any());
-        verify(ocrServiceClient).extractText(anyList());
+        verify(ocrServiceClient).extractTextFromUploadedFiles(anyList());
     }
 }
