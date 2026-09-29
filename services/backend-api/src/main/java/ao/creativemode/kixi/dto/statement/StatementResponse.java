@@ -3,11 +3,11 @@ package ao.creativemode.kixi.dto.statement;
 import java.time.LocalDateTime;
 
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
-import ao.creativemode.kixi.dto.classe.ClassResponse;
-import ao.creativemode.kixi.dto.courses.CourseResponse;
-import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
-import ao.creativemode.kixi.dto.subject.SubjectResponse;
-import ao.creativemode.kixi.dto.term.TermResponse;
+import ao.creativemode.kixi.academic.dto.classe.ClassResponse;
+import ao.creativemode.kixi.academic.dto.courses.CourseResponse;
+import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
+import ao.creativemode.kixi.academic.dto.subject.SubjectResponse;
+import ao.creativemode.kixi.academic.dto.term.TermResponse;
 
 public record StatementResponse(
         Long id,
