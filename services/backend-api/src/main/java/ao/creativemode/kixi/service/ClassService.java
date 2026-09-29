@@ -48,33 +48,45 @@ public class ClassService {
 
     // Create a new class
     public Mono<ClassResponse> create(ClassRequest data){
-        Class entity = new Class();
-        entity.setCode(data.code());
-        entity.setGrade(data.grade());
-        entity.setCourseId(data.courseId());
-        entity.setSchoolYearId(data.schoolYearId());
-        entity.setDeletedAt(null);
+        return requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())
+                .then(Mono.defer(() -> {
+                    Class entity = new Class();
+                    entity.setCode(data.code());
+                    entity.setGrade(data.grade());
+                    entity.setCourseId(data.courseId());
+                    entity.setSchoolYearId(data.schoolYearId());
+                    entity.setDeletedAt(null);
 
-        return repository.save(entity)
-                .flatMap(this::toResponse)
-                .onErrorMap(DataIntegrityViolationException.class,
-                        e->ApiException.conflict("class is already exist"));
-
+                    return repository.save(entity)
+                            .flatMap(this::toResponse)
+                            .onErrorMap(DataIntegrityViolationException.class,
+                                    e -> ApiException.conflict("Class violates a database constraint"));
+                }));
     }
 
     //Update a class
     public Mono<ClassResponse> update(Long id, ClassRequest data){
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("class with this id not found")))
-                .flatMap(entity->{
-                    entity.setCode(data.code());
-                    entity.setGrade(data.grade());
-                    entity.setSchoolYearId(data.schoolYearId());
-                    entity.setCourseId(data.courseId());
-                    return repository.save(entity)
-                            .onErrorMap(DataIntegrityViolationException.class,
-                                    e->ApiException.conflict("Another class already exist with this grade"));
-                }).flatMap(this::toResponse);
+                .flatMap(entity -> requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())
+                        .then(Mono.defer(() -> {
+                            entity.setCode(data.code());
+                            entity.setGrade(data.grade());
+                            entity.setSchoolYearId(data.schoolYearId());
+                            entity.setCourseId(data.courseId());
+                            return repository.save(entity)
+                                    .onErrorMap(DataIntegrityViolationException.class,
+                                            e -> ApiException.conflict("Class violates a database constraint"));
+                        })))
+                .flatMap(this::toResponse);
+    }
+
+    private Mono<Void> requireCourseAndSchoolYear(Long courseId, Long schoolYearId) {
+        return courseRepository.findById(courseId)
+                .switchIfEmpty(Mono.error(ApiException.badRequest("Course not found: " + courseId)))
+                .then(schoolYearRepository.findById(schoolYearId)
+                        .switchIfEmpty(Mono.error(ApiException.badRequest("School year not found: " + schoolYearId))))
+                .then();
     }
 
 
