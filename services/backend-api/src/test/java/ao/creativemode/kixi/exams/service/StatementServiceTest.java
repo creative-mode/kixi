@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.exams.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -8,14 +8,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import ao.creativemode.kixi.client.OcrServiceClient;
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.model.Question;
-import ao.creativemode.kixi.model.QuestionOption;
-import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.repository.QuestionOptionRepository;
-import ao.creativemode.kixi.repository.QuestionRepository;
-import ao.creativemode.kixi.repository.StatementRepository;
+import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,7 +36,6 @@ class StatementServiceTest {
     private StatementRepository statementRepository;
     private QuestionRepository questionRepository;
     private QuestionOptionRepository optionRepository;
-    private OcrServiceClient ocrServiceClient;
     private StatementService service;
 
     @BeforeEach
@@ -45,8 +43,7 @@ class StatementServiceTest {
         statementRepository = mock(StatementRepository.class);
         questionRepository = mock(QuestionRepository.class);
         optionRepository = mock(QuestionOptionRepository.class);
-        ocrServiceClient = mock(OcrServiceClient.class);
-        service = new StatementService(statementRepository, questionRepository, optionRepository, ocrServiceClient);
+        service = new StatementService(statementRepository, questionRepository, optionRepository);
     }
 
     @Test

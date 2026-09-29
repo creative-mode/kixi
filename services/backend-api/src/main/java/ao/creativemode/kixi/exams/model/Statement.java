@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.model;
+package ao.creativemode.kixi.exams.model;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.CreatedDate;

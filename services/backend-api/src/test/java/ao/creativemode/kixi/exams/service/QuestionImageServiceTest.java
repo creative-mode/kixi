@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.exams.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -16,9 +16,9 @@ import javax.imageio.ImageIO;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.config.StorageProperties;
-import ao.creativemode.kixi.dto.questionimage.QuestionImageRequest;
-import ao.creativemode.kixi.model.QuestionImage;
-import ao.creativemode.kixi.repository.QuestionImageRepository;
+import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
+import ao.creativemode.kixi.exams.model.QuestionImage;
+import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.junit.jupiter.api.BeforeEach;

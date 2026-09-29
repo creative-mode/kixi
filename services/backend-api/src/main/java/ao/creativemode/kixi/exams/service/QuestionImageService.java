@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.exams.service;
 
 import java.time.LocalDateTime;
 import java.io.ByteArrayInputStream;
@@ -9,10 +9,10 @@ import javax.imageio.ImageIO;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.config.StorageProperties;
-import ao.creativemode.kixi.dto.questionimage.QuestionImageRequest;
-import ao.creativemode.kixi.dto.questionimage.QuestionImageResponse;
-import ao.creativemode.kixi.model.QuestionImage;
-import ao.creativemode.kixi.repository.QuestionImageRepository;
+import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
+import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageResponse;
+import ao.creativemode.kixi.exams.model.QuestionImage;
+import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.springframework.core.io.buffer.DataBufferLimitException;

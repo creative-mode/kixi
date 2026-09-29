@@ -1,8 +1,8 @@
-package ao.creativemode.kixi.controller;
+package ao.creativemode.kixi.exams.controller;
 
-import ao.creativemode.kixi.dto.questionimage.QuestionImageRequest;
-import ao.creativemode.kixi.dto.questionimage.QuestionImageResponse;
-import ao.creativemode.kixi.service.QuestionImageService;
+import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
+import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageResponse;
+import ao.creativemode.kixi.exams.service.QuestionImageService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

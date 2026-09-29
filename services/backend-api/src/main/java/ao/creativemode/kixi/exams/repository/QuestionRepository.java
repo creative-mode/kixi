@@ -1,6 +1,6 @@
-package ao.creativemode.kixi.repository;
+package ao.creativemode.kixi.exams.repository;
 
-import ao.creativemode.kixi.model.Question;
+import ao.creativemode.kixi.exams.model.Question;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;

@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.questionimage;
+package ao.creativemode.kixi.exams.dto.questionimage;
 
 import jakarta.validation.constraints.NotNull;
 

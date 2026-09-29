@@ -1,9 +1,9 @@
-package ao.creativemode.kixi.repository;
+package ao.creativemode.kixi.exams.repository;
 
 
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 
-import ao.creativemode.kixi.model.QuestionImage;
+import ao.creativemode.kixi.exams.model.QuestionImage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 

@@ -15,9 +15,9 @@ import javax.imageio.ImageIO;
 
 import ao.creativemode.kixi.client.OcrUploadedFile;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
-import ao.creativemode.kixi.model.Question;
-import ao.creativemode.kixi.model.QuestionImage;
-import ao.creativemode.kixi.repository.QuestionImageRepository;
+import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.model.QuestionImage;
+import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.springframework.http.MediaType;

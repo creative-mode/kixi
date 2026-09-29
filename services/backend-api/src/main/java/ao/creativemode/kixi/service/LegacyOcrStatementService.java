@@ -6,12 +6,13 @@ import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedOption;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedQuestion;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.OcrMetadata;
-import ao.creativemode.kixi.model.Question;
-import ao.creativemode.kixi.model.QuestionOption;
-import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.repository.QuestionOptionRepository;
-import ao.creativemode.kixi.repository.QuestionRepository;
-import ao.creativemode.kixi.repository.StatementRepository;
+import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.slf4j.Logger;
@@ -23,32 +24,28 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * Service for managing Statement entities and OCR integration.
+ * Simple OCR-to-statement creation path that does not look up or create
+ * related entities (SchoolYear, Course, Subject, Class). Kept separate from
+ * StatementService, which owns statement CRUD/lifecycle, so that the exams
+ * module never needs to depend on the OCR client.
  *
- * Provides business logic for:
- * - CRUD operations on statements
- * - OCR-based statement creation from images
- * - Mapping OCR results to domain entities
- * - Managing questions and options
- *
- * For full OCR processing with entity lookup/creation, use OcrPersistenceService.
+ * For full entity lookup/creation, use OcrPersistenceService instead.
  */
 @Service
-public class StatementService {
+public class LegacyOcrStatementService {
 
     private static final Logger log = LoggerFactory.getLogger(
-        StatementService.class
+        LegacyOcrStatementService.class
     );
 
     private static final double LOW_CONFIDENCE_THRESHOLD = 0.8;
-    private static final double MIN_CONFIDENCE_THRESHOLD = 0.5;
 
     private final StatementRepository statementRepository;
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final OcrServiceClient ocrServiceClient;
 
-    public StatementService(
+    public LegacyOcrStatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
@@ -60,15 +57,8 @@ public class StatementService {
         this.ocrServiceClient = ocrServiceClient;
     }
 
-    // =========================================================================
-    // OCR Integration (Legacy - for simple cases without entity lookup)
-    // =========================================================================
-
     /**
      * Create a statement from uploaded images using OCR.
-     *
-     * Note: For full entity lookup/creation (SchoolYear, Course, Subject, Class),
-     * use OcrPersistenceService.processAndPersist() instead.
      *
      * @param files List of uploaded image files
      * @param createdBy ID of the user creating the statement
@@ -407,280 +397,4 @@ public class StatementService {
                 return optionRepository.save(option);
             });
     }
-
-    // =========================================================================
-    // CRUD Operations
-    // =========================================================================
-
-    /**
-     * Find all active (non-deleted) statements.
-     */
-    public Flux<Statement> findAllActive() {
-        return statementRepository.findAllByDeletedAtIsNull();
-    }
-
-    /**
-     * Find all visible active statements for student-facing reads.
-     */
-    public Flux<Statement> findAllVisible() {
-        return statementRepository.findAllByVisibleTrueAndDeletedAtIsNull();
-    }
-
-    /**
-     * Find all soft-deleted statements.
-     */
-    public Flux<Statement> findAllDeleted() {
-        return statementRepository.findAllByDeletedAtIsNotNull();
-    }
-
-    /**
-     * Find a statement by ID.
-     */
-    public Mono<Statement> findById(Long id) {
-        return statementRepository
-            .findByIdAndDeletedAtIsNull(id)
-            .switchIfEmpty(
-                Mono.error(ApiException.notFound("Statement not found: " + id))
-            );
-    }
-
-    /**
-     * Find a visible active statement by ID.
-     */
-    public Mono<Statement> findByIdVisible(Long id) {
-        return statementRepository
-            .findByIdAndVisibleTrueAndDeletedAtIsNull(id)
-            .switchIfEmpty(
-                Mono.error(ApiException.notFound("Statement not found: " + id))
-            );
-    }
-
-    /**
-     * Find a statement with its questions.
-     */
-    public Mono<StatementWithQuestions> findByIdWithQuestions(Long id) {
-        return findByIdWithQuestions(findById(id));
-    }
-
-    /**
-     * Find a visible statement with its questions.
-     */
-    public Mono<StatementWithQuestions> findByIdWithQuestionsVisible(Long id) {
-        return findByIdWithQuestions(findByIdVisible(id));
-    }
-
-    private Mono<StatementWithQuestions> findByIdWithQuestions(Mono<Statement> statementMono) {
-        return statementMono.flatMap(statement ->
-            questionRepository
-                .findAllByStatementIdOrderByOrderIndex(statement.getId())
-                .collectList()
-                .flatMap(questions -> {
-                    if (questions.isEmpty()) {
-                        return Mono.just(
-                            new StatementWithQuestions(
-                                statement,
-                                List.of(),
-                                List.of()
-                            )
-                        );
-                    }
-
-                    List<Long> questionIds = questions
-                        .stream()
-                        .map(Question::getId)
-                        .toList();
-
-                    return optionRepository
-                        .findAllByQuestionIds(questionIds)
-                        .collectList()
-                        .map(options ->
-                            new StatementWithQuestions(
-                                statement,
-                                questions,
-                                options
-                            )
-                        );
-                })
-        );
-    }
-
-    /**
-     * Find statements needing review.
-     */
-    public Flux<Statement> findNeedingReview() {
-        return statementRepository.findAllByNeedsReviewTrueAndDeletedAtIsNull();
-    }
-
-    /**
-     * Find statements created via OCR.
-     */
-    public Flux<Statement> findFromOcr() {
-        return statementRepository.findAllFromOcr();
-    }
-
-    /**
-     * Find statements by school year.
-     */
-    public Flux<Statement> findBySchoolYear(Long schoolYearId) {
-        return statementRepository.findAllBySchoolYearIdAndDeletedAtIsNull(
-            schoolYearId
-        );
-    }
-
-    /**
-     * Find visible statements by school year.
-     */
-    public Flux<Statement> findBySchoolYearVisible(Long schoolYearId) {
-        return statementRepository.findAllByVisibleTrueAndSchoolYearIdAndDeletedAtIsNull(
-            schoolYearId
-        );
-    }
-
-    /**
-     * Find statements by subject.
-     */
-    public Flux<Statement> findBySubject(Long subjectId) {
-        return statementRepository.findAllBySubjectIdAndDeletedAtIsNull(
-            subjectId
-        );
-    }
-
-    /**
-     * Find visible statements by subject.
-     */
-    public Flux<Statement> findBySubjectVisible(Long subjectId) {
-        return statementRepository.findAllByVisibleTrueAndSubjectIdAndDeletedAtIsNull(
-            subjectId
-        );
-    }
-
-    /**
-     * Search statements by title.
-     */
-    public Flux<Statement> searchByTitle(String searchTerm) {
-        return statementRepository.searchByTitle(searchTerm);
-    }
-
-    /**
-     * Search only visible active statements by title.
-     */
-    public Flux<Statement> searchByTitleVisible(String searchTerm) {
-        return statementRepository.searchVisibleByTitle(searchTerm);
-    }
-
-    /**
-     * Save a statement.
-     */
-    public Mono<Statement> save(Statement statement) {
-        return statementRepository.save(statement);
-    }
-
-    /**
-     * Soft delete a statement.
-     */
-    @Transactional
-    public Mono<Void> softDelete(Long id) {
-        return findById(id)
-            .flatMap(statement -> {
-                statement.markAsDeleted();
-                return statementRepository.save(statement);
-            })
-            .then();
-    }
-
-    /**
-     * Restore a soft-deleted statement.
-     */
-    @Transactional
-    public Mono<Void> restore(Long id) {
-        return statementRepository
-            .findByIdAndDeletedAtIsNotNull(id)
-            .switchIfEmpty(
-                Mono.error(
-                    ApiException.notFound("Deleted statement not found: " + id)
-                )
-            )
-            .flatMap(statement -> {
-                statement.restore();
-                return statementRepository.save(statement);
-            })
-            .then();
-    }
-
-    /**
-     * Hard delete a statement and its questions/options.
-     */
-    @Transactional
-    public Mono<Void> hardDelete(Long id) {
-        return findById(id).flatMap(statement ->
-            questionRepository
-                .findAllByStatementIdOrderByOrderIndex(statement.getId())
-                .flatMap(question ->
-                    optionRepository
-                        .softDeleteAllByQuestionId(question.getId())
-                        .then(questionRepository.delete(question))
-                )
-                .then(statementRepository.delete(statement))
-        );
-    }
-
-    /**
-     * Approve a statement review.
-     */
-    @Transactional
-    public Mono<Statement> approveReview(Long id) {
-        return findById(id).flatMap(statement -> {
-            statement.approveReview();
-            return statementRepository.save(statement);
-        });
-    }
-
-    /**
-     * Set statement visibility.
-     */
-    @Transactional
-    public Mono<Statement> setVisible(Long id, boolean visible) {
-        return findById(id).flatMap(statement -> {
-            statement.setVisible(visible);
-            return statementRepository.save(statement);
-        });
-    }
-
-    // =========================================================================
-    // Statistics
-    // =========================================================================
-
-    /**
-     * Count active statements.
-     */
-    public Mono<Long> countActive() {
-        return statementRepository.countByDeletedAtIsNull();
-    }
-
-    /**
-     * Count statements needing review.
-     */
-    public Mono<Long> countNeedingReview() {
-        return statementRepository.countByNeedsReviewTrueAndDeletedAtIsNull();
-    }
-
-    /**
-     * Count statements by source.
-     */
-    public Mono<Long> countBySource(String source) {
-        return statementRepository.countBySourceAndDeletedAtIsNull(source);
-    }
-
-    // =========================================================================
-    // Result Records
-    // =========================================================================
-
-    /**
-     * Statement with its questions and options.
-     */
-    public record StatementWithQuestions(
-        Statement statement,
-        List<Question> questions,
-        List<QuestionOption> options
-    ) {}
 }

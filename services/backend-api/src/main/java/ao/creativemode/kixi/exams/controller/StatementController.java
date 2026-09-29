@@ -1,11 +1,12 @@
-package ao.creativemode.kixi.controller;
+package ao.creativemode.kixi.exams.controller;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.model.Question;
-import ao.creativemode.kixi.model.QuestionOption;
-import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.service.StatementService;
-import ao.creativemode.kixi.service.StatementService.StatementWithQuestions;
+import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.service.LegacyOcrStatementService;
+import ao.creativemode.kixi.exams.service.StatementService;
+import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import java.net.URI;
 import java.util.HashMap;
@@ -57,13 +58,16 @@ public class StatementController {
     private static final int MAX_FILES = 10;
 
     private final StatementService statementService;
+    private final LegacyOcrStatementService legacyOcrStatementService;
     private final CurrentAccountService currentAccountService;
 
     public StatementController(
         StatementService statementService,
+        LegacyOcrStatementService legacyOcrStatementService,
         CurrentAccountService currentAccountService
     ) {
         this.statementService = statementService;
+        this.legacyOcrStatementService = legacyOcrStatementService;
         this.currentAccountService = currentAccountService;
     }
 
@@ -121,7 +125,7 @@ public class StatementController {
                     fileList.size()
                 );
 
-                return statementService.createFromOcr(fileList, createdBy);
+                return legacyOcrStatementService.createFromOcr(fileList, createdBy);
             }))
             .map(result -> {
                 URI location = uriBuilder
@@ -176,7 +180,7 @@ public class StatementController {
         }
 
         return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> statementService
+            .flatMap(createdBy -> legacyOcrStatementService
                 .createFromOcr(List.of(file), createdBy))
             .map(result -> {
                 URI location = uriBuilder

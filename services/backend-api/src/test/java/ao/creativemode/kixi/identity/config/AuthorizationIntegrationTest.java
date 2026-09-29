@@ -8,9 +8,9 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 
 import ao.creativemode.kixi.client.OcrServiceClient;
 import ao.creativemode.kixi.controller.OcrController;
-import ao.creativemode.kixi.controller.StatementController;
+import ao.creativemode.kixi.exams.controller.StatementController;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
-import ao.creativemode.kixi.model.Statement;
+import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -69,7 +69,10 @@ class AuthorizationIntegrationTest {
     private OcrPersistenceService ocrPersistenceService;
 
     @MockBean
-    private ao.creativemode.kixi.service.StatementService statementService;
+    private ao.creativemode.kixi.exams.service.StatementService statementService;
+
+    @MockBean
+    private ao.creativemode.kixi.service.LegacyOcrStatementService legacyOcrStatementService;
 
     @Test
     void rejectsAnonymousSimulationReads() {

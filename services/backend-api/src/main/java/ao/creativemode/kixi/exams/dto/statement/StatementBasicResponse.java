@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.statement;
+package ao.creativemode.kixi.exams.dto.statement;
 
 public record StatementBasicResponse(
     Long id,

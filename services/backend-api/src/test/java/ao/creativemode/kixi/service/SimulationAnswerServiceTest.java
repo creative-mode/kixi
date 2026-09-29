@@ -9,10 +9,10 @@ import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
-import ao.creativemode.kixi.model.Question;
+import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.model.Simulation;
 import ao.creativemode.kixi.model.SimulationAnswer;
-import ao.creativemode.kixi.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.repository.SimulationRepository;
 import org.junit.jupiter.api.BeforeEach;
