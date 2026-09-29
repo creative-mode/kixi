@@ -15,8 +15,6 @@ import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ServerWebExchange;
 
-import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrClientException;
-import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.shared.dto.ProblemDetail;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import reactor.core.publisher.Mono;
@@ -35,8 +33,6 @@ public class GlobalExceptionHandler {
     private static final URI DEFAULT_TYPE = URI.create(
         "https://api.kixi.com/errors"
     );
-    // Adiciona URI para erros OCR
-    private static final URI OCR_ERROR_TYPE = URI.create("https://api.kixi.ao/errors/ocr-error");
 
     /**
      * Handle custom API exceptions with proper status codes.
@@ -56,7 +52,7 @@ public class GlobalExceptionHandler {
             statusCode,
             ex.getMessage() != null ? ex.getMessage() : "API Error occurred"
         ).withTitle(status.getReasonPhrase());
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.status(statusCode).body(problem));
     }
@@ -93,69 +89,9 @@ public class GlobalExceptionHandler {
             fieldErrors
         );
 
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.badRequest().body(problem));
-    }
-
-    /**
-     * Handle OCR client exceptions (4xx errors from OCR service).
-     */
-    @ExceptionHandler(OcrClientException.class)
-    public Mono<ResponseEntity<ProblemDetail>> handleOcrClientException(
-        OcrClientException ex,
-        ServerWebExchange exchange
-    ) {
-        log.warn(
-            "OCR client error: status={}, type={}, requestId={}",
-            ex.getStatusCode(),
-            ex.getClass().getSimpleName(),
-            RequestIdWebFilter.requestId(exchange)
-        );
-
-        ProblemDetail problem = new ProblemDetail(
-            OCR_ERROR_TYPE,
-            "OCR Processing Error",
-            ex.getStatusCode(),
-            "The OCR request was rejected. Please verify the uploaded file and try again.",
-            Map.of("service", "ocr-service", "errorType", "client_error")
-        );
-
-        problem = addInstance(exchange, problem);
-
-        return Mono.just(
-            ResponseEntity.status(ex.getStatusCode()).body(problem)
-        );
-    }
-
-    /**
-     * Handle OCR server exceptions (5xx errors from OCR service).
-     */
-    @ExceptionHandler(OcrServerException.class)
-    public Mono<ResponseEntity<ProblemDetail>> handleOcrServerException(
-        OcrServerException ex,
-        ServerWebExchange exchange
-    ) {
-        log.error(
-            "OCR server error: status={}, type={}, requestId={}",
-            ex.getStatusCode(),
-            ex.getClass().getSimpleName(),
-            RequestIdWebFilter.requestId(exchange)
-        );
-
-        ProblemDetail problem = new ProblemDetail(
-            OCR_ERROR_TYPE,
-            "OCR Service Unavailable",
-            HttpStatus.SERVICE_UNAVAILABLE.value(),
-            "The OCR service is temporarily unavailable. Please try again later.",
-            Map.of("service", "ocr-service", "errorType", "server_error")
-        );
-
-        problem = addInstance(exchange, problem);
-
-        return Mono.just(
-            ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problem)
-        );
     }
 
     /**
@@ -177,7 +113,7 @@ public class GlobalExceptionHandler {
             Map.of("errorType", "timeout")
         );
 
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(
             ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT).body(problem)
@@ -200,7 +136,7 @@ public class GlobalExceptionHandler {
             ex.getMessage() != null ? ex.getMessage() : "Invalid request"
         ).withTitle("Bad Request");
 
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.badRequest().body(problem));
     }
@@ -229,7 +165,7 @@ public class GlobalExceptionHandler {
             detail != null ? detail : "Invalid request"
         ).withTitle(HttpStatus.valueOf(statusCode).getReasonPhrase());
 
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.status(statusCode).body(problem));
     }
@@ -249,33 +185,8 @@ public class GlobalExceptionHandler {
             500,
             "An unexpected error occurred on the server. Please try again later."
         ).withTitle("Internal Server Error");
-        problem = addInstance(exchange, problem);
+        problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.internalServerError().body(problem));
-    }
-
-    /**
-     * Adds the 'instance' field with the URI of the current request (RFC 9457
-     * recommended)
-     */
-    private ProblemDetail addInstance(
-        ServerWebExchange exchange,
-        ProblemDetail problem
-    ) {
-        String requestUri = exchange.getRequest().getPath().value();
-        Map<String, Object> currentProps =
-            problem.properties() != null ? problem.properties() : Map.of();
-        Map<String, Object> updatedProps = new java.util.HashMap<>(
-            currentProps
-        );
-        updatedProps.put("instance", requestUri);
-        updatedProps.put("requestId", RequestIdWebFilter.requestId(exchange));
-        return new ProblemDetail(
-            problem.type(),
-            problem.title(),
-            problem.status(),
-            problem.detail(),
-            updatedProps
-        );
     }
 }

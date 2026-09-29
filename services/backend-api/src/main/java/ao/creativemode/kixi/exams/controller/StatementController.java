@@ -1,27 +1,16 @@
 package ao.creativemode.kixi.exams.controller;
 
-import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.exams.model.Question;
-import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
 import ao.creativemode.kixi.exams.model.Statement;
-import ao.creativemode.kixi.ocr.service.LegacyOcrStatementService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
-import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Supplier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -30,9 +19,12 @@ import reactor.core.publisher.Mono;
  *
  * Provides endpoints for:
  * - CRUD operations on statements
- * - OCR-based statement creation from images
  * - Managing statement visibility and review status
  * - Retrieving statements with their questions and options
+ *
+ * OCR-based creation lives in the ocr module's LegacyOcrStatementController,
+ * under this same base path, so that this module never needs to depend on
+ * the OCR client.
  *
  * Base path: /api/v1/statements
  */
@@ -40,169 +32,15 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/api/v1/statements")
 public class StatementController {
 
-    private static final Logger log = LoggerFactory.getLogger(
-        StatementController.class
-    );
-
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".pdf",
-        ".webp",
-        ".bmp",
-        ".tiff",
-        ".tif"
-    );
-
-    private static final int MAX_FILES = 10;
-
     private final StatementService statementService;
-    private final LegacyOcrStatementService legacyOcrStatementService;
     private final CurrentAccountService currentAccountService;
 
     public StatementController(
         StatementService statementService,
-        LegacyOcrStatementService legacyOcrStatementService,
         CurrentAccountService currentAccountService
     ) {
         this.statementService = statementService;
-        this.legacyOcrStatementService = legacyOcrStatementService;
         this.currentAccountService = currentAccountService;
-    }
-
-    // =========================================================================
-    // OCR Endpoints
-    // =========================================================================
-
-    /**
-     * Create a statement from uploaded images using OCR.
-     *
-     * This endpoint receives image files, sends them to the OCR service,
-     * and creates a Statement with Questions based on the extracted data.
-     *
-     * @param files Uploaded image files (multipart/form-data)
-     * @param uriBuilder URI builder for location header
-     * @return Created statement with questions and options
-     */
-    @PostMapping(
-        value = "/ocr/extract",
-        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
-    )
-    public Mono<ResponseEntity<StatementOcrResponse>> createFromOcr(
-        @RequestPart("files") Flux<FilePart> files,
-        UriComponentsBuilder uriBuilder
-    ) {
-        log.info("OCR statement creation request received");
-
-        return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> files.collectList().flatMap(fileList -> {
-                // Validate file count
-                if (fileList.isEmpty()) {
-                    return Mono.error(
-                        ApiException.badRequest("At least one file is required")
-                    );
-                }
-                if (fileList.size() > MAX_FILES) {
-                    return Mono.error(
-                        ApiException.badRequest(
-                            "Maximum " +
-                                MAX_FILES +
-                                " files allowed per request"
-                        )
-                    );
-                }
-
-                // Validate file types
-                for (FilePart file : fileList) {
-                    if (!isAllowedFileType(file.filename())) {
-                        return Mono.error(invalidFileTypeException());
-                    }
-                }
-
-                log.info(
-                    "Processing {} file(s) for OCR-based statement creation",
-                    fileList.size()
-                );
-
-                return legacyOcrStatementService.createFromOcr(fileList, createdBy);
-            }))
-            .map(result -> {
-                URI location = uriBuilder
-                    .path("/api/v1/statements/{id}")
-                    .buildAndExpand(result.statement().getId())
-                    .toUri();
-
-                StatementOcrResponse response = StatementOcrResponse.from(
-                    result
-                );
-
-                return ResponseEntity.created(location).body(response);
-            })
-            .doOnSuccess(response ->
-                log.info(
-                    "Statement created from OCR: id={}",
-                    response.getBody() != null ? response.getBody().id() : null
-                )
-            )
-            .doOnError(error -> log.error(
-                "OCR statement creation failed: type={}",
-                error.getClass().getSimpleName()));
-    }
-
-    /**
-     * Create a statement from a single uploaded image using OCR.
-     *
-     * Simplified endpoint for single-file uploads.
-     *
-     * @param file Single uploaded image file
-     * @param uriBuilder URI builder for location header
-     * @return Created statement with questions and options
-     */
-    @PostMapping(
-        value = "/ocr/extract/single",
-        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
-    )
-    public Mono<ResponseEntity<StatementOcrResponse>> createFromOcrSingle(
-        @RequestPart("file") FilePart file,
-        UriComponentsBuilder uriBuilder
-    ) {
-        log.info(
-            "Single-file OCR statement creation request received: {}",
-            safeFilename(file.filename())
-        );
-
-        // Validate file type
-        if (!isAllowedFileType(file.filename())) {
-            return Mono.error(
-                invalidFileTypeException()
-            );
-        }
-
-        return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> legacyOcrStatementService
-                .createFromOcr(List.of(file), createdBy))
-            .map(result -> {
-                URI location = uriBuilder
-                    .path("/api/v1/statements/{id}")
-                    .buildAndExpand(result.statement().getId())
-                    .toUri();
-
-                StatementOcrResponse response = StatementOcrResponse.from(
-                    result
-                );
-
-                return ResponseEntity.created(location).body(response);
-            })
-            .doOnSuccess(response ->
-                log.info(
-                    "Statement created from single-file OCR: id={}",
-                    response.getBody() != null ? response.getBody().id() : null
-                )
-            )
-            .doOnError(error -> log.error(
-                "Single-file OCR statement creation failed: type={}",
-                error.getClass().getSimpleName()));
     }
 
     // =========================================================================
@@ -435,35 +273,6 @@ public class StatementController {
     }
 
     // =========================================================================
-    // Helper Methods
-    // =========================================================================
-
-    /**
-     * Validate file extension.
-     */
-    private boolean isAllowedFileType(String filename) {
-        if (filename == null || filename.isBlank()) {
-            return false;
-        }
-
-        String lowerFilename = filename.toLowerCase();
-        return ALLOWED_EXTENSIONS.stream().anyMatch(lowerFilename::endsWith);
-    }
-
-    private static ApiException invalidFileTypeException() {
-        return ApiException.badRequest(
-            "Invalid file type. Allowed: " + String.join(", ", ALLOWED_EXTENSIONS));
-    }
-
-    private static String safeFilename(String filename) {
-        if (filename == null || filename.isBlank()) {
-            return "<unnamed>";
-        }
-        String sanitized = filename.replace("\r", "").replace("\n", "");
-        return sanitized.substring(0, Math.min(sanitized.length(), 255));
-    }
-
-    // =========================================================================
     // Response DTOs
     // =========================================================================
 
@@ -502,124 +311,6 @@ public class StatementController {
                 statement.getTermId(),
                 statement.getSubjectId(),
                 statement.getClassId()
-            );
-        }
-    }
-
-    /**
-     * Full response including questions and options.
-     */
-    public record StatementOcrResponse(
-        Long id,
-        String title,
-        String examType,
-        Integer durationMinutes,
-        String variant,
-        String instructions,
-        Double totalMaxScore,
-        Boolean visible,
-        Boolean needsReview,
-        String source,
-        Double ocrConfidence,
-        String ocrRequestId,
-        Long schoolYearId,
-        Long termId,
-        Long subjectId,
-        Long classId,
-        List<QuestionResponse> questions
-    ) {
-        public static StatementOcrResponse from(StatementWithQuestions result) {
-            Statement s = result.statement();
-            List<Question> questions = result.questions();
-            List<QuestionOption> allOptions = result.options();
-
-            List<QuestionResponse> questionResponses = questions
-                .stream()
-                .map(q -> {
-                    List<OptionResponse> options = allOptions
-                        .stream()
-                        .filter(opt -> opt.getQuestionId().equals(q.getId()))
-                        .map(OptionResponse::from)
-                        .toList();
-                    return QuestionResponse.from(q, options);
-                })
-                .toList();
-
-            return new StatementOcrResponse(
-                s.getId(),
-                s.getTitle(),
-                s.getExamType(),
-                s.getDurationMinutes(),
-                s.getVariant(),
-                s.getInstructions(),
-                s.getTotalMaxScore(),
-                s.getVisible(),
-                s.getNeedsReview(),
-                s.getSource(),
-                s.getOcrConfidence(),
-                s.getOcrRequestId(),
-                s.getSchoolYearId(),
-                s.getTermId(),
-                s.getSubjectId(),
-                s.getClassId(),
-                questionResponses
-            );
-        }
-    }
-
-    /**
-     * Question response DTO.
-     */
-    public record QuestionResponse(
-        Long id,
-        Integer number,
-        String text,
-        String questionType,
-        Double maxScore,
-        Integer orderIndex,
-        Double ocrConfidence,
-        Integer pageIndex,
-        Boolean needsReview,
-        List<OptionResponse> options
-    ) {
-        public static QuestionResponse from(
-            Question q,
-            List<OptionResponse> options
-        ) {
-            return new QuestionResponse(
-                q.getId(),
-                q.getNumber(),
-                q.getText(),
-                q.getQuestionType(),
-                q.getMaxScore(),
-                q.getOrderIndex(),
-                q.getOcrConfidence(),
-                q.getPageIndex(),
-                q.getNeedsReview(),
-                options
-            );
-        }
-    }
-
-    /**
-     * Option response DTO.
-     */
-    public record OptionResponse(
-        Long id,
-        String optionLabel,
-        String optionText,
-        Boolean isCorrect,
-        Integer orderIndex,
-        Double ocrConfidence
-    ) {
-        public static OptionResponse from(QuestionOption o) {
-            return new OptionResponse(
-                o.getId(),
-                o.getOptionLabel(),
-                o.getOptionText(),
-                o.getIsCorrect(),
-                o.getOrderIndex(),
-                o.getOcrConfidence()
             );
         }
     }

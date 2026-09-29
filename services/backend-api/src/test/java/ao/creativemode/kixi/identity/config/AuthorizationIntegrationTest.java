@@ -71,9 +71,6 @@ class AuthorizationIntegrationTest {
     @MockBean
     private ao.creativemode.kixi.exams.service.StatementService statementService;
 
-    @MockBean
-    private ao.creativemode.kixi.ocr.service.LegacyOcrStatementService legacyOcrStatementService;
-
     @Test
     void rejectsAnonymousSimulationReads() {
         client.get()

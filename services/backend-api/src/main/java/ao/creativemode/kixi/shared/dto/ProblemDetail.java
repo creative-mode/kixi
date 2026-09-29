@@ -1,7 +1,10 @@
 package ao.creativemode.kixi.shared.dto;
 
+import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import java.net.URI;
+import java.util.HashMap;
 import java.util.Map;
+import org.springframework.web.server.ServerWebExchange;
 
 public record ProblemDetail(
         URI type,
@@ -35,5 +38,19 @@ public record ProblemDetail(
 
     public ProblemDetail withTitle(String title) {
         return new ProblemDetail(type, title, status, detail, properties);
+    }
+
+    /**
+     * Adds the 'instance' and 'requestId' fields describing the current
+     * request (RFC 9457 recommends 'instance'; 'requestId' is this API's
+     * own addition for correlating with logs).
+     */
+    public ProblemDetail withInstance(ServerWebExchange exchange) {
+        Map<String, Object> updatedProps = new HashMap<>(
+                properties != null ? properties : Map.of()
+        );
+        updatedProps.put("instance", exchange.getRequest().getPath().value());
+        updatedProps.put("requestId", RequestIdWebFilter.requestId(exchange));
+        return new ProblemDetail(type, title, status, detail, updatedProps);
     }
 }
