@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ServerWebExchange;
 
@@ -202,6 +203,35 @@ public class GlobalExceptionHandler {
         problem = addInstance(exchange, problem);
 
         return Mono.just(ResponseEntity.badRequest().body(problem));
+    }
+
+    /**
+     * Handle framework-level HTTP errors that WebFlux raises before a
+     * controller method runs, e.g. a multipart request missing a required
+     * part (ServerWebInputException), no body at all (UnsupportedMediaTypeStatusException),
+     * or an unsupported HTTP method (MethodNotAllowedException). These all
+     * carry their own correct status code via getStatusCode(); without this
+     * handler they fall through to the generic 500 handler below and hide a
+     * client error as a server fault.
+     */
+    @ExceptionHandler(ErrorResponseException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleErrorResponseException(
+        ErrorResponseException ex,
+        ServerWebExchange exchange
+    ) {
+        int statusCode = ex.getStatusCode().value();
+        log.warn("Framework HTTP error: type={}, status={}, requestId={}",
+            ex.getClass().getSimpleName(), statusCode, RequestIdWebFilter.requestId(exchange));
+
+        String detail = ex.getBody().getDetail();
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            statusCode,
+            detail != null ? detail : "Invalid request"
+        ).withTitle(HttpStatus.valueOf(statusCode).getReasonPhrase());
+
+        problem = addInstance(exchange, problem);
+
+        return Mono.just(ResponseEntity.status(statusCode).body(problem));
     }
 
     /**
