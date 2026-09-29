@@ -1,6 +1,6 @@
 package ao.creativemode.kixi.dto.simulation;
 
-import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
+import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.dto.statement.StatementBasicResponse;
 import ao.creativemode.kixi.model.SimulationStatus;

@@ -2,7 +2,7 @@ package ao.creativemode.kixi.dto.statement;
 
 import java.time.LocalDateTime;
 
-import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
+import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.dto.classe.ClassResponse;
 import ao.creativemode.kixi.dto.courses.CourseResponse;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;

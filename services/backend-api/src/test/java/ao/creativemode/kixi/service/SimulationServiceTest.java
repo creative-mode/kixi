@@ -9,12 +9,12 @@ import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.simulation.SimulationRequest;
-import ao.creativemode.kixi.model.Account;
+import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.model.SchoolYear;
 import ao.creativemode.kixi.model.Simulation;
 import ao.creativemode.kixi.model.SimulationStatus;
 import ao.creativemode.kixi.model.Statement;
-import ao.creativemode.kixi.repository.AccountRepository;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.repository.SchoolYearRepository;
 import ao.creativemode.kixi.repository.SimulationRepository;
 import ao.creativemode.kixi.repository.StatementRepository;

@@ -5,13 +5,20 @@ import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
+import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.dto.simulation.SimulationRequest;
 import ao.creativemode.kixi.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.dto.statement.StatementBasicResponse;
-import ao.creativemode.kixi.model.*;
-import ao.creativemode.kixi.repository.*;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
+import ao.creativemode.kixi.model.SchoolYear;
+import ao.creativemode.kixi.model.Simulation;
+import ao.creativemode.kixi.model.SimulationStatus;
+import ao.creativemode.kixi.model.Statement;
+import ao.creativemode.kixi.repository.SchoolYearRepository;
+import ao.creativemode.kixi.repository.SimulationRepository;
+import ao.creativemode.kixi.repository.StatementRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
