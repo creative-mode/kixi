@@ -1,13 +1,13 @@
-package ao.creativemode.kixi.controller;
+package ao.creativemode.kixi.simulations.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import ao.creativemode.kixi.dto.simulation.SimulationRequest;
+import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import jakarta.validation.Valid;
-import ao.creativemode.kixi.dto.simulation.SimulationResponse;
-import ao.creativemode.kixi.service.SimulationService;
+import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
+import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;

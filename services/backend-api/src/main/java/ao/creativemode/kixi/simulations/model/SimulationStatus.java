@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.model;
+package ao.creativemode.kixi.simulations.model;
 
 public enum SimulationStatus {
     IN_PROGRESS,

@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.simulationanswer;
+package ao.creativemode.kixi.simulations.dto.simulationanswer;
 
 import java.time.LocalDateTime;
 

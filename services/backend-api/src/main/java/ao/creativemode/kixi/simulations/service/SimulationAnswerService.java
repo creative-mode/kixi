@@ -1,13 +1,13 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.simulations.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
-import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
-import ao.creativemode.kixi.model.SimulationAnswer;
-import ao.creativemode.kixi.model.Simulation;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
+import ao.creativemode.kixi.simulations.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
-import ao.creativemode.kixi.repository.SimulationAnswerRepository;
-import ao.creativemode.kixi.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;

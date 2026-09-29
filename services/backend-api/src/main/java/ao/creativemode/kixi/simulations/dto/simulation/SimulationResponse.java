@@ -1,9 +1,9 @@
-package ao.creativemode.kixi.dto.simulation;
+package ao.creativemode.kixi.simulations.dto.simulation;
 
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.exams.dto.statement.StatementBasicResponse;
-import ao.creativemode.kixi.model.SimulationStatus;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 
 import java.time.LocalDateTime;
 

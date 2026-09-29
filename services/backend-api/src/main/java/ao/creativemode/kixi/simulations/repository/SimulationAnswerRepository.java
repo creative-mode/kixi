@@ -1,6 +1,6 @@
-package ao.creativemode.kixi.repository;
+package ao.creativemode.kixi.simulations.repository;
 
-import ao.creativemode.kixi.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import java.util.Collection;
 import reactor.core.publisher.Flux;

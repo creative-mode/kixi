@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.simulationanswer;
+package ao.creativemode.kixi.simulations.dto.simulationanswer;
 
 import jakarta.validation.constraints.NotNull;
 import java.time.LocalDateTime;

@@ -1,8 +1,8 @@
-package ao.creativemode.kixi.dto.simulation;
+package ao.creativemode.kixi.simulations.dto.simulation;
 
 import java.time.LocalDateTime;
 
-import ao.creativemode.kixi.model.SimulationStatus;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import jakarta.validation.constraints.NotNull;
 
 public record SimulationRequest(

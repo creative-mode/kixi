@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.simulations.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -8,15 +8,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.simulation.SimulationRequest;
+import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.academic.model.SchoolYear;
-import ao.creativemode.kixi.model.Simulation;
-import ao.creativemode.kixi.model.SimulationStatus;
+import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
-import ao.creativemode.kixi.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;

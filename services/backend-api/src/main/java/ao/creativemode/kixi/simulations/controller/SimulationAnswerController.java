@@ -1,10 +1,10 @@
-package ao.creativemode.kixi.controller;
+package ao.creativemode.kixi.simulations.controller;
 
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
-import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
-import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
-import ao.creativemode.kixi.service.SimulationAnswerService;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
+import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;

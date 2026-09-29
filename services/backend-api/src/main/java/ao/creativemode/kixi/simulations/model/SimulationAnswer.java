@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.model;
+package ao.creativemode.kixi.simulations.model;
 
 import java.time.LocalDateTime;
 import lombok.Getter;

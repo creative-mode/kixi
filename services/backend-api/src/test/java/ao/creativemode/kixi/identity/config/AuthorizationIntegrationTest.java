@@ -17,8 +17,8 @@ import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.identity.service.JwtService;
 import ao.creativemode.kixi.service.OcrPersistenceService;
 import ao.creativemode.kixi.service.OcrPersistenceService.StatementWithRelations;
-import ao.creativemode.kixi.service.SimulationAnswerService;
-import ao.creativemode.kixi.service.SimulationService;
+import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
+import ao.creativemode.kixi.simulations.service.SimulationService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,8 +37,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @WebFluxTest(controllers = {
-        ao.creativemode.kixi.controller.SimulationController.class,
-        ao.creativemode.kixi.controller.SimulationAnswerController.class,
+        ao.creativemode.kixi.simulations.controller.SimulationController.class,
+        ao.creativemode.kixi.simulations.controller.SimulationAnswerController.class,
         OcrController.class,
         StatementController.class
 })

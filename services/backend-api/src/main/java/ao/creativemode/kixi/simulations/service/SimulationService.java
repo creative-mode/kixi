@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.simulations.service;
 
 import java.time.LocalDateTime;
 
@@ -7,17 +7,17 @@ import org.springframework.stereotype.Service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
-import ao.creativemode.kixi.dto.simulation.SimulationRequest;
-import ao.creativemode.kixi.dto.simulation.SimulationResponse;
+import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
+import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.exams.dto.statement.StatementBasicResponse;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.academic.model.SchoolYear;
-import ao.creativemode.kixi.model.Simulation;
-import ao.creativemode.kixi.model.SimulationStatus;
+import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
-import ao.creativemode.kixi.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
