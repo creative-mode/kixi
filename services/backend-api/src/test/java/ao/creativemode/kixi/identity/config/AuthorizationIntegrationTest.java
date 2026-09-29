@@ -6,17 +6,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
-import ao.creativemode.kixi.client.OcrServiceClient;
-import ao.creativemode.kixi.controller.OcrController;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient;
+import ao.creativemode.kixi.ocr.controller.OcrController;
 import ao.creativemode.kixi.exams.controller.StatementController;
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.identity.service.JwtService;
-import ao.creativemode.kixi.service.OcrPersistenceService;
-import ao.creativemode.kixi.service.OcrPersistenceService.StatementWithRelations;
+import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
+import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import java.util.List;
@@ -72,7 +72,7 @@ class AuthorizationIntegrationTest {
     private ao.creativemode.kixi.exams.service.StatementService statementService;
 
     @MockBean
-    private ao.creativemode.kixi.service.LegacyOcrStatementService legacyOcrStatementService;
+    private ao.creativemode.kixi.ocr.service.LegacyOcrStatementService legacyOcrStatementService;
 
     @Test
     void rejectsAnonymousSimulationReads() {

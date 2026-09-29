@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.dto.ocr;
+package ao.creativemode.kixi.ocr.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;

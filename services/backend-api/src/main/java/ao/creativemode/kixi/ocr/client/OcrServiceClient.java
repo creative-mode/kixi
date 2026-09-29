@@ -1,6 +1,6 @@
-package ao.creativemode.kixi.client;
+package ao.creativemode.kixi.ocr.client;
 
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

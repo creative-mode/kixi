@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.ocr.service;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -13,8 +13,8 @@ import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 
-import ao.creativemode.kixi.client.OcrUploadedFile;
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
+import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionImage;
 import ao.creativemode.kixi.exams.repository.QuestionImageRepository;

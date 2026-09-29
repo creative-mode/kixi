@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.client;
+package ao.creativemode.kixi.ocr.client;
 
 import org.springframework.http.MediaType;
 

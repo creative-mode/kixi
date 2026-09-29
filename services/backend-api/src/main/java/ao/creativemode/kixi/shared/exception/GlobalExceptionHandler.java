@@ -15,8 +15,8 @@ import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ServerWebExchange;
 
-import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
-import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrClientException;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.shared.dto.ProblemDetail;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import reactor.core.publisher.Mono;

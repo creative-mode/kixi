@@ -1,11 +1,11 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.ocr.service;
 
-import ao.creativemode.kixi.client.OcrServiceClient;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
-import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedOption;
-import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedQuestion;
-import ao.creativemode.kixi.dto.ocr.OcrResponse.OcrMetadata;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedOption;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedQuestion;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;

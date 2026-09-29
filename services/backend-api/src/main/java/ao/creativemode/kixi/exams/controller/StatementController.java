@@ -4,7 +4,7 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
-import ao.creativemode.kixi.service.LegacyOcrStatementService;
+import ao.creativemode.kixi.ocr.service.LegacyOcrStatementService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;

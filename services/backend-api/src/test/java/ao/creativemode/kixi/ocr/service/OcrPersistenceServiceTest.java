@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service;
+package ao.creativemode.kixi.ocr.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -13,12 +13,12 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import ao.creativemode.kixi.client.OcrServiceClient;
-import ao.creativemode.kixi.client.OcrUploadedFile;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient;
+import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
-import ao.creativemode.kixi.dto.ocr.OcrResponse.ConfidenceField;
-import ao.creativemode.kixi.dto.ocr.OcrResponse.OcrMetadata;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.ConfidenceField;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
 import ao.creativemode.kixi.academic.model.Class;
 import ao.creativemode.kixi.academic.model.Course;
 import ao.creativemode.kixi.academic.model.SchoolYear;

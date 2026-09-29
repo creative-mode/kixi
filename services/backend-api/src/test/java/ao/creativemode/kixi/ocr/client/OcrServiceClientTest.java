@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.client;
+package ao.creativemode.kixi.ocr.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

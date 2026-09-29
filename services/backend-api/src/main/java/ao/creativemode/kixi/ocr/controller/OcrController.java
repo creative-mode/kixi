@@ -1,12 +1,12 @@
-package ao.creativemode.kixi.controller;
+package ao.creativemode.kixi.ocr.controller;
 
-import ao.creativemode.kixi.client.OcrServiceClient;
-import ao.creativemode.kixi.client.OcrUploadedFile;
+import ao.creativemode.kixi.ocr.client.OcrServiceClient;
+import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
-import ao.creativemode.kixi.dto.ocr.ExamExtractionResponse;
-import ao.creativemode.kixi.dto.ocr.OcrResponse;
-import ao.creativemode.kixi.service.OcrPersistenceService;
-import ao.creativemode.kixi.service.OcrPersistenceService.StatementWithRelations;
+import ao.creativemode.kixi.ocr.dto.ExamExtractionResponse;
+import ao.creativemode.kixi.ocr.dto.OcrResponse;
+import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
+import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import java.util.List;
 import java.util.Map;
