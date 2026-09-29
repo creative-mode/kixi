@@ -1,0 +1,49 @@
+{
+    "name": "Techify Manager",
+    "short_name": "Manager",
+    "description": "Painel de gestão da Techify Technologies",
+    "start_url": "/manager?pwa=1",
+    "display": "standalone",
+    "background_color": "#09090b",
+    "theme_color": "#09090b",
+    "orientation": "any",
+    "icons": [
+        {
+            "src": "/manager/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/manager/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": [
+        "business",
+        "productivity"
+    ],
+    "screenshots": [],
+    "shortcuts": [
+        {
+            "name": "Blog Posts",
+            "short_name": "Posts",
+            "url": "/manager/posts",
+            "description": "Gerenciar posts do blog"
+        },
+        {
+            "name": "Notícias",
+            "short_name": "News",
+            "url": "/manager/news",
+            "description": "Gerenciar notícias"
+        },
+        {
+            "name": "Galeria",
+            "short_name": "Gallery",
+            "url": "/manager/gallery",
+            "description": "Gerenciar galeria"
+        }
+    ]
+}

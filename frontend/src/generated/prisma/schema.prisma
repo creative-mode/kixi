@@ -1,0 +1,158 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       Int    @id @default(autoincrement())
+  name     String
+  email    String @unique
+  password String
+
+  role       UserType @default(COMMON)
+  isActive   Boolean  @default(true)
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+}
+
+enum UserType {
+  COMMON
+  ADMIN
+  DEVELOPER
+  RECRUITER
+}
+
+model Session {
+  id             Int      @id @default(autoincrement())
+  externalUserId Int // ID do usuário vindo da base de usuários (3001)
+  clientId       String
+  service        String // Nome do serviço (ex.: "PMS", "OS")
+  token          String   @unique // token único para autenticação
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+  isActive       Boolean  @default(true)
+}
+
+model Product {
+  id          Int           @id @default(autoincrement())
+  name        String
+  description String
+  url         String
+  imageUrl    String?
+  features    String[]      @db.VarChar(255)
+  status      ProductStatus @default(em_desenvolvimento)
+  createdAt   DateTime      @default(now())
+}
+
+enum ProductStatus {
+  em_desenvolvimento
+  ativo
+  descontinuado
+}
+
+model Contact {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String
+  subject   String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model Post {
+  id          Int      @id @default(autoincrement())
+  title       String
+  content     String
+  // author      User     @relation(fields: [authorId], references: [id])
+  authorId    String
+  coverUrl    String?
+  tags        String[]
+  publishedAt DateTime @default(now())
+
+  comments Comment[]
+  views    PostView[]
+  likes    PostLike[]
+}
+
+model NewsletterSubscription {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
+model Service {
+  id          Int      @id @default(autoincrement())
+  num         String
+  title       String
+  description String
+  tags        String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String
+  author    String
+  email     String
+  postId    Int
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([approved])
+}
+
+model PostView {
+  id        Int      @id @default(autoincrement())
+  postId    Int
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([postId])
+  @@index([createdAt])
+}
+
+model PostLike {
+  id        Int      @id @default(autoincrement())
+  postId    Int
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  isLike    Boolean // true = like, false = dislike
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@unique([postId, ipAddress])
+  @@index([postId])
+}
+
+model Analytics {
+  id             Int      @id @default(autoincrement())
+  date           DateTime @unique
+  totalViews     Int      @default(0)
+  totalLikes     Int      @default(0)
+  totalDislikes  Int      @default(0)
+  totalComments  Int      @default(0)
+  uniqueVisitors Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([date])
+}
