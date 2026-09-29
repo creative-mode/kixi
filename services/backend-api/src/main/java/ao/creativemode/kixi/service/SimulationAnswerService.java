@@ -5,6 +5,7 @@ import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
 import ao.creativemode.kixi.model.SimulationAnswer;
 import ao.creativemode.kixi.model.Simulation;
+import ao.creativemode.kixi.repository.QuestionRepository;
 import ao.creativemode.kixi.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.repository.SimulationRepository;
 import java.time.LocalDateTime;
@@ -18,13 +19,16 @@ public class SimulationAnswerService {
 
     private final SimulationAnswerRepository repository;
     private final SimulationRepository simulationRepository;
+    private final QuestionRepository questionRepository;
 
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
-        SimulationRepository simulationRepository
+        SimulationRepository simulationRepository,
+        QuestionRepository questionRepository
     ) {
         this.repository = repository;
         this.simulationRepository = simulationRepository;
+        this.questionRepository = questionRepository;
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
@@ -65,21 +69,32 @@ public class SimulationAnswerService {
     public Mono<SimulationAnswerResponse> create(
         SimulationAnswerRequest request
     ) {
-        SimulationAnswer answer = new SimulationAnswer();
-        answer.setSimulationId(request.simulationId());
-        answer.setQuestionId(request.questionId());
-        answer.setSelectedOptionId(request.selectedOptionId());
-        answer.setAnswerText(request.answerText());
-        answer.setAnsweredAt(request.answeredAt());
+        return requireSimulationAndQuestion(request.simulationId(), request.questionId())
+            .then(Mono.defer(() -> {
+                SimulationAnswer answer = new SimulationAnswer();
+                answer.setSimulationId(request.simulationId());
+                answer.setQuestionId(request.questionId());
+                answer.setSelectedOptionId(request.selectedOptionId());
+                answer.setAnswerText(request.answerText());
+                answer.setAnsweredAt(request.answeredAt());
 
-        return repository
-            .save(answer)
-            .map(this::toResponse)
-            .onErrorMap(DataIntegrityViolationException.class, e ->
-                ApiException.conflict(
-                    "A simulation answer with this parameter already exists."
-                )
-            );
+                return repository
+                    .save(answer)
+                    .map(this::toResponse)
+                    .onErrorMap(DataIntegrityViolationException.class, e ->
+                        ApiException.conflict(
+                            "This question has already been answered in this simulation."
+                        )
+                    );
+            }));
+    }
+
+    private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId) {
+        return simulationRepository.findByIdAndDeletedAtIsNull(simulationId)
+            .switchIfEmpty(Mono.error(ApiException.badRequest("Simulation not found: " + simulationId)))
+            .then(questionRepository.findById(questionId)
+                .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId))))
+            .then();
     }
 
     public Mono<SimulationAnswerResponse> createForAccount(
@@ -99,20 +114,21 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
-            .flatMap(answer -> {
-                answer.setSimulationId(request.simulationId());
-                answer.setQuestionId(request.questionId());
-                answer.setSelectedOptionId(request.selectedOptionId());
-                answer.setAnswerText(request.answerText());
-                answer.setAnsweredAt(request.answeredAt());
-                answer.setUpdatedAt(LocalDateTime.now());
+            .flatMap(answer -> requireSimulationAndQuestion(request.simulationId(), request.questionId())
+                .then(Mono.defer(() -> {
+                    answer.setSimulationId(request.simulationId());
+                    answer.setQuestionId(request.questionId());
+                    answer.setSelectedOptionId(request.selectedOptionId());
+                    answer.setAnswerText(request.answerText());
+                    answer.setAnsweredAt(request.answeredAt());
+                    answer.setUpdatedAt(LocalDateTime.now());
 
-                return repository.save(answer);
-            })
+                    return repository.save(answer);
+                })))
             .map(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
-                    "A simulation answer with this parameter already exists."
+                    "This question has already been answered in this simulation."
                 )
             );
     }
@@ -130,7 +146,7 @@ public class SimulationAnswerService {
             .map(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
-                    "A simulation answer with this parameter already exists."
+                    "This question has already been answered in this simulation."
                 )
             );
     }
@@ -205,12 +221,16 @@ public class SimulationAnswerService {
         SimulationAnswer answer,
         SimulationAnswerRequest request
     ) {
-        answer.setSimulationId(request.simulationId());
-        answer.setQuestionId(request.questionId());
-        answer.setSelectedOptionId(request.selectedOptionId());
-        answer.setAnswerText(request.answerText());
-        answer.setAnsweredAt(request.answeredAt());
-        answer.setUpdatedAt(LocalDateTime.now());
-        return repository.save(answer);
+        return questionRepository.findById(request.questionId())
+            .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + request.questionId())))
+            .then(Mono.defer(() -> {
+                answer.setSimulationId(request.simulationId());
+                answer.setQuestionId(request.questionId());
+                answer.setSelectedOptionId(request.selectedOptionId());
+                answer.setAnswerText(request.answerText());
+                answer.setAnsweredAt(request.answeredAt());
+                answer.setUpdatedAt(LocalDateTime.now());
+                return repository.save(answer);
+            }));
     }
 }
