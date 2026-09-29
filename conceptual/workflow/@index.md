@@ -1,7 +1,3 @@
-Aqui está a tradução completa para inglês do handbook de workflow:
-
----
-
 # Detailed Project Workflow Handbook (GitHub)
 
 ## Objective
