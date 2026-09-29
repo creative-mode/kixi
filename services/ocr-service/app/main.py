@@ -202,11 +202,22 @@ def main():
     """Run the application using uvicorn."""
     import uvicorn
 
+    workers = settings.workers if not settings.debug else 1
+    # uvicorn only needs the "module:attr" import string when it must spawn
+    # subprocesses (multiple workers) or reload workers. In the single-process
+    # case, passing that string here would make uvicorn re-import this module
+    # a second time under the "app.main" name (this file already ran once as
+    # "__main__"), re-executing the module-level Prometheus metric
+    # registration and crashing with "Duplicated timeseries in
+    # CollectorRegistry". Passing the already-constructed `app` object avoids
+    # the re-import entirely.
+    target = "app.main:app" if (workers > 1 or settings.debug) else app
+
     uvicorn.run(
-        "app.main:app",
+        target,
         host=settings.host,
         port=settings.port,
-        workers=settings.workers if not settings.debug else 1,
+        workers=workers,
         reload=settings.debug,
         log_level=settings.log_level.lower(),
         proxy_headers=bool(settings.trusted_proxy_list),
