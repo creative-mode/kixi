@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.imageio.ImageIO;
 
+import ao.creativemode.kixi.common.exception.ApiException;
 import ao.creativemode.kixi.config.StorageProperties;
 import ao.creativemode.kixi.dto.questionimage.QuestionImageRequest;
 import ao.creativemode.kixi.model.QuestionImage;
@@ -108,6 +109,136 @@ class QuestionImageServiceTest {
 
         verify(storage).delete(entity.getStorageKey());
         verify(repository).delete(entity);
+    }
+
+    @Test
+    void findAllActiveMapsEveryEntityToResponse() {
+        when(repository.findAllByDeletedAtIsNull()).thenReturn(Flux.just(image(1L, "cap-1")));
+
+        StepVerifier.create(service.findAllActive())
+                .assertNext(response -> assertThat(response.caption()).isEqualTo("cap-1"))
+                .verifyComplete();
+    }
+
+    @Test
+    void findAllDeletedReturnsOnlyTrashedEntities() {
+        when(repository.findAllByDeletedAtIsNotNull()).thenReturn(Flux.just(image(2L, "cap-2")));
+
+        StepVerifier.create(service.findAllDeleted())
+                .assertNext(response -> assertThat(response.id()).isEqualTo(2L))
+                .verifyComplete();
+    }
+
+    @Test
+    void findByQuestionIdDelegatesToRepository() {
+        when(repository.findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(7L))
+                .thenReturn(Flux.just(image(1L, "cap-1")));
+
+        StepVerifier.create(service.findByQuestionId(7L))
+                .assertNext(response -> assertThat(response.questionId()).isEqualTo(7L))
+                .verifyComplete();
+    }
+
+    @Test
+    void findByIdActiveReturnsNotFoundForMissingImage() {
+        when(repository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.findByIdActive(99L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(404);
+                })
+                .verify();
+    }
+
+    @Test
+    void updateRejectsMissingImageWithoutSaving() {
+        when(repository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.update(99L, new QuestionImageRequest(7L, "nova legenda", 1)))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void updateAppliesNewCaptionAndOrderIndex() {
+        QuestionImage existing = image(1L, "antiga");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(repository.save(any(QuestionImage.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.update(1L, new QuestionImageRequest(7L, "nova", 5)))
+                .assertNext(response -> {
+                    assertThat(response.caption()).isEqualTo("nova");
+                    assertThat(response.orderIndex()).isEqualTo(5);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void softDeleteRejectsMissingImage() {
+        when(repository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.softDelete(99L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void softDeleteMarksEntityAsDeleted() {
+        QuestionImage existing = image(1L, "cap");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(repository.save(existing)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.softDelete(1L)).verifyComplete();
+
+        assertThat(existing.isDeleted()).isTrue();
+    }
+
+    @Test
+    void restoreRejectsImageThatIsNotInTrash() {
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.restore(1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void restoreClearsDeletedAt() {
+        QuestionImage deleted = image(1L, "cap");
+        deleted.markAsDeleted();
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
+        when(repository.save(deleted)).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.restore(1L)).verifyComplete();
+
+        assertThat(deleted.isDeleted()).isFalse();
+    }
+
+    @Test
+    void hardDeleteRejectsImageThatIsNotInTrash() {
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(storage, never()).delete(anyString());
+    }
+
+    private QuestionImage image(Long id, String caption) {
+        QuestionImage image = new QuestionImage();
+        image.setId(id);
+        image.setQuestionId(7L);
+        image.setCaption(caption);
+        image.setOrderIndex(0);
+        return image;
     }
 
     private FilePart filePart(MediaType type, String filename, long length) {
