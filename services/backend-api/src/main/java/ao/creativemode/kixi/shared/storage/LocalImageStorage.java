@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service.storage;
+package ao.creativemode.kixi.shared.storage;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -6,7 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
-import ao.creativemode.kixi.config.StorageProperties;
+import ao.creativemode.kixi.shared.config.StorageProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;

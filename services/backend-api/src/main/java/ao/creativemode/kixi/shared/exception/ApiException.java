@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.common.exception;
+package ao.creativemode.kixi.shared.exception;
 
 import org.springframework.http.HttpStatus;
 

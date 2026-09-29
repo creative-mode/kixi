@@ -1,12 +1,12 @@
 package ao.creativemode.kixi.controller;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.model.Question;
 import ao.creativemode.kixi.model.QuestionOption;
 import ao.creativemode.kixi.model.Statement;
 import ao.creativemode.kixi.service.StatementService;
 import ao.creativemode.kixi.service.StatementService.StatementWithQuestions;
-import ao.creativemode.kixi.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;

@@ -1,7 +1,7 @@
 package ao.creativemode.kixi.controller;
 
 import ao.creativemode.kixi.config.GoogleOAuth2Properties;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.auth.LoginRequest;
 import ao.creativemode.kixi.dto.auth.LoginResponse;
 import ao.creativemode.kixi.service.AuthService;

@@ -1,7 +1,7 @@
 package ao.creativemode.kixi.service;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedOption;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ExtractedQuestion;

@@ -5,7 +5,7 @@ import static org.springframework.http.HttpStatus.NO_CONTENT;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerResponse;
 import ao.creativemode.kixi.service.SimulationAnswerService;
-import ao.creativemode.kixi.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;

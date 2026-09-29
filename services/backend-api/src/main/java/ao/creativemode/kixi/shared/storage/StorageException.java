@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service.storage;
+package ao.creativemode.kixi.shared.storage;
 
 public class StorageException extends RuntimeException {
 

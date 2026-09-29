@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.common.exception;
+package ao.creativemode.kixi.shared.exception;
 
 import java.net.URI;
 import java.util.Map;
@@ -17,8 +17,8 @@ import org.springframework.web.server.ServerWebExchange;
 
 import ao.creativemode.kixi.client.OcrServiceClient.OcrClientException;
 import ao.creativemode.kixi.client.OcrServiceClient.OcrServerException;
-import ao.creativemode.kixi.common.dto.ProblemDetail;
-import ao.creativemode.kixi.security.RequestIdWebFilter;
+import ao.creativemode.kixi.shared.dto.ProblemDetail;
+import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import reactor.core.publisher.Mono;
 
 /**

@@ -5,7 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.dto.auth.LoginResponse;
 import ao.creativemode.kixi.service.AuthService;

@@ -1,6 +1,6 @@
 package ao.creativemode.kixi.service;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.classe.ClassRequest;
 import ao.creativemode.kixi.dto.classe.ClassResponse;
 import ao.creativemode.kixi.model.Class;

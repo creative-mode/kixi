@@ -18,8 +18,8 @@ import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.model.Question;
 import ao.creativemode.kixi.model.QuestionImage;
 import ao.creativemode.kixi.repository.QuestionImageRepository;
-import ao.creativemode.kixi.service.storage.ImageStorage;
-import ao.creativemode.kixi.service.storage.StoredObject;
+import ao.creativemode.kixi.shared.storage.ImageStorage;
+import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 

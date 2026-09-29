@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.config;
+package ao.creativemode.kixi.shared.config;
 
 import java.net.URI;
 

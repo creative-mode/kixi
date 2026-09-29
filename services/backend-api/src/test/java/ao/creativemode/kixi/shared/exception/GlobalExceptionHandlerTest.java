@@ -1,8 +1,8 @@
-package ao.creativemode.kixi.common.exception;
+package ao.creativemode.kixi.shared.exception;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import ao.creativemode.kixi.common.dto.ProblemDetail;
+import ao.creativemode.kixi.shared.dto.ProblemDetail;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

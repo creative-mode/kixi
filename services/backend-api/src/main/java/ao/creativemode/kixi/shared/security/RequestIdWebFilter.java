@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.security;
+package ao.creativemode.kixi.shared.security;
 
 import java.util.UUID;
 

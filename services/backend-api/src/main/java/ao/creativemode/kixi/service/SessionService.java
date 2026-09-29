@@ -6,7 +6,7 @@ import ao.creativemode.kixi.repository.SessionRepository;
 import ao.creativemode.kixi.repository.AccountRepository;
 import ao.creativemode.kixi.dto.sessions.SessionResponse;
 import ao.creativemode.kixi.dto.sessions.SessionRequest;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;

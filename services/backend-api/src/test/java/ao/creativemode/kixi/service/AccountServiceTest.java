@@ -8,7 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.model.Account;
 import ao.creativemode.kixi.repository.AccountRepository;

@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.config;
+package ao.creativemode.kixi.shared.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

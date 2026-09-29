@@ -4,7 +4,7 @@ import ao.creativemode.kixi.model.SchoolYear;
 import ao.creativemode.kixi.repository.SchoolYearRepository;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearRequest;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 
 import org.springframework.stereotype.Service;
 

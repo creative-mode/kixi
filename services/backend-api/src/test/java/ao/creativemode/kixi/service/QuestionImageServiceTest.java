@@ -14,13 +14,13 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.imageio.ImageIO;
 
-import ao.creativemode.kixi.common.exception.ApiException;
-import ao.creativemode.kixi.config.StorageProperties;
+import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.config.StorageProperties;
 import ao.creativemode.kixi.dto.questionimage.QuestionImageRequest;
 import ao.creativemode.kixi.model.QuestionImage;
 import ao.creativemode.kixi.repository.QuestionImageRepository;
-import ao.creativemode.kixi.service.storage.ImageStorage;
-import ao.creativemode.kixi.service.storage.StoredObject;
+import ao.creativemode.kixi.shared.storage.ImageStorage;
+import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;

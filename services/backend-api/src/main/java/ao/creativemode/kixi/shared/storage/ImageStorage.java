@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.service.storage;
+package ao.creativemode.kixi.shared.storage;
 
 import org.springframework.http.MediaType;
 

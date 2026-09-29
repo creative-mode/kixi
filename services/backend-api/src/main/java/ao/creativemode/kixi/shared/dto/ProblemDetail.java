@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.common.dto;
+package ao.creativemode.kixi.shared.dto;
 
 import java.net.URI;
 import java.util.Map;

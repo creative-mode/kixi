@@ -1,7 +1,7 @@
 package ao.creativemode.kixi.config;
 
 import ao.creativemode.kixi.security.JwtAuthenticationFilter;
-import ao.creativemode.kixi.security.RequestIdWebFilter;
+import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;

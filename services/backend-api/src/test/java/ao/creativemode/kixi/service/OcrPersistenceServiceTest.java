@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
 import ao.creativemode.kixi.client.OcrUploadedFile;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.ocr.OcrResponse;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.ConfidenceField;
 import ao.creativemode.kixi.dto.ocr.OcrResponse.OcrMetadata;

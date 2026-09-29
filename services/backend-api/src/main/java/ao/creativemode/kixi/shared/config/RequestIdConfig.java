@@ -1,6 +1,6 @@
-package ao.creativemode.kixi.config;
+package ao.creativemode.kixi.shared.config;
 
-import ao.creativemode.kixi.security.RequestIdWebFilter;
+import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 

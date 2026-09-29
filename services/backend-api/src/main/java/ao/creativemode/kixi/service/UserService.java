@@ -8,7 +8,7 @@ import ao.creativemode.kixi.dto.users.UserResponse;
 import ao.creativemode.kixi.dto.users.UserRequest;
 import ao.creativemode.kixi.dto.users.UserResponseWithAccount;
 import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;

@@ -1,6 +1,6 @@
 package ao.creativemode.kixi.service;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.auth.LoginResponse;
 import ao.creativemode.kixi.model.Account;
 import ao.creativemode.kixi.model.AccountRole;

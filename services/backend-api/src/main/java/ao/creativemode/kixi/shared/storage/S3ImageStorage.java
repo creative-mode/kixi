@@ -1,6 +1,6 @@
-package ao.creativemode.kixi.service.storage;
+package ao.creativemode.kixi.shared.storage;
 
-import ao.creativemode.kixi.config.StorageProperties;
+import ao.creativemode.kixi.shared.config.StorageProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;

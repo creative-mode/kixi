@@ -7,7 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.model.Question;
 import ao.creativemode.kixi.model.Simulation;

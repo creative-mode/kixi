@@ -4,7 +4,7 @@ import java.time.LocalDateTime;
 
 import org.springframework.stereotype.Service;
 
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.dto.simulation.SimulationRequest;

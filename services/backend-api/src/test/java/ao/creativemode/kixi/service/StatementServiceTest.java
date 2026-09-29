@@ -9,7 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.client.OcrServiceClient;
-import ao.creativemode.kixi.common.exception.ApiException;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.model.Question;
 import ao.creativemode.kixi.model.QuestionOption;
 import ao.creativemode.kixi.model.Statement;

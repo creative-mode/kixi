@@ -8,7 +8,7 @@ import ao.creativemode.kixi.dto.simulation.SimulationRequest;
 import jakarta.validation.Valid;
 import ao.creativemode.kixi.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.service.SimulationService;
-import ao.creativemode.kixi.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
