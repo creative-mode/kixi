@@ -15,18 +15,24 @@ public interface ClassRepository extends ReactiveCrudRepository<Class, Long> {
     Mono<Class> findByIdAndDeletedAtIsNotNull(Long id);
 
     /**
-     * Find a class by grade, course and school year
+     * Find classes by grade, course and school year. Returns Flux rather than
+     * Mono because nothing enforces uniqueness on this combination at the
+     * database level, so more than one row can legitimately match; callers
+     * that need a single result should take the first element themselves
+     * (e.g. via .next()) instead of relying on Mono's at-most-one semantics,
+     * which throws IncorrectResultSizeDataAccessException on a second match.
      */
-    Mono<Class> findByGradeAndCourseIdAndSchoolYearIdAndDeletedAtIsNull(
+    Flux<Class> findByGradeAndCourseIdAndSchoolYearIdAndDeletedAtIsNull(
         Integer grade,
         Long courseId,
         Long schoolYearId
     );
 
     /**
-     * Find a class by grade and school year (without course)
+     * Find classes by grade and school year (without course). See the
+     * Flux note above: this combination is not unique either.
      */
-    Mono<Class> findByGradeAndSchoolYearIdAndDeletedAtIsNull(
+    Flux<Class> findByGradeAndSchoolYearIdAndDeletedAtIsNull(
         Integer grade,
         Long schoolYearId
     );

@@ -293,6 +293,7 @@ public class OcrPersistenceService {
 
         return courseRepository
             .findByNameIgnoreCaseAndDeletedAtIsNull(normalizedName)
+            .next()
             .switchIfEmpty(
                 Mono.defer(() -> {
                     log.info("Creating new course from OCR metadata");
@@ -324,6 +325,7 @@ public class OcrPersistenceService {
 
         return subjectRepository
             .findByNameIgnoreCaseAndDeletedAtIsNull(normalizedName)
+            .next()
             .switchIfEmpty(
                 Mono.defer(() -> {
                     log.info("Creating new subject from OCR metadata");
@@ -373,6 +375,7 @@ public class OcrPersistenceService {
                     course.getId(),
                     schoolYear.getId()
                 )
+                .next()
                 .switchIfEmpty(
                     Mono.defer(() -> {
                         log.info(
@@ -399,6 +402,7 @@ public class OcrPersistenceService {
                 grade,
                 schoolYear.getId()
             )
+            .next()
             .switchIfEmpty(
                 Mono.defer(() -> {
                     log.info(

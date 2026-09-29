@@ -19,9 +19,12 @@ public interface CourseRepository extends ReactiveCrudRepository<Course, Long> {
     Mono<Course> findByCodeAndIdNotAndDeletedAtIsNull(String code, Long id);
 
     /**
-     * Find a course by name (case-insensitive)
+     * Find courses by name (case-insensitive). Returns Flux, not Mono:
+     * `name` has no unique constraint, so more than one row can match and a
+     * Mono-typed derived query would throw IncorrectResultSizeDataAccessException.
+     * Callers needing a single result should take the first via .next().
      */
-    Mono<Course> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
+    Flux<Course> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
 
     /**
      * Find courses by name containing (case-insensitive)

@@ -16,9 +16,12 @@ public interface SubjectRepository
     Mono<Subject> findByCodeAndDeletedAtIsNotNull(String code);
 
     /**
-     * Find a subject by name (case-insensitive)
+     * Find subjects by name (case-insensitive). Returns Flux, not Mono:
+     * `name` has no unique constraint, so more than one row can match and a
+     * Mono-typed derived query would throw IncorrectResultSizeDataAccessException.
+     * Callers needing a single result should take the first via .next().
      */
-    Mono<Subject> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
+    Flux<Subject> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
 
     /**
      * Find subjects by name containing (case-insensitive)
