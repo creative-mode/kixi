@@ -3,6 +3,7 @@ package ao.creativemode.kixi.exams.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -162,14 +163,21 @@ class StatementServiceTest {
     }
 
     @Test
-    void softDeleteMarksStatementAsDeleted() {
+    void softDeleteMarksStatementAsDeletedAndCascadesToQuestions() {
         Statement existing = statement(1L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        when(questionRepository.softDeleteAllByStatementId(any(), any()))
+                .thenReturn(Mono.just(3));
 
         StepVerifier.create(service.softDelete(1L)).verifyComplete();
 
         assertThat(existing.getDeletedAt()).isNotNull();
+        // The questions must be stamped with the very same value the
+        // statement got, otherwise the restore below cannot tell which
+        // questions its own cascade touched.
+        verify(questionRepository)
+                .softDeleteAllByStatementId(eq(1L), eq(existing.getDeletedAt()));
     }
 
     @Test
@@ -193,34 +201,49 @@ class StatementServiceTest {
     }
 
     @Test
-    void restoreClearsDeletedAt() {
+    void restoreClearsDeletedAtAndUncascadesOnlyItsOwnQuestions() {
         Statement deleted = statement(1L);
         deleted.markAsDeleted();
+        java.time.LocalDateTime cascadedAt = deleted.getDeletedAt();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(statementRepository.save(deleted)).thenReturn(Mono.just(deleted));
+        when(questionRepository.restoreAllDeletedByStatementIdAndDeletedAt(any(), any()))
+                .thenReturn(Mono.just(3));
 
         StepVerifier.create(service.restore(1L)).verifyComplete();
 
         assertThat(deleted.getDeletedAt()).isNull();
+        // Only the questions stamped by the statement's own soft delete are
+        // brought back; ones deleted individually keep their own deleted_at.
+        verify(questionRepository)
+                .restoreAllDeletedByStatementIdAndDeletedAt(eq(1L), eq(cascadedAt));
     }
 
     @Test
-    void hardDeleteCascadesThroughQuestionsAndOptionsBeforeDeletingStatement() {
+    void hardDeleteRemovesQuestionsThenStatementForTrashedEntity() {
         Statement existing = statement(1L);
-        Question question = new Question();
-        question.setId(10L);
+        existing.markAsDeleted();
 
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(questionRepository.findAllByStatementIdOrderByOrderIndex(1L)).thenReturn(Flux.just(question));
-        when(optionRepository.softDeleteAllByQuestionId(10L)).thenReturn(Mono.just(1));
-        when(questionRepository.delete(question)).thenReturn(Mono.empty());
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L))
+                .thenReturn(Mono.just(existing));
+        when(questionRepository.deleteAllByStatementId(1L)).thenReturn(Mono.empty());
         when(statementRepository.delete(existing)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
-        verify(optionRepository).softDeleteAllByQuestionId(10L);
-        verify(questionRepository).delete(question);
+        verify(questionRepository).deleteAllByStatementId(1L);
         verify(statementRepository).delete(existing);
+    }
+
+    @Test
+    void hardDeleteRejectsStatementThatIsNotInTrash() {
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(statementRepository, never()).delete(any(Statement.class));
     }
 
     @Test

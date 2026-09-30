@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import ao.creativemode.kixi.shared.dto.ProblemDetail;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -81,6 +83,45 @@ class GlobalExceptionHandlerTest {
                     assertThat(response.getBody().status()).isEqualTo(500);
                 })
                 .verifyComplete();
+    }
+
+    /**
+     * A unique-constraint violation reaching the handler unmapped used to be
+     * reported as a 500, which told the client to retry a request that can
+     * never succeed.
+     */
+    @Test
+    void duplicateKeyIsReportedAsConflictNotServerError() {
+        ServerWebExchange exchange = exchange();
+        DuplicateKeyException ex =
+                new DuplicateKeyException("uk_terms_number violated");
+
+        ResponseEntity<ProblemDetail> response = handler
+                .handleDuplicateKey(ex, exchange)
+                .block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().status()).isEqualTo(409);
+    }
+
+    /**
+     * A purge on a record that is still referenced by other tables used to
+     * surface as a 500 instead of the 409 it really is.
+     */
+    @Test
+    void referentialIntegrityViolationIsReportedAsConflictNotServerError() {
+        ServerWebExchange exchange = exchange();
+        DataIntegrityViolationException ex =
+                new DataIntegrityViolationException("fk_account_roles_account violated");
+
+        ResponseEntity<ProblemDetail> response = handler
+                .handleDataIntegrityViolation(ex, exchange)
+                .block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().status()).isEqualTo(409);
     }
 
     private ServerWebExchange exchange() {

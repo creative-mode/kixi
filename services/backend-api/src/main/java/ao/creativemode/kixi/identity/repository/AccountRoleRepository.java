@@ -20,4 +20,16 @@ public interface AccountRoleRepository extends ReactiveCrudRepository<AccountRol
     Mono<AccountRole> findFirstByAccountIdAndRoleId(Long accountId, Long roleId);
 
     Mono<Boolean> existsByAccountIdAndRoleIdAndDeletedAtIsNull(Long accountId, Long roleId);
+
+    /**
+     * Hard delete every role association of an account, active or trashed.
+     * Required before purging the account itself: a trashed association still
+     * holds the account foreign key, so a soft delete alone does not unblock it.
+     */
+    Mono<Void> deleteAllByAccountId(Long accountId);
+
+    /**
+     * Hard delete every role association of a role, active or trashed.
+     */
+    Mono<Void> deleteAllByRoleId(Long roleId);
 }

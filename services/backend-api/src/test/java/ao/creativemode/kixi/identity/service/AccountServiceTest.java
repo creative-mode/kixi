@@ -24,14 +24,25 @@ class AccountServiceTest {
 
     private AccountRepository repository;
     private PasswordEncoder passwordEncoder;
+    private AccountRoleService accountRoleService;
+    private UserService userService;
+    private SessionService sessionService;
     private AccountService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(AccountRepository.class);
         passwordEncoder = mock(PasswordEncoder.class);
-        service = new AccountService(repository, passwordEncoder);
+        accountRoleService = mock(AccountRoleService.class);
+        userService = mock(UserService.class);
+        sessionService = mock(SessionService.class);
+        service = new AccountService(
+                repository, passwordEncoder, accountRoleService, userService, sessionService);
         when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+        when(accountRoleService.purgeAssociationsForAccount(any()))
+                .thenReturn(Mono.empty());
+        when(userService.deleteAllForAccount(any())).thenReturn(Mono.empty());
+        when(sessionService.deleteAllForAccount(any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -262,6 +273,41 @@ class AccountServiceTest {
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
         verify(repository).delete(deleted);
+    }
+
+    /**
+     * Regression coverage for a bug found via manual testing: purging an
+     * account deleted only the account row, so the account_roles, users and
+     * sessions rows kept their foreign key alive and the delete failed with a
+     * DataIntegrityViolationException, which surfaced as a 500 and left the
+     * account permanently unpurgeable through the API.
+     */
+    @Test
+    void hardDeleteRemovesAccountScopedRowsBeforeDeletingTheAccount() {
+        Account deleted = account(1L, "admin");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
+        when(repository.delete(deleted)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(1L)).verifyComplete();
+
+        verify(accountRoleService).purgeAssociationsForAccount(1L);
+        verify(userService).deleteAllForAccount(1L);
+        verify(sessionService).deleteAllForAccount(1L);
+        verify(repository).delete(deleted);
+    }
+
+    @Test
+    void hardDeleteOfAccountThatIsNotInTrashDoesNotTouchAccountScopedRows() {
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(accountRoleService, never()).purgeAssociationsForAccount(any());
+        verify(userService, never()).deleteAllForAccount(any());
+        verify(sessionService, never()).deleteAllForAccount(any());
     }
 
     private Account account(Long id, String username) {

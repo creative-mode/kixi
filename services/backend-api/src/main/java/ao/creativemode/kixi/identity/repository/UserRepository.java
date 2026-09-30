@@ -13,4 +13,10 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     Mono<User> findByIdAndDeletedAtIsNotNull(Long id);
     Flux<User> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Mono<Long> countByAccountIdAndDeletedAtIsNull(Long accountId);
+
+    /**
+     * Hard delete every profile bound to an account. A profile row holds the
+     * account foreign key, so it must be removed before the account is purged.
+     */
+    Mono<Void> deleteAllByAccountId(Long accountId);
 }

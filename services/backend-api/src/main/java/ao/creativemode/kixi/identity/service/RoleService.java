@@ -7,6 +7,7 @@ import ao.creativemode.kixi.identity.model.Role;
 import ao.creativemode.kixi.identity.repository.RoleRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -16,9 +17,11 @@ import java.time.LocalDateTime;
 public class RoleService {
 
     private final RoleRepository repository;
+    private final AccountRoleService accountRoleService;
 
-    public RoleService(RoleRepository repository) {
+    public RoleService(RoleRepository repository, AccountRoleService accountRoleService) {
         this.repository = repository;
+        this.accountRoleService = accountRoleService;
     }
 
     public Flux<RoleResponse> findAllActive() {
@@ -101,11 +104,17 @@ public class RoleService {
         );
     }
 
+    @Transactional
     public Mono<Void> hardDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(
                         Mono.error(ApiException.badRequest("Only deleted roles can be permanently removed")))
-                .flatMap(repository::delete)
+                .flatMap(role ->
+                        // Role assignments keep the roles foreign key alive, so
+                        // they must be hard deleted first. Soft deleting them
+                        // would not unblock the purge.
+                        accountRoleService.purgeAssociationsForRole(id)
+                                .then(repository.delete(role)))
                 .then();
     }
 }
