@@ -9,6 +9,7 @@ import ao.creativemode.kixi.identity.dto.users.UserRequest;
 import ao.creativemode.kixi.identity.dto.users.UserResponseWithAccount;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
@@ -73,7 +74,10 @@ public class UserService {
         }
 
         return repository.save(entity)
-                .map(this::toResponse);
+                .map(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict(
+                                "This account already has a user profile"));
     }
 
     public Mono<UserResponse> update(Long id, UserRequest dto) {
@@ -93,7 +97,10 @@ public class UserService {
                     }
                     entity.setUpdatedAt(LocalDateTime.now());
 
-                    return repository.save(entity);
+                    return repository.save(entity)
+                            .onErrorMap(DataIntegrityViolationException.class,
+                                    e -> ApiException.conflict(
+                                            "This account already has a user profile"));
                 })
                 .map(this::toResponse);
     }
@@ -124,6 +131,15 @@ public class UserService {
                     Mono.error(ApiException.badRequest("Only deleted users can be permanently removed")))
                 .flatMap(repository::delete)
                 .then();
+    }
+
+    /**
+     * Hard delete every profile bound to an account, active or trashed.
+     * Called when the owning account is purged, because a profile row holds
+     * the account foreign key and would otherwise block the purge.
+     */
+    public Mono<Void> deleteAllForAccount(Long accountId) {
+        return repository.deleteAllByAccountId(accountId);
     }
 
     /**

@@ -117,7 +117,7 @@ public class UserController {
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
         return service.restore(id)
-                .thenReturn(ResponseEntity.ok().build());
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**

@@ -13,6 +13,7 @@ import ao.creativemode.kixi.academic.model.Term;
 import ao.creativemode.kixi.academic.repository.TermRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -175,6 +176,41 @@ class TermServiceTest {
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
         verify(repository).delete(deleted);
+    }
+
+    /**
+     * Regression coverage for a bug found via manual testing: terms.number is
+     * backed by a unique constraint, but create and update let the raw
+     * DuplicateKeyException escape, so posting an already existing term number
+     * came back as a 500 instead of a 409 Conflict.
+     */
+    @Test
+    void createReportsConflictWhenTheNumberIsAlreadyTaken() {
+        when(repository.save(any(Term.class)))
+                .thenReturn(Mono.error(new DuplicateKeyException("uk_terms_number")));
+
+        StepVerifier.create(service.create(new TermRequest("Termo Duplicado", 1)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error.getMessage()).contains("already exists");
+                })
+                .verify();
+    }
+
+    @Test
+    void updateReportsConflictWhenTheNumberIsAlreadyTaken() {
+        Term existing = term(1L, 1, "1º Trimestre");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(repository.save(any(Term.class)))
+                .thenReturn(Mono.error(new DuplicateKeyException("uk_terms_number")));
+
+        StepVerifier.create(service.update(1L, new TermRequest("Conflito", 2)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                })
+                .verify();
     }
 
     private Term term(Long id, int number, String name) {
