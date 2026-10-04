@@ -7,6 +7,8 @@ import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -168,6 +170,56 @@ public class GlobalExceptionHandler {
         problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.status(statusCode).body(problem));
+    }
+
+    /**
+     * Handle duplicate key violations that no service mapped explicitly.
+     * DuplicateKeyException is translated from the R2DBC unique-constraint
+     * error and is a client error: the request cannot succeed as sent.
+     */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleDuplicateKey(
+        DuplicateKeyException ex,
+        ServerWebExchange exchange
+    ) {
+        log.warn("Duplicate key: type={}, requestId={}",
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.CONFLICT.value(),
+            "A record with the same unique value already exists."
+        ).withTitle(HttpStatus.CONFLICT.getReasonPhrase());
+        problem = problem.withInstance(exchange);
+
+        return Mono.just(
+            ResponseEntity.status(HttpStatus.CONFLICT).body(problem)
+        );
+    }
+
+    /**
+     * Handle referential integrity and check-constraint violations that no
+     * service mapped explicitly, typically a purge attempt on a record that
+     * is still referenced by other tables. This is a client error (409),
+     * not a server fault, so it must not fall through to the generic 500.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleDataIntegrityViolation(
+        DataIntegrityViolationException ex,
+        ServerWebExchange exchange
+    ) {
+        log.warn("Data integrity violation: type={}, requestId={}",
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.CONFLICT.value(),
+            "The operation conflicts with existing related records. "
+                + "Remove or reassign the dependent records first."
+        ).withTitle(HttpStatus.CONFLICT.getReasonPhrase());
+        problem = problem.withInstance(exchange);
+
+        return Mono.just(
+            ResponseEntity.status(HttpStatus.CONFLICT).body(problem)
+        );
     }
 
     /**

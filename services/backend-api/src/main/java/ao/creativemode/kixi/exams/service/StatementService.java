@@ -10,6 +10,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
+import java.time.LocalDateTime;
 import reactor.core.publisher.Mono;
 
 /**
@@ -204,20 +205,31 @@ public class StatementService {
     }
 
     /**
-     * Soft delete a statement.
+     * Soft delete a statement and, with it, its still-active questions.
+     *
+     * <p>Soft deleting only the statement used to leave the questions active:
+     * they kept showing up in the question listings while their parent was in
+     * the trash. The cascade stamps both the statement and its questions with
+     * the same {@code deletedAt} value so the restore below can undo exactly
+     * this cascade without reviving questions that were deleted individually
+     * beforehand.
      */
     @Transactional
     public Mono<Void> softDelete(Long id) {
         return findById(id)
             .flatMap(statement -> {
-                statement.markAsDeleted();
-                return statementRepository.save(statement);
-            })
-            .then();
+                LocalDateTime deletedAt = LocalDateTime.now();
+                statement.setDeletedAt(deletedAt);
+                return statementRepository.save(statement)
+                    .then(Mono.defer(() ->
+                        questionRepository.softDeleteAllByStatementId(id, deletedAt)))
+                    .then();
+            });
     }
 
     /**
-     * Restore a soft-deleted statement.
+     * Restore a soft-deleted statement together with the questions that its
+     * own soft delete had cascaded.
      */
     @Transactional
     public Mono<Void> restore(Long id) {
@@ -229,10 +241,14 @@ public class StatementService {
                 )
             )
             .flatMap(statement -> {
+                LocalDateTime deletedAt = statement.getDeletedAt();
                 statement.restore();
-                return statementRepository.save(statement);
-            })
-            .then();
+                return statementRepository.save(statement)
+                    .then(Mono.defer(() ->
+                        questionRepository.restoreAllDeletedByStatementIdAndDeletedAt(
+                            id, deletedAt)))
+                    .then();
+            });
     }
 
     /**
@@ -240,16 +256,26 @@ public class StatementService {
      */
     @Transactional
     public Mono<Void> hardDelete(Long id) {
-        return findById(id).flatMap(statement ->
-            questionRepository
-                .findAllByStatementIdOrderByOrderIndex(statement.getId())
-                .flatMap(question ->
-                    optionRepository
-                        .softDeleteAllByQuestionId(question.getId())
-                        .then(questionRepository.delete(question))
+        // A purge is only allowed on a trashed statement, so the lookup must
+        // filter on deleted_at IS NOT NULL. Using findById (active only) made
+        // every purge attempt fail with 404 and left the cleanup unreachable.
+        return statementRepository
+            .findByIdAndDeletedAtIsNotNull(id)
+            .switchIfEmpty(
+                Mono.error(
+                    ApiException.notFound("Trashed statement not found: " + id)
                 )
-                .then(statementRepository.delete(statement))
-        );
+            )
+            .flatMap(statement ->
+                // Options and images go with their question through the
+                // ON DELETE CASCADE constraints, so deleting the questions is
+                // enough. Soft-deleting the options first was pointless: the
+                // cascade removes those rows anyway.
+                questionRepository
+                    .deleteAllByStatementId(statement.getId())
+                    .then(statementRepository.delete(statement))
+            )
+            .then();
     }
 
     /**

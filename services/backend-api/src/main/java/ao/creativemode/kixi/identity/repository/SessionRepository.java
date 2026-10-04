@@ -13,4 +13,10 @@ public interface SessionRepository extends ReactiveCrudRepository<Session, Long>
     Mono<Session> findByIdAndDeletedAtIsNotNull(Long id);
     Flux<Session> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Mono<Long> countByAccountIdAndDeletedAtIsNull(Long accountId);
+
+    /**
+     * Hard delete every session of an account, active or trashed. Sessions are
+     * account-scoped and must be removed before the account is purged.
+     */
+    Mono<Void> deleteAllByAccountId(Long accountId);
 }

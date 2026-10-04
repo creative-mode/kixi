@@ -19,7 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -44,17 +44,20 @@ public class LegacyOcrStatementService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final OcrServiceClient ocrServiceClient;
+    private final TransactionalOperator transactionalOperator;
 
     public LegacyOcrStatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
-        OcrServiceClient ocrServiceClient
+        OcrServiceClient ocrServiceClient,
+        TransactionalOperator transactionalOperator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.ocrServiceClient = ocrServiceClient;
+        this.transactionalOperator = transactionalOperator;
     }
 
     /**
@@ -64,7 +67,11 @@ public class LegacyOcrStatementService {
      * @param createdBy ID of the user creating the statement
      * @return Mono containing the created statement with questions
      */
-    @Transactional
+    // Deliberately NOT @Transactional: the OCR call below is a remote HTTP
+    // request that can take seconds, and a transaction would hold a database
+    // connection open for its whole duration. The persistence step is wrapped
+    // in an explicit transaction instead, which also survives the self
+    // invocation that would otherwise bypass a proxy-based @Transactional.
     public Mono<StatementWithQuestions> createFromOcr(
         List<FilePart> files,
         Long createdBy
@@ -100,7 +107,9 @@ public class LegacyOcrStatementService {
                         : 0
                 );
 
-                return createStatementFromOcrResponse(ocrResponse, createdBy);
+                return transactionalOperator
+                    .<StatementWithQuestions>execute(tx -> createStatementFromOcrResponse(ocrResponse, createdBy))
+                    .single();
             })
             .doOnSuccess(result ->
                 log.info(
@@ -121,7 +130,9 @@ public class LegacyOcrStatementService {
      * @param createdBy ID of the user creating the statement
      * @return Mono containing the created statement with questions
      */
-    @Transactional
+    // Transaction boundary is the caller's transactionalOperator: this method
+    // is only ever reached through a self invocation, which never goes through
+    // the Spring proxy, so an annotation here would silently do nothing.
     public Mono<StatementWithQuestions> createStatementFromOcrResponse(
         OcrResponse ocrResponse,
         Long createdBy

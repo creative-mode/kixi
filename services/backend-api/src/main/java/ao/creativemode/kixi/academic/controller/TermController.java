@@ -6,7 +6,9 @@ import ao.creativemode.kixi.academic.service.TermService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
+import java.net.URI;
 import java.util.List;
 import static org.springframework.http.HttpStatus.NO_CONTENT;
 
@@ -36,8 +38,19 @@ public class TermController {
     }
 
     @PostMapping
-    public Mono<ResponseEntity<TermResponse>> create(@Valid @RequestBody TermRequest request) {
-        return service.create(request).map(ResponseEntity::ok);
+    public Mono<ResponseEntity<TermResponse>> create(
+            @Valid @RequestBody TermRequest request,
+            UriComponentsBuilder uriBuilder
+    ) {
+        return service.create(request)
+                .map(created -> {
+                    URI location = uriBuilder
+                            .path("/api/v1/terms/{id}")
+                            .buildAndExpand(created.id())
+                            .toUri();
+
+                    return ResponseEntity.created(location).body(created);
+                });
     }
 
     @PutMapping("/{id}")
@@ -52,7 +65,7 @@ public class TermController {
 
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return service.restore(id).thenReturn(ResponseEntity.ok().build());
+        return service.restore(id).thenReturn(ResponseEntity.noContent().build());
     }
 
     @DeleteMapping("/{id}/purge")

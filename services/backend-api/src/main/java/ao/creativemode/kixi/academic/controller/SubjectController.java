@@ -73,18 +73,18 @@ public class SubjectController {
     @DeleteMapping("/{code}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable String code){
         return service.softDelete(code)
-                .map(v->ResponseEntity.noContent().build());
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     @PostMapping("/{code}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable String code){
         return service.restore(code)
-                .map(v->ResponseEntity.noContent().build());
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     @DeleteMapping("/{code}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable String code){
         return service.hardDelete(code)
-                .map(v->ResponseEntity.noContent().build());
+                .thenReturn(ResponseEntity.noContent().build());
     }
 }
