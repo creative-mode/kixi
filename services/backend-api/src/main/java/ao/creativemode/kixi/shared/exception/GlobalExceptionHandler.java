@@ -56,7 +56,11 @@ public class GlobalExceptionHandler {
         ).withTitle(status.getReasonPhrase());
         problem = problem.withInstance(exchange);
 
-        return Mono.just(ResponseEntity.status(statusCode).body(problem));
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(statusCode);
+        if (ex instanceof RegistrationRateLimitException rateLimitException) {
+            response.header("Retry-After", String.valueOf(rateLimitException.getRetryAfterSeconds()));
+        }
+        return Mono.just(response.body(problem));
     }
 
     /**
