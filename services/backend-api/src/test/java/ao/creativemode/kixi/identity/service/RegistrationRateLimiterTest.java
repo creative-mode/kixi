@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.r2dbc.core.FetchSpec;
+import org.springframework.r2dbc.core.RowsFetchSpec;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -69,7 +70,8 @@ class RegistrationRateLimiterTest {
         when(databaseClient.sql(org.mockito.ArgumentMatchers.contains("INSERT INTO registration_rate_limits")))
                 .thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
-        when(reserve.map(any(BiFunction.class))).thenReturn(rows(Mono.empty()));
+        RowsFetchSpec<Object> empty = rows(Mono.empty());
+        when(reserve.map(any(BiFunction.class))).thenReturn(empty);
 
         StepVerifier.create(limiter.check("10.0.0.1"))
                 .expectErrorSatisfies(error -> {
@@ -86,8 +88,9 @@ class RegistrationRateLimiterTest {
         when(databaseClient.sql(org.mockito.ArgumentMatchers.contains("INSERT INTO registration_rate_limits")))
                 .thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
-        when(reserve.map(any(BiFunction.class))).thenReturn(
-                rows(Mono.error(new RuntimeException("connection reset"))));
+        RowsFetchSpec<Object> failing =
+                rows(Mono.error(new RuntimeException("connection reset")));
+        when(reserve.map(any(BiFunction.class))).thenReturn(failing);
 
         StepVerifier.create(limiter.check("10.0.0.1"))
                 .expectErrorSatisfies(error -> {
@@ -105,9 +108,9 @@ class RegistrationRateLimiterTest {
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
         when(reserve.map(any(BiFunction.class))).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            BiFunction<io.r2dbc.spi.Readable, Object, ?> mapper = invocation.getArgument(0);
+            BiFunction<io.r2dbc.spi.Row, io.r2dbc.spi.RowMetadata, ?> mapper = invocation.getArgument(0);
             // Drive the mapper with a stub row so RateLimitState is built as in production.
-            io.r2dbc.spi.Readable row = mock(io.r2dbc.spi.Readable.class);
+            io.r2dbc.spi.Row row = mock(io.r2dbc.spi.Row.class);
             when(row.get("attempts", Integer.class)).thenReturn(attempts);
             when(row.get("retry_after_seconds")).thenReturn(retryAfterSeconds);
             Object mapped = mapper.apply(row, null);
@@ -126,9 +129,8 @@ class RegistrationRateLimiterTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static DatabaseClient.GenericExecuteSpec.RowsFetchSpec<Object> rows(Mono<?> value) {
-        DatabaseClient.GenericExecuteSpec.RowsFetchSpec<Object> fetch =
-                mock(DatabaseClient.GenericExecuteSpec.RowsFetchSpec.class);
+    private static RowsFetchSpec<Object> rows(Mono<?> value) {
+        RowsFetchSpec<Object> fetch = mock(RowsFetchSpec.class);
         when(fetch.one()).thenReturn((Mono<Object>) value);
         return fetch;
     }
