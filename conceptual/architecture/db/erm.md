@@ -15,6 +15,7 @@
 **institutionSubjects** (id, institutionId, subjectId, createdAt, deletedAt); </br>
 **institutionTeachers** (id, institutionId, teacherId, createdAt, deletedAt); </br>
 **institutionStudents** (id, institutionId, userId, createdAt, deletedAt); </br>
+**teachingAssignments** (id, teacherId, classId, subjectId, schoolYearId, tutorStyle, createdAt, deletedAt); </br>
 **statements** (id, examType, durationMinutes, variant, title, instructions, totalMaxScore, schoolYearId, termId, subjectId, classId, courseId, institutionId, createdBy, visible, createdAt, updatedAt, deletedAt); </br>
 **questions** (id, statementId, number, text, questionType, maxScore, orderIndex, createdAt, updatedAt, deletedAt); </br>
 **questionImages** (id, questionId, imageUrl, caption, orderIndex, createdAt, updatedAt, deletedAt); </br>
