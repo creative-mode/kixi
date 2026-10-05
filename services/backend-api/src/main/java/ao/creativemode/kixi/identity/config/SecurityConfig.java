@@ -56,6 +56,10 @@ public class SecurityConfig {
                         .authenticated()
                         .pathMatchers("/api/v1/institutions", "/api/v1/institutions/**")
                         .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET, "/api/v1/teaching-assignments/me")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
+                        .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
