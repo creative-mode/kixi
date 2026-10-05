@@ -6,6 +6,7 @@ import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.time.LocalDateTime;
 
 /**
  * Repository for Question entity database operations.
@@ -45,6 +46,23 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
      * Find all questions for a statement, ordered by order_index (Spring Data naming convention)
      */
     Flux<Question> findAllByStatementIdOrderByOrderIndex(Long statementId);
+
+    /**
+     * Find every question of a statement, trashed ones included.
+     * A purge must reach previously soft-deleted questions too, otherwise they
+     * are left behind still holding their own options and images.
+     */
+    @Query(
+        "SELECT * FROM questions WHERE statement_id = :statementId ORDER BY order_index ASC"
+    )
+    Flux<Question> findAllByStatementIdIncludingDeleted(Long statementId);
+
+    /**
+     * Hard delete every question of a statement, trashed ones included.
+     * Options and images are removed by their ON DELETE CASCADE constraints.
+     */
+    @Query("DELETE FROM questions WHERE statement_id = :statementId")
+    Mono<Void> deleteAllByStatementId(Long statementId);
 
     /**
      * Find an active question by ID
@@ -161,12 +179,34 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     );
 
     /**
-     * Delete all questions for a statement (soft delete)
+     * Soft delete every still-active question of a statement.
+     *
+     * <p>The caller supplies the exact {@code deleted_at} value it stamped on
+     * the statement itself. Stamping both sides with one shared value is what
+     * lets {@link #restoreAllDeletedByStatementIdAndDeletedAt(Long,
+     * LocalDateTime)} restore precisely the questions this cascade touched,
+     * leaving questions that were deleted individually beforehand untouched.
      */
     @Query(
-        "UPDATE questions SET deleted_at = CURRENT_TIMESTAMP WHERE statement_id = :statementId AND deleted_at IS NULL"
+        "UPDATE questions SET deleted_at = :deletedAt WHERE statement_id = :statementId AND deleted_at IS NULL"
     )
-    Mono<Integer> softDeleteAllByStatementId(Long statementId);
+    Mono<Integer> softDeleteAllByStatementId(
+        Long statementId,
+        LocalDateTime deletedAt
+    );
+
+    /**
+     * Undo {@link #softDeleteAllByStatementId(Long, LocalDateTime)} for the
+     * questions stamped by that exact cascade, identified by the shared
+     * timestamp. Questions soft deleted at any other time stay deleted.
+     */
+    @Query(
+        "UPDATE questions SET deleted_at = NULL WHERE statement_id = :statementId AND deleted_at = :deletedAt"
+    )
+    Mono<Integer> restoreAllDeletedByStatementIdAndDeletedAt(
+        Long statementId,
+        LocalDateTime deletedAt
+    );
 
     /**
      * Calculate total max score for a statement

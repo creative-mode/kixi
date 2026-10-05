@@ -5,6 +5,7 @@ import ao.creativemode.kixi.academic.dto.term.TermRequest;
 import ao.creativemode.kixi.academic.dto.term.TermResponse;
 import ao.creativemode.kixi.academic.model.Term;
 import ao.creativemode.kixi.academic.repository.TermRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -37,7 +38,10 @@ public class TermService {
         Term entity = new Term();
         entity.setName(dto.name());
         entity.setNumber(dto.number());
-        return repository.save(entity).map(this::toResponse);
+        return repository.save(entity)
+                .map(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("A term with number " + dto.number() + " already exists"));
     }
 
     public Mono<TermResponse> update(Long id, TermRequest dto) {
@@ -47,7 +51,9 @@ public class TermService {
                     entity.setName(dto.name());
                     entity.setNumber(dto.number());
                     entity.setUpdatedAt(LocalDateTime.now());
-                    return repository.save(entity);
+                    return repository.save(entity)
+                            .onErrorMap(DataIntegrityViolationException.class,
+                                    e -> ApiException.conflict("A term with number " + dto.number() + " already exists"));
                 })
                 .map(this::toResponse);
     }

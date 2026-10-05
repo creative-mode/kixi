@@ -62,6 +62,7 @@ class AuthServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getMessage()).isEqualTo("Invalid username or password");
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(401);
                 })
                 .verify();
     }
@@ -77,6 +78,7 @@ class AuthServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getMessage()).isEqualTo("Account is inactive");
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(401);
                 })
                 .verify();
 
@@ -94,6 +96,7 @@ class AuthServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getMessage()).isEqualTo("Invalid username or password");
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(401);
                 })
                 .verify();
     }

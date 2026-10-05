@@ -64,12 +64,25 @@ public class ClassController {
         return service.create(request)
                 .map(created -> {
                     URI location = uriBuilder
-                            .path("/api/v1/class/{id}")
-                            .buildAndExpand(created.code())
+                            .path("/api/v1/classes/{id}")
+                            .buildAndExpand(created.id())
                             .toUri();
 
                     return ResponseEntity.created(location).body(created);
                 });
+    }
+
+
+    /**
+     * Updates an existing active class.
+     */
+    @PutMapping("/{id}")
+    public Mono<ResponseEntity<ClassResponse>> update(
+            @PathVariable Long id,
+            @Valid @RequestBody ClassRequest request
+    ){
+        return service.update(id, request)
+                .map(ResponseEntity::ok);
     }
 
 
@@ -89,7 +102,7 @@ public class ClassController {
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id){
         return service.restore(id)
-                .thenReturn(ResponseEntity.ok().build());
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
