@@ -15,8 +15,9 @@ import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 @Configuration(proxyBeanMethods = false)
 public class CorsConfig {
 
-    static final List<String> ALLOWED_METHODS = Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS");
+    static final List<String> ALLOWED_METHODS = Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     static final List<String> ALLOWED_HEADERS = Arrays.asList("Authorization", "Content-Type", "X-Request-Id");
+    static final List<String> EXPOSED_HEADERS = Arrays.asList("Retry-After", "X-Request-ID");
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(CorsProperties properties) {
@@ -29,6 +30,7 @@ public class CorsConfig {
         }
         config.setAllowedMethods(ALLOWED_METHODS);
         config.setAllowedHeaders(ALLOWED_HEADERS);
+        config.setExposedHeaders(EXPOSED_HEADERS);
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
 

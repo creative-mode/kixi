@@ -30,9 +30,11 @@ class CorsConfigTest {
         assertThat(resolved.getAllowedOrigins())
                 .containsExactly("https://aluno.kixi.ao", "https://manager.kixi.ao");
         assertThat(resolved.getAllowedMethods())
-                .contains("GET", "POST", "PUT", "DELETE", "OPTIONS");
+                .contains("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
         assertThat(resolved.getAllowedHeaders())
                 .contains("Authorization", "Content-Type", "X-Request-Id");
+        assertThat(resolved.getExposedHeaders())
+                .contains("Retry-After", "X-Request-ID");
         assertThat(resolved.getAllowCredentials()).isTrue();
     }
 

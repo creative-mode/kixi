@@ -80,6 +80,18 @@ class CorsSecurityIntegrationTest {
     }
 
     @Test
+    void preflightForPatchEndpointIsAccepted() {
+        client.mutateWith(studentJwt())
+                .options()
+                .uri("http://localhost/api/v1/statements/1/visibility")
+                .header("Origin", "https://aluno.kixi.ao")
+                .header("Access-Control-Request-Method", "PATCH")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("Access-Control-Allow-Origin", "https://aluno.kixi.ao");
+    }
+
+    @Test
     void disallowedOriginIsRejectedWithoutAllowHeader() {
         EntityExchangeResult<byte[]> result = client.mutateWith(studentJwt())
                 .get()
