@@ -139,6 +139,22 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginNormalizesEmailBeforeLookup() {
+        Account existing = account(1L, "student", "hashed");
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("Student@Kixi.AO"))
+                .thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("student@kixi.ao"))
+                .thenReturn(Mono.just(existing));
+        when(passwordEncoder.matches("correct", "hashed")).thenReturn(true);
+        when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
+        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+
+        StepVerifier.create(service.login("Student@Kixi.AO", "correct"))
+                .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
+                .verifyComplete();
+    }
+
+    @Test
     void loginWithGoogleReusesExistingAccountByEmail() {
         Account existing = account(1L, "existing", "hashed");
         when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
@@ -267,7 +283,7 @@ class AuthServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
-                    assertThat(error).hasMessage("Username already in use");
+                    assertThat(error).hasMessage("Username or email already in use");
                 })
                 .verify();
 
@@ -286,7 +302,7 @@ class AuthServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
-                    assertThat(error).hasMessage("Email already in use");
+                    assertThat(error).hasMessage("Username or email already in use");
                 })
                 .verify();
 
@@ -311,11 +327,7 @@ class AuthServiceTest {
         verify(accountRepository, never()).save(any(Account.class));
     }
 
-    /**
-     * findAccountByUsernameOrEmail() builds its .switchIfEmpty(findByEmailAndDeletedAtIsNull(...))
-     * argument eagerly, which calls the repository immediately, even when the username lookup
-     * above it already found an account and this branch is never subscribed.
-     */
+    /** The email fallback is lazy, so it is only queried after a username miss. */
     private void stubUnusedEmailFallback(String usernameOrEmail) {
         when(accountRepository.findByEmailAndDeletedAtIsNull(usernameOrEmail)).thenReturn(Mono.empty());
     }

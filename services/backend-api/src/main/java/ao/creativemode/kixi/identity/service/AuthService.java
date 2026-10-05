@@ -78,10 +78,10 @@ public class AuthService {
 
         return accountRepository.findByUsernameAndDeletedAtIsNull(username)
                 .flatMap(existing -> Mono.<Account>error(
-                        ApiException.conflict("Username already in use")))
+                        ApiException.conflict("Username or email already in use")))
                 .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
                         .flatMap(existing -> Mono.<Account>error(
-                                ApiException.conflict("Email already in use")))))
+                                ApiException.conflict("Username or email already in use")))))
                 .then(Mono.defer(() -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
                         .switchIfEmpty(Mono.error(ApiException.conflict(
                                 "Default role is not configured: " + DEFAULT_ROLE_NAME)))
@@ -118,7 +118,8 @@ public class AuthService {
 
     private Mono<Account> findAccountByUsernameOrEmail(String input) {
         return accountRepository.findByUsernameAndDeletedAtIsNull(input)
-                .switchIfEmpty(accountRepository.findByEmailAndDeletedAtIsNull(input));
+                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(
+                        input.toLowerCase(Locale.ROOT))));
     }
 
     private Mono<Account> recordLogin(Account account) {
