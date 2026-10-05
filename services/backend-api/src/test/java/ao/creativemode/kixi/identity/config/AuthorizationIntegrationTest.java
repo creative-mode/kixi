@@ -1,6 +1,8 @@
 package ao.creativemode.kixi.identity.config;
 
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -246,6 +248,70 @@ class AuthorizationIntegrationTest {
                 List.of(),
                 null
         );
+    }
+
+    // ── Statement writes carry the signed-in account to the service ─────────
+
+    @Test
+    void passesTheSignedInTeacherWhenApprovingAStatement() {
+        givenApproveReviewReturnsAStatement();
+
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).approveReview(1L, 7L, false);
+    }
+
+    @Test
+    void passesTheAdministratorFlagWhenApprovingAStatement() {
+        givenApproveReviewReturnsAStatement();
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).approveReview(1L, 1L, true);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenChangingVisibility() {
+        Statement statement = new Statement("EXAM", "Mathematics exam");
+        statement.setId(1L);
+        when(statementService.setVisible(anyLong(), anyBoolean(), anyLong(), anyBoolean()))
+                .thenReturn(Mono.just(statement));
+
+        client.mutateWith(teacherJwt())
+                .patch()
+                .uri("/api/v1/statements/1/visibility?visible=true")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).setVisible(1L, true, 7L, false);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenDeletingAStatement() {
+        when(statementService.softDelete(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/statements/1")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).softDelete(1L, 7L, false);
+    }
+
+    private void givenApproveReviewReturnsAStatement() {
+        Statement statement = new Statement("EXAM", "Mathematics exam");
+        statement.setId(1L);
+        when(statementService.approveReview(anyLong(), anyLong(), anyBoolean()))
+                .thenReturn(Mono.just(statement));
     }
 
     // ── Teaching assignments: administered by ADMIN, read by the teacher ────

@@ -233,12 +233,12 @@ public class StatementController {
      */
     @PostMapping("/{id}/approve")
     public Mono<ResponseEntity<StatementSummary>> approveReview(
-            @PathVariable Long id
+        @PathVariable Long id
     ) {
         return currentAuthor()
-                .flatMap(author -> statementService.approveReview(id, author.getT1(), author.getT2()))
-                .map(StatementSummary::from)
-                .map(ResponseEntity::ok);
+            .flatMap(author -> statementService.approveReview(id, author.getT1(), author.getT2()))
+            .map(StatementSummary::from)
+            .map(ResponseEntity::ok);
     }
 
     /**
@@ -246,14 +246,14 @@ public class StatementController {
      */
     @PatchMapping("/{id}/visibility")
     public Mono<ResponseEntity<StatementSummary>> setVisibility(
-            @PathVariable Long id,
-            @RequestParam boolean visible
+        @PathVariable Long id,
+        @RequestParam boolean visible
     ) {
         return currentAuthor()
-                .flatMap(author ->
-                        statementService.setVisible(id, visible, author.getT1(), author.getT2()))
-                .map(StatementSummary::from)
-                .map(ResponseEntity::ok);
+            .flatMap(author ->
+                statementService.setVisible(id, visible, author.getT1(), author.getT2()))
+            .map(StatementSummary::from)
+            .map(ResponseEntity::ok);
     }
 
     // =========================================================================

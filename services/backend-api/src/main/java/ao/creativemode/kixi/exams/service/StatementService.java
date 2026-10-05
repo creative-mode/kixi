@@ -41,29 +41,6 @@ public class StatementService {
         this.accessService = accessService;
     }
 
-    /**
-     * Whether the account may change this statement: an administrator may do
-     * anything, a teacher only the statements of the classes and subjects they
-     * were assigned to.
-     */
-    private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
-        if (statement.getInstitutionId() == null) {
-            // Statements created before the institution model (the OCR flows)
-            // carry no school, so there is nothing to check them against.
-            // Backfilling them is a separate concern from this rule.
-            return Mono.just(statement);
-        }
-        return accessService
-            .requireCanAuthor(
-                accountId,
-                admin,
-                statement.getInstitutionId(),
-                statement.getSubjectId(),
-                statement.getClassId()
-            )
-            .thenReturn(statement);
-    }
-
     // =========================================================================
     // CRUD Operations
     // =========================================================================
@@ -355,5 +332,32 @@ public class StatementService {
      */
     public Mono<Long> countBySource(String source) {
         return statementRepository.countBySourceAndDeletedAtIsNull(source);
+    }
+
+    // =========================================================================
+    // Authorization
+    // =========================================================================
+
+    /**
+     * Whether the account may change this statement: an administrator may do
+     * anything, a teacher only the statements of the classes and subjects they
+     * were assigned to.
+     */
+    private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
+        if (statement.getInstitutionId() == null) {
+            // Statements created before the institution model (the OCR flows)
+            // carry no school, so there is nothing to check them against.
+            // Backfilling them is a separate concern from this rule.
+            return Mono.just(statement);
+        }
+        return accessService
+            .requireCanAuthor(
+                accountId,
+                admin,
+                statement.getInstitutionId(),
+                statement.getSubjectId(),
+                statement.getClassId()
+            )
+            .thenReturn(statement);
     }
 }
