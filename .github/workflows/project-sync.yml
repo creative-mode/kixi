@@ -1,0 +1,37 @@
+name: Sincronizador do Projeto
+
+# Mantém o Project #4 da organização alinhado com issues, branches e PRs.
+# Requer o secret PROJECT_TOKEN: PAT (classic) com os scopes "project" e "repo".
+# Sem ele o workflow avisa e não faz nada. O campo "Status" do projeto deve ter colunas
+# do tipo Backlog / In progress / In review / Done.
+
+on:
+  issues:
+    types: [opened, reopened, closed]
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+  create:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  sync:
+    name: Atualizar cartões
+    if: github.event_name != 'create' || github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ORG: creative-mode
+      PROJECT_NUMBER: '4'
+      PROJECT_TOKEN_SET: ${{ secrets.PROJECT_TOKEN != '' && 'true' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN || github.token }}
+          script: |
+            await require('./.github/scripts/project-sync.js')({ github, context, core });

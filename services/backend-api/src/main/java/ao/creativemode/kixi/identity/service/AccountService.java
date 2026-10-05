@@ -8,6 +8,7 @@ import ao.creativemode.kixi.identity.repository.AccountRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -18,10 +19,21 @@ public class AccountService {
 
     private final AccountRepository repository;
     private final PasswordEncoder passwordEncoder;
+    private final AccountRoleService accountRoleService;
+    private final UserService userService;
+    private final SessionService sessionService;
 
-    public AccountService(AccountRepository repository, PasswordEncoder passwordEncoder) {
+    public AccountService(
+            AccountRepository repository,
+            PasswordEncoder passwordEncoder,
+            AccountRoleService accountRoleService,
+            UserService userService,
+            SessionService sessionService) {
         this.repository = repository;
         this.passwordEncoder = passwordEncoder;
+        this.accountRoleService = accountRoleService;
+        this.userService = userService;
+        this.sessionService = sessionService;
     }
 
     public Flux<AccountResponse> findAllActive() {
@@ -141,11 +153,21 @@ public class AccountService {
             entity.getDeletedAt()
         );
     }
+    @Transactional
     public Mono<Void> hardDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(
                         Mono.error(ApiException.badRequest("Only deleted accounts can be permanently removed")))
-                .flatMap(repository::delete)
+                .flatMap(account ->
+                        // Role links, the bound profile and the sessions are
+                        // account-scoped rows that keep the accounts foreign
+                        // key alive, so they have to go first. Historical rows
+                        // (simulations, authored statements) are independent
+                        // records and deliberately block the purge instead.
+                        accountRoleService.purgeAssociationsForAccount(id)
+                                .then(userService.deleteAllForAccount(id))
+                                .then(sessionService.deleteAllForAccount(id))
+                                .then(repository.delete(account)))
                 .then();
     }
 }

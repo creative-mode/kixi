@@ -11,6 +11,7 @@ import ao.creativemode.kixi.identity.repository.AccountRoleRepository;
 import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.identity.service.GoogleOAuth2Client.GoogleUserInfo;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -51,12 +52,17 @@ public class AuthService {
     }
 
     public Mono<LoginResponse> login(String usernameOrEmail, String password) {
+        // Rejected credentials are an authentication failure (401), not a
+        // malformed request (400): the caller authenticated fine, the
+        // username/password pair did not. Answering 400 here also let clients
+        // tell "no such account" apart from "wrong password", since the same
+        // 400 is used for genuine payload validation errors on this endpoint.
         return findAccountByUsernameOrEmail(usernameOrEmail.trim())
-                .switchIfEmpty(Mono.error(ApiException.badRequest("Invalid username or password")))
+                .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
                 .filter(Account::getActive)
-                .switchIfEmpty(Mono.error(ApiException.badRequest("Account is inactive")))
+                .switchIfEmpty(Mono.error(ApiException.unauthorized("Account is inactive")))
                 .filter(account -> passwordEncoder.matches(password, account.getPasswordHash()))
-                .switchIfEmpty(Mono.error(ApiException.badRequest("Invalid username or password")))
+                .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
                 .flatMap(account -> recordLogin(account)
                         .flatMap(updated -> loadRoleNames(updated.getId())
                                 .map(roles -> buildLoginResponse(updated.getId(), roles))));
@@ -123,6 +129,9 @@ public class AuthService {
                         "Default role is not configured: " + DEFAULT_ROLE_NAME
                 )))
                 .flatMap(role -> accountRepository.save(account)
+                        .onErrorMap(DuplicateKeyException.class,
+                                e -> ApiException.conflict(
+                                        "An account with this email or username already exists"))
                         .flatMap(savedAccount -> Mono.when(
                                 accountRoleRepository.save(
                                         new AccountRole(savedAccount.getId(), role.getId())

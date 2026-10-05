@@ -7,6 +7,7 @@ import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.identity.dto.sessions.SessionResponse;
 import ao.creativemode.kixi.identity.dto.sessions.SessionRequest;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -66,7 +67,9 @@ public class SessionService {
                 .build();
 
         return repository.save(entity)
-                .map(this::toResponse);
+                .map(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("A session with this token already exists"));
     }
 
     public Mono<SessionResponse> update(Long id, SessionRequest dto) {
@@ -84,7 +87,10 @@ public class SessionService {
                     }
                     entity.setUpdatedAt(LocalDateTime.now());
 
-                    return repository.save(entity);
+                    return repository.save(entity)
+                            .onErrorMap(DataIntegrityViolationException.class,
+                                    e -> ApiException.conflict(
+                                            "A session with this token already exists"));
                 })
                 .map(this::toResponse);
     }
@@ -115,6 +121,15 @@ public class SessionService {
                         Mono.error(ApiException.badRequest("Only deleted sessions can be permanently removed")))
                 .flatMap(repository::delete)
                 .then();
+    }
+
+    /**
+     * Hard delete every session of an account, active or trashed.
+     * Called when the owning account is purged, because a session row holds
+     * the account foreign key and would otherwise block the purge.
+     */
+    public Mono<Void> deleteAllForAccount(Long accountId) {
+        return repository.deleteAllByAccountId(accountId);
     }
 
     /**

@@ -21,12 +21,16 @@ import reactor.test.StepVerifier;
 class RoleServiceTest {
 
     private RoleRepository repository;
+    private AccountRoleService accountRoleService;
     private RoleService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(RoleRepository.class);
-        service = new RoleService(repository);
+        accountRoleService = mock(AccountRoleService.class);
+        service = new RoleService(repository, accountRoleService);
+        when(accountRoleService.purgeAssociationsForRole(any()))
+                .thenReturn(Mono.empty());
     }
 
     @Test
@@ -175,6 +179,7 @@ class RoleServiceTest {
 
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
+        verify(accountRoleService).purgeAssociationsForRole(1L);
         verify(repository).delete(deleted);
     }
 

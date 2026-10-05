@@ -11,6 +11,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.junit.jupiter.api.Test;
 
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
@@ -68,7 +69,16 @@ class OcrPersistenceServiceTest {
             courseRepository,
             subjectRepository,
             classRepository,
-            imageAssociationService
+            imageAssociationService,
+            // The OCR HTTP call must run outside the transaction; only the
+            // persistence step is wrapped. Here the operator just invokes the
+            // callback, which is all a unit test needs to observe the flow.
+            new TransactionalOperator() {
+                @Override
+                public <T> Flux<T> execute(org.springframework.transaction.reactive.TransactionCallback<T> action) {
+                    return Flux.from(action.doInTransaction(null));
+                }
+            }
         );
     }
 

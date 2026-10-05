@@ -26,7 +26,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -64,6 +64,7 @@ public class OcrPersistenceService {
     private final SubjectRepository subjectRepository;
     private final ClassRepository classRepository;
     private final OcrImageAssociationService imageAssociationService;
+    private final TransactionalOperator transactionalOperator;
 
     public OcrPersistenceService(
         OcrServiceClient ocrServiceClient,
@@ -74,7 +75,8 @@ public class OcrPersistenceService {
         CourseRepository courseRepository,
         SubjectRepository subjectRepository,
         ClassRepository classRepository,
-        OcrImageAssociationService imageAssociationService
+        OcrImageAssociationService imageAssociationService,
+        TransactionalOperator transactionalOperator
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.statementRepository = statementRepository;
@@ -85,6 +87,7 @@ public class OcrPersistenceService {
         this.subjectRepository = subjectRepository;
         this.classRepository = classRepository;
         this.imageAssociationService = imageAssociationService;
+        this.transactionalOperator = transactionalOperator;
     }
 
     // =========================================================================
@@ -98,7 +101,11 @@ public class OcrPersistenceService {
      * @param createdBy ID of the user creating the statement
      * @return Mono containing the created statement with all related data
      */
-    @Transactional
+    // Deliberately NOT @Transactional: the OCR call below is a remote HTTP
+    // request that can take seconds, and a transaction would hold a database
+    // connection open for its whole duration. The persistence step is wrapped
+    // in an explicit transaction instead, which also survives the self
+    // invocation that would otherwise bypass a proxy-based @Transactional.
     public Mono<StatementWithRelations> processAndPersist(
         List<OcrUploadedFile> files,
         Long createdBy
@@ -129,7 +136,9 @@ public class OcrPersistenceService {
                         : 0
                 );
 
-                return persistOcrResponse(ocrResponse, createdBy, files);
+                return transactionalOperator
+                    .<StatementWithRelations>execute(tx -> persistOcrResponse(ocrResponse, createdBy, files))
+                    .single();
             })
             .doOnSuccess(result ->
                 log.info(
@@ -149,7 +158,9 @@ public class OcrPersistenceService {
      * @param createdBy   ID of the user creating the statement
      * @return Mono containing the created statement with all related data
      */
-    @Transactional
+    // Transaction boundary is the caller's transactionalOperator: this method
+    // is only ever reached through a self invocation, which never goes through
+    // the Spring proxy, so an annotation here would silently do nothing.
     public Mono<StatementWithRelations> persistOcrResponse(
         OcrResponse ocrResponse,
         Long createdBy,

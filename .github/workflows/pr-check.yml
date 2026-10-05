@@ -1,0 +1,27 @@
+name: Verificador de PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr-check:
+    name: Verificar branch, destino e issue
+    runs-on: ubuntu-latest
+    env:
+      DEV_BRANCH: dev
+      QUA_BRANCH: qua
+      PROD_BRANCH: prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./.github/scripts/pr-check.js')({ github, context, core });

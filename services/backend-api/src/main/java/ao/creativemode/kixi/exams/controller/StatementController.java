@@ -206,7 +206,7 @@ public class StatementController {
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
         return statementService
             .restore(id)
-            .thenReturn(ResponseEntity.ok().build());
+            .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**

@@ -80,6 +80,23 @@ public class AccountRoleService {
                 .then();
     }
 
+    /**
+     * Hard delete every role association of an account. Used when the account
+     * itself is purged: a soft-deleted association still holds the foreign
+     * key and would block the purge.
+     */
+    public Mono<Void> purgeAssociationsForAccount(Long accountId) {
+        return accountRoleRepository.deleteAllByAccountId(accountId);
+    }
+
+    /**
+     * Hard delete every role association of a role. Used when the role itself
+     * is purged, for the same foreign-key reason.
+     */
+    public Mono<Void> purgeAssociationsForRole(Long roleId) {
+        return accountRoleRepository.deleteAllByRoleId(roleId);
+    }
+
     private RoleResponse toRoleResponse(Role entity) {
         return new RoleResponse(
                 entity.getId(),
