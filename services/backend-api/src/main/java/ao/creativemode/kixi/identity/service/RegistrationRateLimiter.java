@@ -69,6 +69,9 @@ public class RegistrationRateLimiter {
                 .one()
                 .switchIfEmpty(Mono.error(ApiException.serviceUnavailable(
                         "Registration protection is temporarily unavailable")))
+                .onErrorMap(error -> !(error instanceof ApiException), error ->
+                        ApiException.serviceUnavailable(
+                                "Registration protection is temporarily unavailable"))
                 .flatMap(state -> state.attempts() > properties.getMaxAttempts()
                         ? Mono.error(new RegistrationRateLimitException(state.retryAfterSeconds()))
                         : Mono.empty());
