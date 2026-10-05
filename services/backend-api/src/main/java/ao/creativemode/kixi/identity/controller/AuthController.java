@@ -4,9 +4,11 @@ import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.ResponseCookie;
 import org.springframework.web.bind.annotation.*;
@@ -43,6 +45,16 @@ public class AuthController {
     public Mono<ResponseEntity<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request.usernameOrEmail(), request.password())
                 .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Registo público de uma conta de aluno. O papel STUDENT é atribuído no
+     * serviço e nunca é aceite a partir do payload do cliente.
+     */
+    @PostMapping("/register")
+    public Mono<ResponseEntity<LoginResponse>> register(@Valid @RequestBody RegisterRequest request) {
+        return authService.register(request)
+                .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
 
     /**

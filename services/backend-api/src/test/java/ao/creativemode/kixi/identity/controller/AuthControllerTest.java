@@ -8,12 +8,15 @@ import static org.mockito.Mockito.verify;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -80,5 +83,43 @@ class AuthControllerTest {
         assertThat(response.getHeaders().getFirst("Set-Cookie"))
                 .contains("kixi_oauth_state=")
                 .contains("Max-Age=0");
+    }
+
+    @Test
+    void registerReturnsCreatedWithLoginResponse() {
+        RegisterRequest request = new RegisterRequest(
+                "student", "student@kixi.ao", "password123", "Ana", "Silva");
+        LoginResponse loginResponse = new LoginResponse(
+                "token", LoginResponse.TOKEN_TYPE, Instant.now(), 9L, List.of("STUDENT"));
+        org.mockito.Mockito.when(authService.register(request)).thenReturn(Mono.just(loginResponse));
+
+        ResponseEntity<LoginResponse> response = controller.register(request).block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode().value()).isEqualTo(201);
+        assertThat(response.getBody()).isEqualTo(loginResponse);
+        verify(authService).register(request);
+    }
+
+    @Test
+    void registerRejectsInvalidPayloadBeforeCallingService() {
+        WebTestClient client = WebTestClient.bindToController(controller).build();
+
+        client.post()
+                .uri("/api/v1/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {
+                          "username": "student",
+                          "email": "not-an-email",
+                          "password": "short",
+                          "firstName": "",
+                          "lastName": "Silva"
+                        }
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(authService, never()).register(org.mockito.ArgumentMatchers.any(RegisterRequest.class));
     }
 }

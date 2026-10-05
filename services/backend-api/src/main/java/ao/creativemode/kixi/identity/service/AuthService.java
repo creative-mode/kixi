@@ -2,6 +2,7 @@ package ao.creativemode.kixi.identity.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.model.AccountRole;
 import ao.creativemode.kixi.identity.model.Role;
@@ -14,11 +15,13 @@ import ao.creativemode.kixi.identity.service.GoogleOAuth2Client.GoogleUserInfo;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -66,6 +69,51 @@ public class AuthService {
                 .flatMap(account -> recordLogin(account)
                         .flatMap(updated -> loadRoleNames(updated.getId())
                                 .map(roles -> buildLoginResponse(updated.getId(), roles))));
+    }
+
+    @Transactional
+    public Mono<LoginResponse> register(RegisterRequest request) {
+        String username = request.username().trim();
+        String email = request.email().trim().toLowerCase(Locale.ROOT);
+
+        return accountRepository.findByUsernameAndDeletedAtIsNull(username)
+                .flatMap(existing -> Mono.<Account>error(
+                        ApiException.conflict("Username already in use")))
+                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
+                        .flatMap(existing -> Mono.<Account>error(
+                                ApiException.conflict("Email already in use")))))
+                .then(Mono.defer(() -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
+                        .switchIfEmpty(Mono.error(ApiException.conflict(
+                                "Default role is not configured: " + DEFAULT_ROLE_NAME)))
+                        .flatMap(role -> {
+                            Account account = new Account();
+                            account.setUsername(username);
+                            account.setEmail(email);
+                            account.setPasswordHash(passwordEncoder.encode(request.password()));
+                            account.setEmailVerified(false);
+                            account.setActive(true);
+                            account.setDeletedAt(null);
+
+                            return accountRepository.save(account)
+                                    .onErrorMap(DuplicateKeyException.class,
+                                            error -> ApiException.conflict(
+                                                    "An account with this email or username already exists"))
+                                    .flatMap(savedAccount -> {
+                                        User user = new User();
+                                        user.setAccountId(savedAccount.getId());
+                                        user.setFirstName(request.firstName().trim());
+                                        user.setLastName(request.lastName().trim());
+                                        user.setDeletedAt(null);
+
+                                        return Mono.when(
+                                                accountRoleRepository.save(
+                                                        new AccountRole(savedAccount.getId(), role.getId())),
+                                                userRepository.save(user)
+                                        ).thenReturn(savedAccount);
+                                    })
+                                    .map(savedAccount -> buildLoginResponse(
+                                            savedAccount.getId(), List.of(DEFAULT_ROLE_NAME)));
+                        })));
     }
 
     private Mono<Account> findAccountByUsernameOrEmail(String input) {
