@@ -213,8 +213,8 @@ public class StatementController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return statementService
-            .restore(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.restore(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -223,8 +223,8 @@ public class StatementController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return statementService
-            .hardDelete(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.hardDelete(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 

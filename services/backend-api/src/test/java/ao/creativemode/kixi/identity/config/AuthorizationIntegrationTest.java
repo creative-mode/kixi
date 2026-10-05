@@ -307,6 +307,32 @@ class AuthorizationIntegrationTest {
         verify(statementService).softDelete(1L, 7L, false);
     }
 
+    @Test
+    void passesTheSignedInTeacherWhenPurgingAStatement() {
+        when(statementService.hardDelete(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/statements/1/purge")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).hardDelete(1L, 7L, false);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenRestoringAStatement() {
+        when(statementService.restore(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/statements/1/restore")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).restore(1L, 7L, false);
+    }
+
     private void givenApproveReviewReturnsAStatement() {
         Statement statement = new Statement("EXAM", "Mathematics exam");
         statement.setId(1L);

@@ -210,7 +210,7 @@ class StatementServiceTest {
     void restoreRejectsStatementThatIsNotInTrash() {
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.restore(1L))
+        StepVerifier.create(service.restore(1L, 9L, true))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
                 .verify();
 
@@ -227,7 +227,7 @@ class StatementServiceTest {
         when(questionRepository.restoreAllDeletedByStatementIdAndDeletedAt(any(), any()))
                 .thenReturn(Mono.just(3));
 
-        StepVerifier.create(service.restore(1L)).verifyComplete();
+        StepVerifier.create(service.restore(1L, 9L, true)).verifyComplete();
 
         assertThat(deleted.getDeletedAt()).isNull();
         // Only the questions stamped by the statement's own soft delete are
@@ -246,7 +246,7 @@ class StatementServiceTest {
         when(questionRepository.deleteAllByStatementId(1L)).thenReturn(Mono.empty());
         when(statementRepository.delete(existing)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.hardDelete(1L)).verifyComplete();
+        StepVerifier.create(service.hardDelete(1L, 9L, true)).verifyComplete();
 
         verify(questionRepository).deleteAllByStatementId(1L);
         verify(statementRepository).delete(existing);
@@ -256,7 +256,7 @@ class StatementServiceTest {
     void hardDeleteRejectsStatementThatIsNotInTrash() {
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.hardDelete(1L))
+        StepVerifier.create(service.hardDelete(1L, 9L, true))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
                 .verify();
 
@@ -336,6 +336,43 @@ class StatementServiceTest {
 
         assertThat(existing.getDeletedAt()).isNull();
         verify(questionRepository, never()).softDeleteAllByStatementId(any(), any());
+    }
+
+    @Test
+    void purgeIsForbiddenForATeacherOutsideTheirClassAndSubject() {
+        Statement trashed = statementOfSchool(1L, 4L, 3L);
+        trashed.markAsDeleted();
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.hardDelete(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(questionRepository, never()).deleteAllByStatementId(any());
+        verify(statementRepository, never()).delete(any());
+    }
+
+    @Test
+    void restoreIsForbiddenForATeacherOutsideTheirClassAndSubject() {
+        Statement trashed = statementOfSchool(1L, 4L, 3L);
+        trashed.markAsDeleted();
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.restore(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        assertThat(trashed.getDeletedAt()).isNotNull();
+        verify(questionRepository, never())
+                .restoreAllDeletedByStatementIdAndDeletedAt(any(), any());
     }
 
     @Test

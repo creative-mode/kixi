@@ -237,7 +237,7 @@ public class StatementService {
      * own soft delete had cascaded.
      */
     @Transactional
-    public Mono<Void> restore(Long id) {
+    public Mono<Void> restore(Long id, Long accountId, boolean admin) {
         return statementRepository
             .findByIdAndDeletedAtIsNotNull(id)
             .switchIfEmpty(
@@ -245,6 +245,7 @@ public class StatementService {
                     ApiException.notFound("Deleted statement not found: " + id)
                 )
             )
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement -> {
                 LocalDateTime deletedAt = statement.getDeletedAt();
                 statement.restore();
@@ -260,7 +261,7 @@ public class StatementService {
      * Hard delete a statement and its questions/options.
      */
     @Transactional
-    public Mono<Void> hardDelete(Long id) {
+    public Mono<Void> hardDelete(Long id, Long accountId, boolean admin) {
         // A purge is only allowed on a trashed statement, so the lookup must
         // filter on deleted_at IS NOT NULL. Using findById (active only) made
         // every purge attempt fail with 404 and left the cleanup unreachable.
@@ -271,6 +272,7 @@ public class StatementService {
                     ApiException.notFound("Trashed statement not found: " + id)
                 )
             )
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement ->
                 // Options and images go with their question through the
                 // ON DELETE CASCADE constraints, so deleting the questions is
