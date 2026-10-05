@@ -91,6 +91,12 @@ public class Statement {
     private Long courseId;
 
     /**
+     * Reference to the institution (school) this statement was built for (optional)
+     */
+    @Column("institution_id")
+    private Long institutionId;
+
+    /**
      * Reference to the user who created this statement
      */
     @Column("created_by")
@@ -239,6 +245,14 @@ public class Statement {
 
     public void setClassId(Long classId) {
         this.classId = classId;
+    }
+
+    public Long getInstitutionId() {
+        return institutionId;
+    }
+
+    public void setInstitutionId(Long institutionId) {
+        this.institutionId = institutionId;
     }
 
     public Long getCourseId() {

@@ -16,7 +16,8 @@ import org.junit.jupiter.api.Test;
  * shared (kernel, no outgoing dependency on any domain module)
  *  |- identity   (accounts, roles, sessions, users, auth) -&gt; shared only
  *  |- academic   (school years, terms, subjects, courses, classes) -&gt; shared only
- *  |- exams      (statements, questions, options, question images) -&gt; shared only
+ *  |- institutions (schools, subject/teacher/student affiliations) -&gt; shared, identity, academic
+ *  |- exams      (statements, questions, options, question images) -&gt; shared, institutions
  *  |- simulations (simulations, simulation answers) -&gt; shared, identity, academic, exams
  *  '- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
  * </pre>
@@ -44,7 +45,7 @@ class ArchitectureTest {
     void sharedDoesNotDependOnAnyDomainModule() {
         noClasses().that().resideInAPackage("..shared..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..academic..", "..exams..", "..simulations..", "..ocr..")
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..")
                 .check(classes);
     }
 
@@ -52,7 +53,7 @@ class ArchitectureTest {
     void identityOnlyDependsOnShared() {
         noClasses().that().resideInAPackage("..identity..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..academic..", "..exams..", "..simulations..", "..ocr..")
+                        "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..")
                 .check(classes);
     }
 
@@ -60,7 +61,15 @@ class ArchitectureTest {
     void academicOnlyDependsOnShared() {
         noClasses().that().resideInAPackage("..academic..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..exams..", "..simulations..", "..ocr..")
+                        "..identity..", "..institutions..", "..exams..", "..simulations..", "..ocr..")
+                .check(classes);
+    }
+
+    @Test
+    void institutionsOnlyDependsOnSharedIdentityAndAcademic() {
+        noClasses().that().resideInAPackage("..institutions..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..exams..", "..simulations..", "..ocr..")
                 .check(classes);
     }
 
