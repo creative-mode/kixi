@@ -4,9 +4,12 @@ import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.ResponseCookie;
 import org.springframework.web.bind.annotation.*;
@@ -14,9 +17,11 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Locale;
 
 /**
  * Autenticação: login tradicional (username/email + password) e login Google OAuth2.
@@ -29,10 +34,14 @@ public class AuthController {
 
     private final AuthService authService;
     private final GoogleOAuth2Properties googleProperties;
+    private final RegistrationRateLimiter registrationRateLimiter;
 
-    public AuthController(AuthService authService, GoogleOAuth2Properties googleProperties) {
+    public AuthController(AuthService authService,
+                          GoogleOAuth2Properties googleProperties,
+                          RegistrationRateLimiter registrationRateLimiter) {
         this.authService = authService;
         this.googleProperties = googleProperties;
+        this.registrationRateLimiter = registrationRateLimiter;
     }
 
     /**
@@ -43,6 +52,35 @@ public class AuthController {
     public Mono<ResponseEntity<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request.usernameOrEmail(), request.password())
                 .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Registo público de uma conta de aluno. O papel STUDENT é atribuído no
+     * serviço e nunca é aceite a partir do payload do cliente.
+     */
+    @PostMapping("/register")
+    public Mono<ResponseEntity<LoginResponse>> register(
+            ServerWebExchange exchange,
+            @Valid @RequestBody RegisterRequest request) {
+        return registrationRateLimiter.check(clientAddress(exchange))
+                .then(registrationRateLimiter.check(identityKey(request)))
+                .then(authService.register(request))
+                .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
+    }
+
+    private String identityKey(RegisterRequest request) {
+        return "identity:" + request.email().trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String clientAddress(ServerWebExchange exchange) {
+        if (exchange == null) {
+            return "unknown";
+        }
+        InetSocketAddress remoteAddress = exchange.getRequest().getRemoteAddress();
+        if (remoteAddress == null || remoteAddress.getAddress() == null) {
+            return "unknown";
+        }
+        return remoteAddress.getAddress().getHostAddress();
     }
 
     /**
