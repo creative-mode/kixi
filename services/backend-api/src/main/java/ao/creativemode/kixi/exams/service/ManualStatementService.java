@@ -45,7 +45,8 @@ public class ManualStatementService {
     @Transactional
     public Mono<Statement> create(ManualStatementRequest request, Long accountId, boolean admin) {
         return accessService
-            .requireCanAuthor(accountId, admin, request.institutionId(), request.subjectId())
+            .requireCanAuthor(
+                accountId, admin, request.institutionId(), request.subjectId(), request.classId())
             .then(Mono.defer(() -> statementRepository.save(toStatement(request, accountId))))
             .flatMap(statement ->
                 Flux.fromIterable(indexed(request.questions()))

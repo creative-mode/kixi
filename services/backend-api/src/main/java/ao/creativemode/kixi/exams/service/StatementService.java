@@ -6,6 +6,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,15 +27,41 @@ public class StatementService {
     private final StatementRepository statementRepository;
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
+    private final InstitutionAccessService accessService;
 
     public StatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
-        QuestionOptionRepository optionRepository
+        QuestionOptionRepository optionRepository,
+        InstitutionAccessService accessService
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
+        this.accessService = accessService;
+    }
+
+    /**
+     * Whether the account may change this statement: an administrator may do
+     * anything, a teacher only the statements of the classes and subjects they
+     * were assigned to.
+     */
+    private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
+        if (statement.getInstitutionId() == null) {
+            // Statements created before the institution model (the OCR flows)
+            // carry no school, so there is nothing to check them against.
+            // Backfilling them is a separate concern from this rule.
+            return Mono.just(statement);
+        }
+        return accessService
+            .requireCanAuthor(
+                accountId,
+                admin,
+                statement.getInstitutionId(),
+                statement.getSubjectId(),
+                statement.getClassId()
+            )
+            .thenReturn(statement);
     }
 
     // =========================================================================
@@ -215,8 +242,9 @@ public class StatementService {
      * beforehand.
      */
     @Transactional
-    public Mono<Void> softDelete(Long id) {
+    public Mono<Void> softDelete(Long id, Long accountId, boolean admin) {
         return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement -> {
                 LocalDateTime deletedAt = LocalDateTime.now();
                 statement.setDeletedAt(deletedAt);
@@ -279,25 +307,29 @@ public class StatementService {
     }
 
     /**
-     * Approve a statement review.
+     * Approve a statement review, making it visible.
      */
     @Transactional
-    public Mono<Statement> approveReview(Long id) {
-        return findById(id).flatMap(statement -> {
-            statement.approveReview();
-            return statementRepository.save(statement);
-        });
+    public Mono<Statement> approveReview(Long id, Long accountId, boolean admin) {
+        return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> {
+                statement.approveReview();
+                return statementRepository.save(statement);
+            });
     }
 
     /**
      * Set statement visibility.
      */
     @Transactional
-    public Mono<Statement> setVisible(Long id, boolean visible) {
-        return findById(id).flatMap(statement -> {
-            statement.setVisible(visible);
-            return statementRepository.save(statement);
-        });
+    public Mono<Statement> setVisible(Long id, boolean visible, Long accountId, boolean admin) {
+        return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> {
+                statement.setVisible(visible);
+                return statementRepository.save(statement);
+            });
     }
 
     // =========================================================================

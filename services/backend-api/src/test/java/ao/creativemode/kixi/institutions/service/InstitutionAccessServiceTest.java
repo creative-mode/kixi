@@ -23,6 +23,7 @@ class InstitutionAccessServiceTest {
     private InstitutionSubjectRepository subjectLinks;
     private InstitutionTeacherRepository teacherLinks;
     private TeacherRepository teachers;
+    private TeachingAssignmentService teachingAssignments;
     private InstitutionAccessService service;
 
     @BeforeEach
@@ -31,7 +32,9 @@ class InstitutionAccessServiceTest {
         subjectLinks = mock(InstitutionSubjectRepository.class);
         teacherLinks = mock(InstitutionTeacherRepository.class);
         teachers = mock(TeacherRepository.class);
-        service = new InstitutionAccessService(institutions, subjectLinks, teacherLinks, teachers);
+        teachingAssignments = mock(TeachingAssignmentService.class);
+        service = new InstitutionAccessService(
+                institutions, subjectLinks, teacherLinks, teachers, teachingAssignments);
     }
 
     @Test
@@ -98,5 +101,58 @@ class InstitutionAccessServiceTest {
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
                 .verify();
+    }
+
+    // ── The class-scoped rule: affiliation is not enough ────────────────────
+
+    @Test
+    void affiliatedTeacherAssignedToTheClassMayAuthor() {
+        givenAffiliatedTeacher();
+        when(teachingAssignments.requireTeaches(9L, 3L, 2L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.requireCanAuthor(9L, false, 1L, 2L, 3L)).verifyComplete();
+    }
+
+    @Test
+    void affiliatedTeacherNotAssignedToTheClassIsForbidden() {
+        givenAffiliatedTeacher();
+        when(teachingAssignments.requireTeaches(9L, 3L, 2L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.requireCanAuthor(9L, false, 1L, 2L, 3L))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+    }
+
+    @Test
+    void anAdministratorIsNotStoppedByAnyTeachingAssignment() {
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Institution()));
+        when(subjectLinks.existsByInstitutionIdAndSubjectIdAndDeletedAtIsNull(1L, 2L)).thenReturn(Mono.just(true));
+        when(teachingAssignments.requireTeaches(9L, 3L, 2L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.requireCanAuthor(9L, true, 1L, 2L, 3L)).verifyComplete();
+    }
+
+    @Test
+    void theAssignmentIsNotConsultedWhenTheInstitutionCheckAlreadyFailed() {
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.requireCanAuthor(9L, false, 1L, 2L, 3L))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        org.mockito.Mockito.verifyNoInteractions(teachingAssignments);
+    }
+
+    private void givenAffiliatedTeacher() {
+        Teacher teacher = new Teacher();
+        teacher.setId(5L);
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Institution()));
+        when(teachers.findByAccountIdAndDeletedAtIsNull(9L)).thenReturn(Mono.just(teacher));
+        when(teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(1L, 5L)).thenReturn(Mono.just(true));
+        when(subjectLinks.existsByInstitutionIdAndSubjectIdAndDeletedAtIsNull(1L, 2L)).thenReturn(Mono.just(true));
     }
 }

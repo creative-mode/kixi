@@ -55,9 +55,18 @@ class ManualStatementServiceTest {
         );
     }
 
+    /** The same statement, but bound to a class, which brings the teaching assignment into play. */
+    private ManualStatementRequest requestOfClass(Long classId) {
+        return new ManualStatementRequest(
+            1L, 2L, "Prova de Matemática", "Teste", 90, null, null,
+            null, null, classId, null, true,
+            List.of(new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null))
+        );
+    }
+
     @Test
     void createsStatementWithNumberedQuestionsAndOptions() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L)).thenReturn(Mono.empty());
+        when(access.requireCanAuthor(9L, false, 1L, 2L, null)).thenReturn(Mono.empty());
         when(statements.save(any(Statement.class))).thenAnswer(invocation -> {
             Statement s = invocation.getArgument(0);
             s.setId(10L);
@@ -87,7 +96,7 @@ class ManualStatementServiceTest {
 
     @Test
     void doesNotSaveAnythingWhenAccessIsDenied() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L))
+        when(access.requireCanAuthor(9L, false, 1L, 2L, null))
                 .thenReturn(Mono.error(ApiException.forbidden("Teacher is not affiliated with this institution")));
 
         StepVerifier.create(service.create(request(), 9L, false))
@@ -97,5 +106,42 @@ class ManualStatementServiceTest {
 
         verify(statements, never()).save(any(Statement.class));
         verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void passesTheClassOfTheRequestSoTheAssignmentIsChecked() {
+        when(access.requireCanAuthor(9L, false, 1L, 2L, 8L)).thenReturn(Mono.empty());
+        when(statements.save(any(Statement.class))).thenAnswer(invocation -> {
+            Statement s = invocation.getArgument(0);
+            s.setId(10L);
+            return Mono.just(s);
+        });
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> {
+            Question q = invocation.getArgument(0);
+            q.setId(100L + q.getNumber());
+            return Mono.just(q);
+        });
+        when(options.save(any(QuestionOption.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.create(requestOfClass(8L), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(access).requireCanAuthor(9L, false, 1L, 2L, 8L);
+    }
+
+    @Test
+    void doesNotSaveAnythingWhenTheTeacherIsNotAssignedToTheClass() {
+        when(access.requireCanAuthor(9L, false, 1L, 2L, 8L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.create(requestOfClass(8L), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statements, never()).save(any(Statement.class));
     }
 }

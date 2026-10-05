@@ -13,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 /**
  * REST Controller for Statement (exam paper) management.
@@ -165,6 +166,14 @@ public class StatementController {
             .map(ResponseEntity::ok);
     }
 
+    /** The signed-in account and whether it is an administrator, for the write operations. */
+    private Mono<Tuple2<Long, Boolean>> currentAuthor() {
+        return Mono.zip(
+            currentAccountService.requiredAccountId(),
+            currentAccountService.hasAnyRole("ADMIN")
+        );
+    }
+
     private Flux<Statement> readableStatements(
         Supplier<Flux<Statement>> staffQuery,
         Supplier<Flux<Statement>> studentQuery
@@ -194,8 +203,8 @@ public class StatementController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return statementService
-            .softDelete(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.softDelete(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -224,12 +233,12 @@ public class StatementController {
      */
     @PostMapping("/{id}/approve")
     public Mono<ResponseEntity<StatementSummary>> approveReview(
-        @PathVariable Long id
+            @PathVariable Long id
     ) {
-        return statementService
-            .approveReview(id)
-            .map(StatementSummary::from)
-            .map(ResponseEntity::ok);
+        return currentAuthor()
+                .flatMap(author -> statementService.approveReview(id, author.getT1(), author.getT2()))
+                .map(StatementSummary::from)
+                .map(ResponseEntity::ok);
     }
 
     /**
@@ -237,13 +246,14 @@ public class StatementController {
      */
     @PatchMapping("/{id}/visibility")
     public Mono<ResponseEntity<StatementSummary>> setVisibility(
-        @PathVariable Long id,
-        @RequestParam boolean visible
+            @PathVariable Long id,
+            @RequestParam boolean visible
     ) {
-        return statementService
-            .setVisible(id, visible)
-            .map(StatementSummary::from)
-            .map(ResponseEntity::ok);
+        return currentAuthor()
+                .flatMap(author ->
+                        statementService.setVisible(id, visible, author.getT1(), author.getT2()))
+                .map(StatementSummary::from)
+                .map(ResponseEntity::ok);
     }
 
     // =========================================================================

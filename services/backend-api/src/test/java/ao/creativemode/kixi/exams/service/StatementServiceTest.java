@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -16,9 +17,11 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -37,6 +40,7 @@ class StatementServiceTest {
     private StatementRepository statementRepository;
     private QuestionRepository questionRepository;
     private QuestionOptionRepository optionRepository;
+    private InstitutionAccessService accessService;
     private StatementService service;
 
     @BeforeEach
@@ -44,7 +48,20 @@ class StatementServiceTest {
         statementRepository = mock(StatementRepository.class);
         questionRepository = mock(QuestionRepository.class);
         optionRepository = mock(QuestionOptionRepository.class);
-        service = new StatementService(statementRepository, questionRepository, optionRepository);
+        accessService = mock(InstitutionAccessService.class);
+        service = new StatementService(
+                statementRepository, questionRepository, optionRepository, accessService);
+    }
+
+    /**
+     * Statements built in the exam builder carry an institution, which is what the
+     * rule is checked against; the default mock lets every check pass.
+     */
+    private void givenAuthorIsAllowed() {
+        when(accessService.requireCanAuthor(anyLong(), org.mockito.ArgumentMatchers.anyBoolean(),
+                anyLong(), anyLong(), anyLong())).thenReturn(Mono.empty());
+        when(accessService.requireCanAuthor(anyLong(), org.mockito.ArgumentMatchers.anyBoolean(),
+                anyLong(), anyLong(), org.mockito.ArgumentMatchers.isNull())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -170,7 +187,7 @@ class StatementServiceTest {
         when(questionRepository.softDeleteAllByStatementId(any(), any()))
                 .thenReturn(Mono.just(3));
 
-        StepVerifier.create(service.softDelete(1L)).verifyComplete();
+        StepVerifier.create(service.softDelete(1L, 9L, true)).verifyComplete();
 
         assertThat(existing.getDeletedAt()).isNotNull();
         // The questions must be stamped with the very same value the
@@ -184,7 +201,7 @@ class StatementServiceTest {
     void softDeleteRejectsMissingStatement() {
         when(statementRepository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.softDelete(99L))
+        StepVerifier.create(service.softDelete(99L, 9L, true))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
                 .verify();
     }
@@ -253,7 +270,7 @@ class StatementServiceTest {
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
 
-        StepVerifier.create(service.approveReview(1L))
+        StepVerifier.create(service.approveReview(1L, 9L, true))
                 .assertNext(result -> assertThat(result.getNeedsReview()).isFalse())
                 .verifyComplete();
     }
@@ -265,9 +282,86 @@ class StatementServiceTest {
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
 
-        StepVerifier.create(service.setVisible(1L, true))
+        StepVerifier.create(service.setVisible(1L, true, 9L, true))
                 .assertNext(result -> assertThat(result.getVisible()).isTrue())
                 .verifyComplete();
+    }
+
+    // ── Who may change a statement ──────────────────────────────────────────
+
+    @Test
+    void approveReviewIsForbiddenForATeacherOutsideTheirClassAndSubject() {
+        Statement existing = statementOfSchool(1L, 4L, 3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.approveReview(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void setVisibilityIsForbiddenForATeacherOutsideTheirClassAndSubject() {
+        Statement existing = statementOfSchool(1L, 4L, 3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.setVisible(1L, true, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void softDeleteIsForbiddenForATeacherOutsideTheirClassAndSubject() {
+        Statement existing = statementOfSchool(1L, 4L, 3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.softDelete(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        assertThat(existing.getDeletedAt()).isNull();
+        verify(questionRepository, never()).softDeleteAllByStatementId(any(), any());
+    }
+
+    @Test
+    void approveReviewChecksTheClassScopeOfTheStatement() {
+        Statement existing = statementOfSchool(1L, 4L, 3L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenAuthorIsAllowed();
+
+        StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
+
+        verify(accessService).requireCanAuthor(9L, false, 4L, 5L, 3L);
+    }
+
+    @Test
+    void aStatementFromBeforeTheInstitutionModelIsNotChecked() {
+        Statement legacy = statement(1L);
+        legacy.setNeedsReview(true);
+        assertThat(legacy.getInstitutionId()).isNull();
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(legacy));
+        when(statementRepository.save(legacy)).thenReturn(Mono.just(legacy));
+
+        StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
+
+        verifyNoInteractions(accessService);
     }
 
     @Test
@@ -295,6 +389,15 @@ class StatementServiceTest {
         Statement statement = new Statement();
         statement.setId(id);
         statement.setTitle("Prova Teste");
+        return statement;
+    }
+
+    /** A statement built in the exam builder: it belongs to a school, a class and a subject. */
+    private Statement statementOfSchool(Long id, Long institutionId, Long classId) {
+        Statement statement = statement(id);
+        statement.setInstitutionId(institutionId);
+        statement.setClassId(classId);
+        statement.setSubjectId(5L);
         return statement;
     }
 }
