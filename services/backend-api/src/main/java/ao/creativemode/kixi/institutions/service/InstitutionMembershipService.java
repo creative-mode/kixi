@@ -72,9 +72,9 @@ public class InstitutionMembershipService {
 
     public Mono<Void> addSubject(Long institutionId, Long subjectId) {
         return requireInstitution(institutionId)
-            .then(subjectRepository.findById(subjectId)
+            .then(Mono.defer(() -> subjectRepository.findById(subjectId)
                 .filter(subject -> !subject.isDeleted())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found"))))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))))
             .then(Mono.defer(() ->
                 subjectLinks.findFirstByInstitutionIdAndSubjectId(institutionId, subjectId)
                     .flatMap(link -> {
@@ -121,8 +121,8 @@ public class InstitutionMembershipService {
 
     public Mono<Void> addTeacher(Long institutionId, Long teacherId) {
         return requireInstitution(institutionId)
-            .then(teacherRepository.findByIdAndDeletedAtIsNull(teacherId)
-                .switchIfEmpty(Mono.error(ApiException.notFound("Teacher not found"))))
+            .then(Mono.defer(() -> teacherRepository.findByIdAndDeletedAtIsNull(teacherId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Teacher not found")))))
             .then(Mono.defer(() ->
                 teacherLinks.findFirstByInstitutionIdAndTeacherId(institutionId, teacherId)
                     .flatMap(link -> {
@@ -169,8 +169,8 @@ public class InstitutionMembershipService {
 
     public Mono<Void> addStudent(Long institutionId, Long userId) {
         return requireInstitution(institutionId)
-            .then(userRepository.findByIdAndDeletedAtIsNull(userId)
-                .switchIfEmpty(Mono.error(ApiException.notFound("Student not found"))))
+            .then(Mono.defer(() -> userRepository.findByIdAndDeletedAtIsNull(userId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Student not found")))))
             .then(Mono.defer(() ->
                 studentLinks.findFirstByInstitutionIdAndUserId(institutionId, userId)
                     .flatMap(link -> {

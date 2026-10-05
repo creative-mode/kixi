@@ -43,7 +43,9 @@ public class InstitutionAccessService {
             .switchIfEmpty(Mono.error(ApiException.notFound("Institution not found")))
             .then();
 
-        Mono<Void> affiliation = admin
+        // Built lazily: each check only touches its repository once the previous
+        // one has passed, so a failed check never reaches the later queries.
+        Mono<Void> affiliation = Mono.defer(() -> admin
             ? Mono.<Void>empty()
             : teacherRepository
                 .findByAccountIdAndDeletedAtIsNull(accountId)
@@ -52,13 +54,13 @@ public class InstitutionAccessService {
                     teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(institutionId, teacher.getId()))
                 .filter(Boolean::booleanValue)
                 .switchIfEmpty(Mono.error(ApiException.forbidden("Teacher is not affiliated with this institution")))
-                .then();
+                .then());
 
-        Mono<Void> subject = subjectLinks
+        Mono<Void> subject = Mono.defer(() -> subjectLinks
             .existsByInstitutionIdAndSubjectIdAndDeletedAtIsNull(institutionId, subjectId)
             .filter(Boolean::booleanValue)
             .switchIfEmpty(Mono.error(ApiException.unprocessableEntity("Subject is not taught by this institution")))
-            .then();
+            .then());
 
         return institution.then(affiliation).then(subject);
     }
