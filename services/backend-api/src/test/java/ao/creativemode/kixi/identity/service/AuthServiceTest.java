@@ -320,8 +320,11 @@ class AuthServiceTest {
                 .thenReturn(Mono.empty());
 
         StepVerifier.create(service.register(validRegisterRequest("new-student", "new@kixi.ao")))
-                .expectErrorSatisfies(error -> assertThat(error)
-                        .hasMessage("Default role is not configured: STUDENT"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(500);
+                    assertThat(error).hasMessage("Default role is not configured: STUDENT");
+                })
                 .verify();
 
         verify(accountRepository, never()).save(any(Account.class));

@@ -83,7 +83,7 @@ public class AuthService {
                         .flatMap(existing -> Mono.<Account>error(
                                 ApiException.conflict("Username or email already in use")))))
                 .then(Mono.defer(() -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
-                        .switchIfEmpty(Mono.error(ApiException.conflict(
+                        .switchIfEmpty(Mono.error(ApiException.internalError(
                                 "Default role is not configured: " + DEFAULT_ROLE_NAME)))
                         .flatMap(role -> {
                             Account account = new Account();

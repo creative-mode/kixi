@@ -3,6 +3,8 @@ package ao.creativemode.kixi.identity.service;
 import ao.creativemode.kixi.identity.config.RegistrationRateLimitProperties;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.exception.RegistrationRateLimitException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -13,6 +15,8 @@ import java.security.NoSuchAlgorithmException;
 
 @Service
 public class RegistrationRateLimiter {
+
+    private static final Logger log = LoggerFactory.getLogger(RegistrationRateLimiter.class);
 
     private static final String CLEANUP_EXPIRED_SQL = """
             DELETE FROM registration_rate_limits
@@ -62,21 +66,26 @@ public class RegistrationRateLimiter {
     }
 
     public Mono<Void> check(String clientAddress) {
+        String rateKey = hash(clientAddress);
         return cleanupExpiredEntries()
-                .then(reserveAttempt(clientAddress))
+                .then(reserveAttempt(rateKey))
                 .switchIfEmpty(Mono.error(ApiException.serviceUnavailable(
                         "Registration protection is temporarily unavailable")))
                 .onErrorMap(error -> !(error instanceof ApiException), error ->
                         ApiException.serviceUnavailable(
                                 "Registration protection is temporarily unavailable"))
-                .flatMap(state -> state.attempts() > properties.getMaxAttempts()
-                        ? Mono.error(new RegistrationRateLimitException(state.retryAfterSeconds()))
-                        : Mono.empty());
+                .flatMap(state -> {
+                    if (state.attempts() > properties.getMaxAttempts()) {
+                        log.warn("Registration rate limit exceeded for rateKey={}", rateKey);
+                        return Mono.error(new RegistrationRateLimitException(state.retryAfterSeconds()));
+                    }
+                    return Mono.empty();
+                });
     }
 
-    private Mono<RateLimitState> reserveAttempt(String clientAddress) {
+    private Mono<RateLimitState> reserveAttempt(String rateKey) {
         return databaseClient.sql(RESERVE_ATTEMPT_SQL)
-                .bind("rateKey", hash(clientAddress))
+                .bind("rateKey", rateKey)
                 .bind("windowSeconds", properties.getWindowSeconds())
                 .map((row, metadata) -> new RateLimitState(
                         row.get("attempts", Integer.class),
