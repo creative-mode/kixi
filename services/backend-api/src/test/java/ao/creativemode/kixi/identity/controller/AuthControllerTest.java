@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +27,7 @@ class AuthControllerTest {
 
     private AuthService authService;
     private GoogleOAuth2Properties googleProperties;
+    private RegistrationRateLimiter registrationRateLimiter;
     private AuthController controller;
 
     @BeforeEach
@@ -32,7 +36,9 @@ class AuthControllerTest {
         googleProperties = new GoogleOAuth2Properties();
         googleProperties.setClientId("google-client");
         googleProperties.setRedirectUri("https://api.example.test/api/v1/auth/google/callback");
-        controller = new AuthController(authService, googleProperties);
+        registrationRateLimiter = mock(RegistrationRateLimiter.class);
+        when(registrationRateLimiter.check(anyString())).thenReturn(Mono.empty());
+        controller = new AuthController(authService, googleProperties, registrationRateLimiter);
     }
 
     @Test
@@ -93,12 +99,13 @@ class AuthControllerTest {
                 "token", LoginResponse.TOKEN_TYPE, Instant.now(), 9L, List.of("STUDENT"));
         org.mockito.Mockito.when(authService.register(request)).thenReturn(Mono.just(loginResponse));
 
-        ResponseEntity<LoginResponse> response = controller.register(request).block();
+        ResponseEntity<LoginResponse> response = controller.register(null, request).block();
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode().value()).isEqualTo(201);
         assertThat(response.getBody()).isEqualTo(loginResponse);
         verify(authService).register(request);
+        verify(registrationRateLimiter, org.mockito.Mockito.times(2)).check(anyString());
     }
 
     @Test
