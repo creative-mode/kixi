@@ -14,11 +14,13 @@ import java.security.NoSuchAlgorithmException;
 @Service
 public class RegistrationRateLimiter {
 
+    private static final String CLEANUP_EXPIRED_SQL = """
+            DELETE FROM registration_rate_limits
+            WHERE updated_at < CURRENT_TIMESTAMP - INTERVAL '1 day'
+            """;
+
     private static final String RESERVE_ATTEMPT_SQL = """
-            WITH cleanup AS (
-                DELETE FROM registration_rate_limits
-                WHERE updated_at < CURRENT_TIMESTAMP - INTERVAL '1 day'
-            ), upsert AS (
+            WITH reservation AS (
                 INSERT INTO registration_rate_limits
                     (rate_key, window_started_at, attempts, updated_at)
                 VALUES (:rateKey, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
@@ -47,7 +49,7 @@ public class RegistrationRateLimiter {
                            - CURRENT_TIMESTAMP
                        )))
                    )::bigint AS retry_after_seconds
-            FROM upsert
+            FROM reservation
             """;
 
     private final DatabaseClient databaseClient;
@@ -60,13 +62,8 @@ public class RegistrationRateLimiter {
     }
 
     public Mono<Void> check(String clientAddress) {
-        return databaseClient.sql(RESERVE_ATTEMPT_SQL)
-                .bind("rateKey", hash(clientAddress))
-                .bind("windowSeconds", properties.getWindowSeconds())
-                .map((row, metadata) -> new RateLimitState(
-                        row.get("attempts", Integer.class),
-                        ((Number) row.get("retry_after_seconds")).longValue()))
-                .one()
+        return cleanupExpiredEntries()
+                .then(reserveAttempt(clientAddress))
                 .switchIfEmpty(Mono.error(ApiException.serviceUnavailable(
                         "Registration protection is temporarily unavailable")))
                 .onErrorMap(error -> !(error instanceof ApiException), error ->
@@ -75,6 +72,23 @@ public class RegistrationRateLimiter {
                 .flatMap(state -> state.attempts() > properties.getMaxAttempts()
                         ? Mono.error(new RegistrationRateLimitException(state.retryAfterSeconds()))
                         : Mono.empty());
+    }
+
+    private Mono<RateLimitState> reserveAttempt(String clientAddress) {
+        return databaseClient.sql(RESERVE_ATTEMPT_SQL)
+                .bind("rateKey", hash(clientAddress))
+                .bind("windowSeconds", properties.getWindowSeconds())
+                .map((row, metadata) -> new RateLimitState(
+                        row.get("attempts", Integer.class),
+                        ((Number) row.get("retry_after_seconds")).longValue()))
+                .one();
+    }
+
+    private Mono<Void> cleanupExpiredEntries() {
+        return databaseClient.sql(CLEANUP_EXPIRED_SQL)
+                .fetch()
+                .rowsUpdated()
+                .then();
     }
 
     private String hash(String clientAddress) {
