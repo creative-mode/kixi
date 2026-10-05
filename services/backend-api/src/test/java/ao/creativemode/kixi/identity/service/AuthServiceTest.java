@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.model.AccountRole;
 import ao.creativemode.kixi.identity.model.Role;
@@ -138,6 +139,22 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginNormalizesEmailBeforeLookup() {
+        Account existing = account(1L, "student", "hashed");
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("Student@Kixi.AO"))
+                .thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("student@kixi.ao"))
+                .thenReturn(Mono.just(existing));
+        when(passwordEncoder.matches("correct", "hashed")).thenReturn(true);
+        when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
+        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+
+        StepVerifier.create(service.login("Student@Kixi.AO", "correct"))
+                .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
+                .verifyComplete();
+    }
+
+    @Test
     void loginWithGoogleReusesExistingAccountByEmail() {
         Account existing = account(1L, "existing", "hashed");
         when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
@@ -217,11 +234,103 @@ class AuthServiceTest {
                 u -> u.getFirstName().equals("New") && u.getLastName().equals("User")));
     }
 
-    /**
-     * findAccountByUsernameOrEmail() builds its .switchIfEmpty(findByEmailAndDeletedAtIsNull(...))
-     * argument eagerly, which calls the repository immediately, even when the username lookup
-     * above it already found an account and this branch is never subscribed.
-     */
+    @Test
+    void registerCreatesAccountUserAndStudentRoleAndReturnsToken() {
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("new-student"))
+                .thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("student@kixi.ao"))
+                .thenReturn(Mono.empty());
+        when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT"))
+                .thenReturn(Mono.just(role(3L, "STUDENT")));
+        when(passwordEncoder.encode("password123")).thenReturn("hashed-password");
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> {
+            Account saved = invocation.getArgument(0);
+            saved.setId(9L);
+            return Mono.just(saved);
+        });
+        when(accountRoleRepository.save(any(AccountRole.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(userRepository.save(any(User.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        RegisterRequest request = new RegisterRequest(
+                " new-student ", " Student@Kixi.AO ", "password123", " Ana ", " Silva ");
+
+        StepVerifier.create(service.register(request))
+                .assertNext(response -> {
+                    assertThat(response.accountId()).isEqualTo(9L);
+                    assertThat(response.accessToken()).isEqualTo("jwt-token");
+                    assertThat(response.roles()).containsExactly("STUDENT");
+                })
+                .verifyComplete();
+
+        verify(passwordEncoder).encode("password123");
+        verify(accountRoleRepository).save(org.mockito.ArgumentMatchers.argThat(
+                accountRole -> accountRole.getAccountId().equals(9L)
+                        && accountRole.getRoleId().equals(3L)));
+        verify(userRepository).save(org.mockito.ArgumentMatchers.argThat(
+                user -> user.getAccountId().equals(9L)
+                        && user.getFirstName().equals("Ana")
+                        && user.getLastName().equals("Silva")));
+    }
+
+    @Test
+    void registerRejectsDuplicateUsernameBeforeCreatingAccount() {
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("existing"))
+                .thenReturn(Mono.just(account(1L, "existing", "hashed")));
+
+        StepVerifier.create(service.register(validRegisterRequest("existing", "new@kixi.ao")))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error).hasMessage("Username or email already in use");
+                })
+                .verify();
+
+        verify(accountRepository, never()).save(any(Account.class));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+    }
+
+    @Test
+    void registerRejectsDuplicateEmailBeforeCreatingAccount() {
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("new-student"))
+                .thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("existing@kixi.ao"))
+                .thenReturn(Mono.just(account(1L, "existing", "hashed")));
+
+        StepVerifier.create(service.register(validRegisterRequest("new-student", "Existing@Kixi.AO")))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error).hasMessage("Username or email already in use");
+                })
+                .verify();
+
+        verify(accountRepository, never()).save(any(Account.class));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+    }
+
+    @Test
+    void registerRejectsWhenStudentRoleIsNotConfigured() {
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("new-student"))
+                .thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("new@kixi.ao"))
+                .thenReturn(Mono.empty());
+        when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT"))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(service.register(validRegisterRequest("new-student", "new@kixi.ao")))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(500);
+                    assertThat(error).hasMessage("Default role is not configured: STUDENT");
+                })
+                .verify();
+
+        verify(accountRepository, never()).save(any(Account.class));
+    }
+
+    /** The email fallback is lazy, so it is only queried after a username miss. */
     private void stubUnusedEmailFallback(String usernameOrEmail) {
         when(accountRepository.findByEmailAndDeletedAtIsNull(usernameOrEmail)).thenReturn(Mono.empty());
     }
@@ -240,5 +349,9 @@ class AuthServiceTest {
         Role role = new Role(name, null);
         role.setId(id);
         return role;
+    }
+
+    private RegisterRequest validRegisterRequest(String username, String email) {
+        return new RegisterRequest(username, email, "password123", "Ana", "Silva");
     }
 }

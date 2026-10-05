@@ -114,10 +114,60 @@ classDiagram
         +Long subjectId
         +Long classId
         +Long courseId
+        +Long institutionId
         +Long createdBy
         +Boolean visible
         +Date createdAt
         +Date updatedAt
+        +Date deletedAt
+    }
+
+    class Institution {
+        +Long id
+        +String code
+        +String name
+        +String shortName
+        +String logo
+        +Date createdAt
+        +Date updatedAt
+        +Date deletedAt
+    }
+
+    class Teacher {
+        +Long id
+        +Long accountId
+        +String firstName
+        +String lastName
+        +String email
+        +String photo
+        +String specialty
+        +String employeeNumber
+        +Date createdAt
+        +Date updatedAt
+        +Date deletedAt
+    }
+
+    class InstitutionSubject {
+        +Long id
+        +Long institutionId
+        +Long subjectId
+        +Date createdAt
+        +Date deletedAt
+    }
+
+    class InstitutionTeacher {
+        +Long id
+        +Long institutionId
+        +Long teacherId
+        +Date createdAt
+        +Date deletedAt
+    }
+
+    class InstitutionStudent {
+        +Long id
+        +Long institutionId
+        +Long userId
+        +Date createdAt
         +Date deletedAt
     }
 
@@ -199,6 +249,14 @@ classDiagram
     Statement --> Subject : "subjectId"
     Statement --> Class : "classId"
     Statement --> Course : "courseId"
+    Statement --> Institution : "institutionId"
+    Teacher --> Account : "accountId (optional)"
+    InstitutionSubject --> Institution : "institutionId"
+    InstitutionSubject --> Subject : "subjectId"
+    InstitutionTeacher --> Institution : "institutionId"
+    InstitutionTeacher --> Teacher : "teacherId"
+    InstitutionStudent --> Institution : "institutionId"
+    InstitutionStudent --> User : "userId"
     Question --> Statement : "statementId"
     QuestionImage --> Question : "questionId"
     QuestionOption --> Question : "questionId"

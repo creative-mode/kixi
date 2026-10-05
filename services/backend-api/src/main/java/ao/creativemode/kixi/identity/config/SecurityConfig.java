@@ -47,7 +47,19 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
+                                "/api/v1/teachers", "/api/v1/teachers/**",
                                 "/api/v1/sessions", "/api/v1/sessions/**")
+                        .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET, "/api/v1/institutions/mine")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/institutions/trash")
+                        .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/institutions",
+                                "/api/v1/institutions/*",
+                                "/api/v1/institutions/*/subjects")
+                        .authenticated()
+                        .pathMatchers("/api/v1/institutions", "/api/v1/institutions/**")
                         .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
