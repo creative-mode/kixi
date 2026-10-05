@@ -293,7 +293,8 @@ public class StatementController {
         Long schoolYearId,
         Long termId,
         Long subjectId,
-        Long classId
+        Long classId,
+        Long institutionId
     ) {
         public static StatementSummary from(Statement statement) {
             return new StatementSummary(
@@ -310,7 +311,8 @@ public class StatementController {
                 statement.getSchoolYearId(),
                 statement.getTermId(),
                 statement.getSubjectId(),
-                statement.getClassId()
+                statement.getClassId(),
+                statement.getInstitutionId()
             );
         }
     }
