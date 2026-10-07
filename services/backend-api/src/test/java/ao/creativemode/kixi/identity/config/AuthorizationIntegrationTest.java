@@ -82,6 +82,37 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void rejectsAnonymousSimulationReadsOnVersionedRoute() {
+        client.get()
+                .uri("/api/v1/simulations")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void scopesStudentSimulationReadsOnVersionedRoute() {
+        when(simulationService.findAllActiveForAccount(42L)).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/simulations")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(simulationService).findAllActiveForAccount(42L);
+    }
+
+    @Test
+    void rejectsStudentSimulationTrashOnVersionedRoute() {
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/simulations/trash")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
     void rejectsStudentAccessToSimulationTrash() {
         client.mutateWith(studentJwt())
                 .get()

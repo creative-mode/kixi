@@ -87,11 +87,14 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers/trash",
+                                "/api/v1/simulations/trash",
                                 "/api/simulations/trash")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations",
+                                "/api/v1/simulations/**",
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .authenticated()
@@ -101,17 +104,22 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations",
+                                "/api/v1/simulations/**",
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers(HttpMethod.PUT,
+                                "/api/v1/simulations/*/restore",
                                 "/api/simulations/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulation-answers/*",
+                                "/api/v1/simulations/*",
                                 "/api/simulations/*")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers("/api/v1/simulation-answers", "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .anyExchange().authenticated()
