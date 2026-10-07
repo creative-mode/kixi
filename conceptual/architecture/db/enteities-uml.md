@@ -34,6 +34,8 @@ classDiagram
     class Course {
         +String code
         +String name
+        +String description
+        +Long institutionId
         +Date createdAt
         +Date updatedAt
         +Date deletedAt
@@ -44,6 +46,18 @@ classDiagram
         +String grade
         +Long courseId
         +Long schoolYearId
+        +Long institutionId
+        +Date createdAt
+        +Date updatedAt
+        +Date deletedAt
+    }
+
+    class Enrollment {
+        +Long id
+        +Long accountId
+        +Long classId
+        +Long schoolYearId
+        +String status
         +Date createdAt
         +Date updatedAt
         +Date deletedAt
@@ -240,6 +254,11 @@ classDiagram
     Term --> SchoolYear : "belongsTo"
     Class --> Course : "belongsTo"
     Class --> SchoolYear : "belongsTo"
+    Class --> Institution : "institutionId (igual ao do curso)"
+    Course --> Institution : "institutionId"
+    Enrollment --> Account : "accountId"
+    Enrollment --> Class : "classId"
+    Enrollment --> SchoolYear : "schoolYearId"
     User --> Account : "belongsTo"
     AccountRole --> Account : "accountId"
     AccountRole --> Role : "roleId"
