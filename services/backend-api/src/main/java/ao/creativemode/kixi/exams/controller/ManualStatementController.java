@@ -15,7 +15,11 @@ import reactor.core.publisher.Mono;
 
 import java.net.URI;
 
-/** Statements written by hand in the exam builder (ADMIN and TEACHER, enforced in the security config). */
+/**
+ * The older name for {@code POST /api/v1/statements}, kept so anything already
+ * calling it keeps working. Both routes delegate to the same service, so there is
+ * one behaviour and not two.
+ */
 @RestController
 @RequestMapping("/api/v1/statements/manual")
 public class ManualStatementController {
@@ -30,8 +34,8 @@ public class ManualStatementController {
 
     @PostMapping
     public Mono<ResponseEntity<StatementSummary>> create(
-        @Valid @RequestBody ManualStatementRequest request,
-        UriComponentsBuilder uriBuilder
+            @Valid @RequestBody ManualStatementRequest request,
+            UriComponentsBuilder uriBuilder
     ) {
         return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
             .flatMap(account -> service.create(request, account.getT1(), account.getT2()))

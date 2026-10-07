@@ -13,6 +13,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementLinkValidationService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.identity.config.CorsConfig;
@@ -81,6 +82,9 @@ class StatementApprovalAuthorizationTest {
 
     @MockBean
     private JwtService jwtService;
+
+    @MockBean
+    private ManualStatementService manualStatementService;
 
     @MockBean
     private StatementRepository statements;
