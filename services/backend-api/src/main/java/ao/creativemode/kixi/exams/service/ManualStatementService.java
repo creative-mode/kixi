@@ -8,6 +8,7 @@ import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -44,14 +45,30 @@ public class ManualStatementService {
 
     @Transactional
     public Mono<Statement> create(ManualStatementRequest request, Long accountId, boolean admin) {
-        return accessService
-            .requireCanAuthor(accountId, admin, request.institutionId(), request.subjectId())
+        return requireAClassWhenNotAdmin(request, admin)
+            .then(Mono.defer(() -> accessService.requireCanAuthor(
+                accountId, admin, request.institutionId(), request.subjectId(), request.classId())))
             .then(Mono.defer(() -> statementRepository.save(toStatement(request, accountId))))
             .flatMap(statement ->
                 Flux.fromIterable(indexed(request.questions()))
                     .concatMap(entry -> saveQuestion(statement.getId(), entry.number(), entry.question()))
                     .then(Mono.just(statement))
             );
+    }
+
+    /**
+     * A teacher may only build for a class they teach, and the teaching
+     * assignment is keyed on the class. Leaving the class out would silently
+     * skip that check, so a statement from a teacher has to name one. An
+     * administrator is not restricted and may build a school-wide statement.
+     */
+    private Mono<Void> requireAClassWhenNotAdmin(ManualStatementRequest request, boolean admin) {
+        if (admin || request.classId() != null) {
+            return Mono.empty();
+        }
+        return Mono.error(ApiException.unprocessableEntity(
+            "A teacher must choose the class they teach; "
+                + "only an administrator may build a statement without a class"));
     }
 
     private Mono<Question> saveQuestion(Long statementId, int number, ManualStatementRequest.Question data) {
