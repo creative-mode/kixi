@@ -26,6 +26,17 @@ public class TeachingAssignmentService {
     private static final String ALREADY_ASSIGNED =
         "This teacher is already assigned to this class and subject";
 
+    /**
+     * The unique constraint covers the four columns and not {@code deleted_at},
+     * so one tuple can only ever exist once, trashed or not. create can restore
+     * the row holding it; an update cannot, because moving the assignment being
+     * updated onto that tuple while restoring the other would put two rows on
+     * the same tuple. The conflict is therefore reported with the way out.
+     */
+    private static final String ASSIGNED_ELSEWHERE =
+        "This teacher is already assigned to this class and subject, possibly in the trash; "
+            + "restore or purge that assignment first";
+
     private final TeachingAssignmentRepository assignments;
     private final TeacherRepository teacherRepository;
     private final ClassRepository classRepository;
@@ -101,7 +112,7 @@ public class TeachingAssignmentService {
                 return assignments.save(existing);
             })
             .map(TeachingAssignmentService::toResponse)
-            .onErrorMap(DataIntegrityViolationException.class, e -> ApiException.conflict(ALREADY_ASSIGNED));
+            .onErrorMap(DataIntegrityViolationException.class, e -> ApiException.conflict(ASSIGNED_ELSEWHERE));
     }
 
     public Mono<Void> softDelete(Long id) {
@@ -139,8 +150,12 @@ public class TeachingAssignmentService {
     // ── Authorization ───────────────────────────────────────────────────────
 
     /**
-     * Completes when the account is assigned to teach {@code subjectId} in
+     * Completes when the account may author a statement of {@code subjectId} in
      * {@code classId}; fails with 403 otherwise.
+     *
+     * <p>An administrator is never restricted here: they administer the school
+     * rather than teach it, so they hold no teaching assignments and may not even
+     * have a teacher profile.
      *
      * <p>A statement without a class is not scoped to any class, so there is no
      * assignment to verify and the caller's institution-level access is enough:
@@ -152,8 +167,8 @@ public class TeachingAssignmentService {
      * statement carrying a class goes through {@link #validate}, which keeps the
      * two in step.
      */
-    public Mono<Void> requireTeaches(Long accountId, Long classId, Long subjectId) {
-        if (classId == null || subjectId == null) {
+    public Mono<Void> requireTeaches(Long accountId, boolean admin, Long classId, Long subjectId) {
+        if (admin || classId == null || subjectId == null) {
             return Mono.empty();
         }
 

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
@@ -42,10 +43,13 @@ class ManualStatementServiceTest {
         service = new ManualStatementService(statements, questions, options, access);
     }
 
+    private static final Long CLASS_ID = 8L;
+
+    /** A statement from a teacher: it names the class being taught. */
     private ManualStatementRequest request() {
         return new ManualStatementRequest(
             1L, 2L, "Prova de Matemática", "Teste", 90, null, null,
-            null, null, null, null, true,
+            null, null, CLASS_ID, null, true,
             List.of(
                 new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null),
                 new ManualStatementRequest.Question("Escolha", 3.5, List.of(
@@ -55,18 +59,18 @@ class ManualStatementServiceTest {
         );
     }
 
-    /** The same statement, but bound to a class, which brings the teaching assignment into play. */
-    private ManualStatementRequest requestOfClass(Long classId) {
+    /** A statement that names no class, which only an administrator may build. */
+    private ManualStatementRequest requestWithoutClass() {
         return new ManualStatementRequest(
             1L, 2L, "Prova de Matemática", "Teste", 90, null, null,
-            null, null, classId, null, true,
+            null, null, null, null, true,
             List.of(new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null))
         );
     }
 
     @Test
     void createsStatementWithNumberedQuestionsAndOptions() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L, null)).thenReturn(Mono.empty());
+        when(access.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID)).thenReturn(Mono.empty());
         when(statements.save(any(Statement.class))).thenAnswer(invocation -> {
             Statement s = invocation.getArgument(0);
             s.setId(10L);
@@ -87,16 +91,19 @@ class ManualStatementServiceTest {
         verify(statements).save(statement.capture());
         assertThat(statement.getValue().getInstitutionId()).isEqualTo(1L);
         assertThat(statement.getValue().getSubjectId()).isEqualTo(2L);
+        assertThat(statement.getValue().getClassId()).isEqualTo(CLASS_ID);
         assertThat(statement.getValue().getCreatedBy()).isEqualTo(9L);
         assertThat(statement.getValue().getSource()).isEqualTo("manual");
         assertThat(statement.getValue().getTotalMaxScore()).isEqualTo(8.5);
         verify(questions, times(2)).save(any(Question.class));
         verify(options, times(2)).save(any(QuestionOption.class));
+        // The class is what puts the teaching assignment in play.
+        verify(access).requireCanAuthor(9L, false, 1L, 2L, CLASS_ID);
     }
 
     @Test
     void doesNotSaveAnythingWhenAccessIsDenied() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L, null))
+        when(access.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID))
                 .thenReturn(Mono.error(ApiException.forbidden("Teacher is not affiliated with this institution")));
 
         StepVerifier.create(service.create(request(), 9L, false))
@@ -109,8 +116,23 @@ class ManualStatementServiceTest {
     }
 
     @Test
-    void passesTheClassOfTheRequestSoTheAssignmentIsChecked() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L, 8L)).thenReturn(Mono.empty());
+    void aTeacherMayNotOmitTheClassToSkipTheAssignmentCheck() {
+        // The assignment is keyed on the class. A teacher who names no class
+        // used to walk straight past the check and could build a statement for
+        // any subject of the institution.
+        StepVerifier.create(service.create(requestWithoutClass(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verifyNoInteractions(access);
+        verify(statements, never()).save(any(Statement.class));
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void anAdministratorMayBuildAStatementWithoutAClass() {
+        when(access.requireCanAuthor(9L, true, 1L, 2L, null)).thenReturn(Mono.empty());
         when(statements.save(any(Statement.class))).thenAnswer(invocation -> {
             Statement s = invocation.getArgument(0);
             s.setId(10L);
@@ -124,20 +146,18 @@ class ManualStatementServiceTest {
         when(options.save(any(QuestionOption.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.create(requestOfClass(8L), 9L, false))
-                .expectNextCount(1)
-                .verifyComplete();
+        StepVerifier.create(service.create(requestWithoutClass(), 9L, true)).expectNextCount(1).verifyComplete();
 
-        verify(access).requireCanAuthor(9L, false, 1L, 2L, 8L);
+        verify(access).requireCanAuthor(9L, true, 1L, 2L, null);
     }
 
     @Test
     void doesNotSaveAnythingWhenTheTeacherIsNotAssignedToTheClass() {
-        when(access.requireCanAuthor(9L, false, 1L, 2L, 8L))
+        when(access.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
-        StepVerifier.create(service.create(requestOfClass(8L), 9L, false))
+        StepVerifier.create(service.create(request(), 9L, false))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();

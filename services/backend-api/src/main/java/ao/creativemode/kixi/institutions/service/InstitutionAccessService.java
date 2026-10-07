@@ -52,7 +52,8 @@ public class InstitutionAccessService {
         Long classId
     ) {
         return requireCanAuthor(accountId, admin, institutionId, subjectId)
-            .then(Mono.defer(() -> teachingAssignments.requireTeaches(accountId, classId, subjectId)));
+            .then(Mono.defer(() ->
+                teachingAssignments.requireTeaches(accountId, admin, classId, subjectId)));
     }
 
     /**

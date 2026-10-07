@@ -220,6 +220,26 @@ class TeachingAssignmentServiceTest {
     }
 
     @Test
+    void updateOntoATupleHeldByAnotherAssignmentIsReportedAsConflict() {
+        // The constraint covers the four columns and not deleted_at, so a tuple
+        // held by a trashed row cannot also be taken by the row being updated:
+        // restoring one and moving the other would put two rows on it. The
+        // caller is told how to clear it instead.
+        givenReferencesExist();
+        TeachingAssignment existing = assignment(9L, null);
+        when(assignments.findByIdAndDeletedAtIsNull(9L)).thenReturn(Mono.just(existing));
+        when(assignments.save(existing))
+                .thenReturn(Mono.error(new DataIntegrityViolationException("uq_teaching_assignment")));
+
+        StepVerifier.create(service.update(9L, request(null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(error.getMessage()).contains("restore or purge");
+                })
+                .verify();
+    }
+
+    @Test
     void updateMapsTheUniqueConstraintToConflict() {
         givenReferencesExist();
         TeachingAssignment existing = assignment(9L, null);
@@ -335,7 +355,7 @@ class TeachingAssignmentServiceTest {
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID)).verifyComplete();
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID)).verifyComplete();
     }
 
     @Test
@@ -345,7 +365,7 @@ class TeachingAssignmentServiceTest {
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID)).verifyComplete();
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID)).verifyComplete();
 
         verify(assignments)
                 .existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
@@ -359,7 +379,7 @@ class TeachingAssignmentServiceTest {
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID))
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -372,7 +392,7 @@ class TeachingAssignmentServiceTest {
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID))
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -382,7 +402,7 @@ class TeachingAssignmentServiceTest {
     void requireTeachesRejectsAnAccountWithoutATeacherProfile() {
         when(teacherRepository.findByAccountIdAndDeletedAtIsNull(ACCOUNT_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID))
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -395,7 +415,7 @@ class TeachingAssignmentServiceTest {
         givenTeacherProfileExists();
         when(classRepository.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, SUBJECT_ID))
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -406,15 +426,27 @@ class TeachingAssignmentServiceTest {
     }
 
     @Test
+    void requireTeachesLetsAnAdministratorThroughWithoutConsultingAnything() {
+        // An administrator administers the school instead of teaching it: they
+        // hold no assignments and need not even have a teacher profile, so the
+        // rule must not reach for either. Reaching for it produced
+        // "Only teachers can build statements" for every administrator.
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, true, CLASS_ID, SUBJECT_ID))
+                .verifyComplete();
+
+        verifyNoInteractions(teacherRepository, classRepository, assignments);
+    }
+
+    @Test
     void requireTeachesImposesNothingOnAStatementWithoutAClass() {
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, null, SUBJECT_ID)).verifyComplete();
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, null, SUBJECT_ID)).verifyComplete();
 
         verifyNoInteractions(teacherRepository, classRepository, assignments);
     }
 
     @Test
     void requireTeachesImposesNothingOnAStatementWithoutASubject() {
-        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, CLASS_ID, null)).verifyComplete();
+        StepVerifier.create(service.requireTeaches(ACCOUNT_ID, false, CLASS_ID, null)).verifyComplete();
 
         verifyNoInteractions(teacherRepository, classRepository, assignments);
     }
