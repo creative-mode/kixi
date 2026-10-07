@@ -31,8 +31,16 @@ Reference guide for reactive CRUD implementations:
 Run the full platform locally:
 
 ```bash
+cp .env.example .env   # then set APP_JWT_SECRET and OCR_API_KEY (>= 32 chars)
 docker compose up --build
-````
+```
+
+Verify:
+
+```bash
+curl http://localhost:8080/actuator/health
+curl http://localhost:8000/health
+```
 
 Follow each service README for service-specific instructions.
 

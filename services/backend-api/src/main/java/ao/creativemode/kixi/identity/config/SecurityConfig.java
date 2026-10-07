@@ -15,6 +15,7 @@ import org.springframework.security.web.server.authentication.HttpStatusServerEn
 import org.springframework.security.web.server.authorization.HttpStatusServerAccessDeniedHandler;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
 
 @Configuration
 @EnableWebFluxSecurity
@@ -22,17 +23,21 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final RequestIdWebFilter requestIdWebFilter;
+    private final CorsConfigurationSource corsConfigurationSource;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          RequestIdWebFilter requestIdWebFilter) {
+                          RequestIdWebFilter requestIdWebFilter,
+                          CorsConfigurationSource corsConfigurationSource) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.requestIdWebFilter = requestIdWebFilter;
+        this.corsConfigurationSource = corsConfigurationSource;
     }
 
     @Bean
     public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
@@ -56,10 +61,13 @@ public class SecurityConfig {
                         .authenticated()
                         .pathMatchers("/api/v1/institutions", "/api/v1/institutions/**")
                         .hasRole("ADMIN")
-                        .pathMatchers(HttpMethod.GET, "/api/v1/teaching-assignments/me")
+.pathMatchers(HttpMethod.GET, "/api/v1/teaching-assignments/me")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
                         .hasRole("ADMIN")
+                        .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
+                                "/api/v1/me", "/api/v1/me/**")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
