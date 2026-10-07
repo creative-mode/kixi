@@ -178,7 +178,7 @@ class StatementWriteControllerTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$.examType").isEqualTo("P1");
+                .jsonPath("$.id").isEqualTo(10);
 
         verify(statementService).update(eq(10L), any(StatementRequest.class), eq(TEACHER_ID), eq(false));
     }

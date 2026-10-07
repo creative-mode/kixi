@@ -1,10 +1,12 @@
 package ao.creativemode.kixi.exams.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import ao.creativemode.kixi.academic.model.Class;
+import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
@@ -399,6 +401,64 @@ class StatementApprovalAuthorizationTest {
         assertThat(statement.getInstitutionId()).isEqualTo(INSTITUTION_ID);
     }
 
+    @Test
+    void anUnknownInstitutionIsNotFoundBeforeAnythingElseIsChecked() {
+        // The institution is checked first, so an unknown one answers 404 even
+        // to a caller who is also not entitled to it. The ordering is observable
+        // and worth pinning.
+        when(institutions.findByIdAndDeletedAtIsNull(INSTITUTION_ID)).thenReturn(Mono.empty());
+        givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(metadataFor(INSTITUTION_ID, CLASS_ID))
+                .exchange()
+                .expectStatus().isNotFound();
+    }
+
+    @Test
+    void metadataThatDoesNotHangTogetherIsUnprocessableOverHttp() {
+        // "Validação de vínculo com a estrutura académica" is a named task of the
+        // issue and until now every assertion of it sat at service level, so the
+        // wiring from the route down to the validator was unproven.
+        givenTheInstitutionTeachesTheSubject();
+        givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
+givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(metadataFor(INSTITUTION_ID, CLASS_ID, SCHOOL_YEAR_ID + 1))
+                .exchange()
+                .expectStatus().isEqualTo(422);
+
+        org.mockito.Mockito.verify(statements, org.mockito.Mockito.never())
+                .save(org.mockito.ArgumentMatchers.any(Statement.class));
+    }
+
+    private Map<String, Object> metadataFor(Long institutionId, Long classId) {
+        return metadataFor(institutionId, classId, null);
+    }
+
+    private Map<String, Object> metadataFor(Long institutionId, Long classId, Long schoolYearId) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("institutionId", institutionId);
+        body.put("subjectId", SUBJECT_ID);
+        body.put("classId", classId);
+        body.put("examType", "P1");
+        body.put("title", "Prova de Matemática");
+        if (schoolYearId != null) {
+            body.put("schoolYearId", schoolYearId);
+        }
+        return body;
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenTheInstitutionTeachesTheSubject() {
@@ -411,6 +471,9 @@ class StatementApprovalAuthorizationTest {
         Subject subject = new Subject();
         subject.setId(SUBJECT_ID);
         when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject));
+        SchoolYear year = new SchoolYear();
+        year.setId(SCHOOL_YEAR_ID);
+        when(schoolYears.findByIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.just(year));
     }
 
     private void givenTheTeacherIsAffiliated() {
@@ -421,14 +484,19 @@ class StatementApprovalAuthorizationTest {
     }
 
     private void givenTheClass(Long classId) {
+        when(classes.findByIdAndDeletedAtIsNull(classId))
+                .thenReturn(Mono.just(classOfYear(classId, SCHOOL_YEAR_ID)));
+    }
+
+    private Class classOfYear(Long classId, Long schoolYearId) {
         Class klass = new Class();
         klass.setId(classId);
         klass.setGrade(12);
-        klass.setSchoolYearId(SCHOOL_YEAR_ID);
+        klass.setSchoolYearId(schoolYearId);
         // classes.course_id is NOT NULL in V10; leaving it null would NPE the
         // validator's course branch as soon as a payload carried a courseId.
         klass.setCourseId(COURSE_ID);
-        when(classes.findByIdAndDeletedAtIsNull(classId)).thenReturn(Mono.just(klass));
+        return klass;
     }
 
     private void givenTheStatementIsReadable() {

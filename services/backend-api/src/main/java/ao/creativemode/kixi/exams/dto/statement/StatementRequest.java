@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.exams.dto.statement;
 
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -19,6 +20,14 @@ import jakarta.validation.constraints.Size;
  * are for, and a statement the OCR flagged for review should not be able to skip
  * that gate as a side effect of fixing its metadata.
  *
+ * <p>The length limits are the columns' own, not a policy of this DTO. They used
+ * to be tighter — 255 for the title and 5000 for the instructions — which made
+ * statements the OCR produced impossible to edit: the column holds 500 and
+ * {@code TEXT} holds anything, the OCR writes into both without truncating, and
+ * a request that carried the title or the instructions already stored would be
+ * rejected with a 400 before this service ever ran. Since an edit has to be able
+ * to carry what is already in the row, the limits here follow the schema.
+ *
  * <p>The required fields mirror {@link ManualStatementRequest} so that both
  * routes describe a statement the same way; the class stays optional because a
  * school-wide statement with no class is the administrator's to write.
@@ -31,7 +40,7 @@ public record StatementRequest(
     Long subjectId,
 
     @NotBlank(message = "The title is required")
-    @Size(min = 3, max = 255, message = "The title must be between 3 and 255 characters")
+    @Size(min = 3, max = 500, message = "The title must be between 3 and 500 characters")
     String title,
 
     @NotBlank(message = "The exam type is required")
@@ -44,10 +53,14 @@ public record StatementRequest(
     @Size(max = 50, message = "The variant must not exceed 50 characters")
     String variant,
 
-    @Size(max = 5000, message = "The instructions must not exceed 5000 characters")
+    // No size limit: statements.instructions is TEXT and the OCR fills it from a
+    // scan without truncating, so a cap here would make some statements
+    // uneditable. The request body size already bounds the field.
     String instructions,
 
     @PositiveOrZero(message = "The total score cannot be negative")
+    @Digits(integer = 8, fraction = 2,
+        message = "The total score must be at most 99999999.99")
     Double totalMaxScore,
 
     Long schoolYearId,

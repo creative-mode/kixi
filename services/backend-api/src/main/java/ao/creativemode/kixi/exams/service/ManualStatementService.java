@@ -98,8 +98,8 @@ public class ManualStatementService {
         statement.setTitle(request.title().trim());
         statement.setExamType(request.examType().trim());
         statement.setDurationMinutes(request.durationMinutes());
-        statement.setVariant(request.variant());
-        statement.setInstructions(request.instructions());
+        statement.setVariant(blankToNull(request.variant()));
+        statement.setInstructions(blankToNull(request.instructions()));
         statement.setTotalMaxScore(totalScore(request));
         statement.setSchoolYearId(request.schoolYearId());
         statement.setTermId(request.termId());
@@ -121,6 +121,11 @@ public class ManualStatementService {
             .filter(score -> score != null)
             .mapToDouble(Double::doubleValue)
             .sum();
+    }
+
+    /** Shared with the edit path so a blank reads the same on both routes. */
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private record NumberedQuestion(int number, ManualStatementRequest.Question question) {}

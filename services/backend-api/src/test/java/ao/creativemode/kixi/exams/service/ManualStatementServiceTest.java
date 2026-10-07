@@ -110,12 +110,70 @@ class ManualStatementServiceTest {
     }
 
     /** A statement that names no class, which only an administrator may build. */
-    private ManualStatementRequest requestWithoutClass() {
+    private ManualStatementRequest requestVisible(boolean visible) {
         return new ManualStatementRequest(
+            1L, 2L, "Prova de Matemática", "Teste", 90, "  ", "  ", null, null, CLASS_ID, null,
+            visible,
+            List.of(new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null))
+        );
+    }
+
+    private void givenSaves() {
+        when(statements.save(any(Statement.class))).thenAnswer(invocation -> {
+            Statement s = invocation.getArgument(0);
+            s.setId(10L);
+            return Mono.just(s);
+        });
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> {
+            Question q = invocation.getArgument(0);
+            q.setId(100L + q.getNumber());
+            return Mono.just(q);
+        });
+        when(options.save(any(QuestionOption.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+    }
+
+    private ManualStatementRequest requestWithoutClass() {        return new ManualStatementRequest(
             1L, 2L, "Prova de Matemática", "Teste", 90, null, null,
             null, null, null, null, true,
             List.of(new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null))
         );
+    }
+
+    @Test
+    void aCreatedStatementIsVisibleOnlyIfTheTeacherAsksAndIsNeverUpForReview() {
+        // Creation honours `visible` because the author is the teacher who wrote
+        // the paper; the review gate exists for what the OCR guessed. Pinned so
+        // the asymmetry with the edit path stays deliberate: on an edit the
+        // statement may be OCR-derived, so publishing is a separate act.
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        StepVerifier.create(service.create(requestVisible(true), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        ArgumentCaptor<Statement> saved = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(saved.capture());
+        assertThat(saved.getValue().getVisible()).isTrue();
+        assertThat(saved.getValue().getNeedsReview()).isFalse();
+        assertThat(saved.getValue().getSource()).isEqualTo("manual");
+    }
+
+    @Test
+    void aCreatedStatementIsInvisibleByDefaultAndDropsABlankVariant() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        StepVerifier.create(service.create(requestVisible(false), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        ArgumentCaptor<Statement> saved = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(saved.capture());
+        assertThat(saved.getValue().getVisible()).isFalse();
+        assertThat(saved.getValue().getVariant()).isNull();
+        assertThat(saved.getValue().getInstructions()).isNull();
     }
 
     @Test
