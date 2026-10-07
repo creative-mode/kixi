@@ -113,7 +113,7 @@ class InstitutionAccessServiceTest {
                 .verify();
     }
 
-    // â”€â”€ The class-scoped rule: affiliation is not enough â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── The class-scoped rule: affiliation is not enough ────────────────────
 
     @Test
     void affiliatedTeacherAssignedToTheClassMayAuthor() {

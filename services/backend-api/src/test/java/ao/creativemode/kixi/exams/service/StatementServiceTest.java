@@ -401,6 +401,65 @@ class StatementServiceTest {
         verifyNoInteractions(accessService);
     }
 
+    // ── A school statement with no class is the administrator's alone ───────
+
+    /** A statement of the school but of no class: nothing to match an assignment against. */
+    private Statement statementOfSchoolWithoutClass() {
+        Statement statement = statement(1L);
+        statement.setInstitutionId(4L);
+        statement.setSubjectId(5L);
+        statement.setClassId(null);
+        statement.setNeedsReview(true);
+        return statement;
+    }
+
+    @Test
+    void aTeacherMayNotApproveASchoolStatementThatNamesNoClass() {
+        // Only an administrator may build one (ManualStatementService), so only an
+        // administrator may change it. Letting the rule lapse here would hand any
+        // teacher affiliated to the school — holding no assignment at all — the
+        // right to approve or delete a statement the school made on purpose.
+        Statement existing = statementOfSchoolWithoutClass();
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.approveReview(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+        verifyNoInteractions(accessService);
+    }
+
+    @Test
+    void anAdministratorMayApproveASchoolStatementThatNamesNoClass() {
+        Statement existing = statementOfSchoolWithoutClass();
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        // The rule itself imposes nothing on the administrator; the institution
+        // and subject checks still run.
+        when(accessService.requireCanAuthor(9L, true, 4L, 5L, null)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+
+        verify(statementRepository).save(existing);
+    }
+
+    @Test
+    void aTeacherMayNotPurgeASchoolStatementThatNamesNoClass() {
+        Statement trashed = statementOfSchoolWithoutClass();
+        trashed.markAsDeleted();
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
+
+        StepVerifier.create(service.hardDelete(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        assertThat(trashed.getDeletedAt()).isNotNull();
+        verify(statementRepository, never()).delete(any());
+    }
+
     @Test
     void countActiveDelegatesToRepository() {
         when(statementRepository.countByDeletedAtIsNull()).thenReturn(Mono.just(5L));

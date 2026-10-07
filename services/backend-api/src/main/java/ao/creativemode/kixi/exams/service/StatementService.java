@@ -352,6 +352,16 @@ public class StatementService {
             // Backfilling them is a separate concern from this rule.
             return Mono.just(statement);
         }
+        if (statement.getClassId() == null && !admin) {
+            // A school statement without a class is not scoped to any class, so
+            // no teaching assignment can be checked against it. Only an
+            // administrator may build one (ManualStatementService), and the
+            // rule has to read the same way on the way back in: otherwise any
+            // teacher affiliated to the school, holding no assignment at all,
+            // could approve or delete a statement the school made on purpose.
+            return Mono.error(ApiException.forbidden(
+                "Only an administrator may change a statement without a class"));
+        }
         return accessService
             .requireCanAuthor(
                 accountId,
