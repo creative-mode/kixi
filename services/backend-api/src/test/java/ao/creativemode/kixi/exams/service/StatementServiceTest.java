@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
@@ -41,6 +43,7 @@ class StatementServiceTest {
     private QuestionRepository questionRepository;
     private QuestionOptionRepository optionRepository;
     private InstitutionAccessService accessService;
+    private StatementLinkValidationService validator;
     private StatementService service;
 
     @BeforeEach
@@ -49,8 +52,9 @@ class StatementServiceTest {
         questionRepository = mock(QuestionRepository.class);
         optionRepository = mock(QuestionOptionRepository.class);
         accessService = mock(InstitutionAccessService.class);
+        validator = mock(StatementLinkValidationService.class);
         service = new StatementService(
-                statementRepository, questionRepository, optionRepository, accessService);
+                statementRepository, questionRepository, optionRepository, accessService, validator);
     }
 
     /**
@@ -486,6 +490,166 @@ class StatementServiceTest {
         statement.setId(id);
         statement.setTitle("Prova Teste");
         return statement;
+    }
+
+    // ── Editing the metadata, never the questions ──────────────────────────
+
+    @Test
+    void updateReplacesTheMetadataAndLeavesTheQuestionsAlone() {
+        givenTheEditIsAllowed();
+        Statement existing = givenAStatementToEdit();
+        existing.setTitle("Prova errada");
+        existing.setNeedsReview(true);
+        existing.setSource("ocr");
+
+        StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
+
+        assertThat(existing.getTitle()).isEqualTo("Prova de Matemática");
+        assertThat(existing.getExamType()).isEqualTo("P1");
+        assertThat(existing.getInstitutionId()).isEqualTo(1L);
+        assertThat(existing.getClassId()).isEqualTo(CLASS_ID);
+        assertThat(existing.getTotalMaxScore()).isEqualTo(20.0);
+        // Provenance and the review gate are not the teacher's to move from here.
+        assertThat(existing.getSource()).isEqualTo("ocr");
+        assertThat(existing.getNeedsReview()).isTrue();
+        verify(questionRepository, never()).deleteAllByStatementId(any());
+        verify(questionRepository, never()).save(any());
+    }
+
+    @Test
+    void updateDropsABlankVariantAndInstructions() {
+        Statement existing = givenAStatementToEdit();
+        givenTheEditIsAllowed();
+
+        StepVerifier.create(service.update(1L, requestWithBlanks(), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(existing.getVariant()).isNull();
+        assertThat(existing.getInstructions()).isNull();
+    }
+
+    @Test
+    void updateChecksTheStatementAsItStandsAndTheMetadataBeingWritten() {
+        givenTheEditIsAllowed();
+        givenAStatementToEdit();
+
+        StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
+
+        // Once against the class the statement is in now (4L), once against the
+        // class it is being moved to (1L). Dropping either half lets a teacher
+        // steal another teacher's paper, or hand one to a class they do not teach.
+        verify(accessService).requireCanAuthor(9L, false, 4L, 5L, 3L);
+        verify(accessService).requireCanAuthor(9L, false, 1L, 2L, CLASS_ID);
+    }
+
+    @Test
+    void updateIsForbiddenWhenTheTeacherCannotMoveTheStatementToTheNewClass() {
+        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
+        givenAStatementToEdit();
+        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L)).thenReturn(Mono.empty());
+        when(accessService.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.update(1L, request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void aTeacherMayNotEditAStatementWithoutAClass() {
+        Statement existing = statementOfSchool(1L, 4L, null);
+        when(validator.requireAClassForTeachers(CLASS_ID, false)).thenReturn(Mono.empty());
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.update(1L, request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRefusesAMetadataWithoutAClassFromATeacher() {
+        when(validator.requireAClassForTeachers(null, false))
+                .thenReturn(Mono.error(ApiException.unprocessableEntity("A teacher must choose the class")));
+
+        StepVerifier.create(service.update(1L, requestWithoutClass(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verifyNoInteractions(statementRepository);
+    }
+
+    @Test
+    void updateOfAStatementThatDoesNotExistIsNotFound() {
+        givenTheEditIsAllowed();
+        when(statementRepository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.update(99L, request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRefusesMetadataThatDoesNotHangTogether() {
+        givenTheEditIsAllowed();
+        givenAStatementToEdit();
+        when(validator.validate(7L, 8L, CLASS_ID, 2L, 9L))
+                .thenReturn(Mono.error(ApiException.unprocessableEntity(
+                        "The school year must be the one of the class")));
+
+        StepVerifier.create(service.update(1L, request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    // ── Fixtures ────────────────────────────────────────────────────────────
+
+    private static final Long CLASS_ID = 6L;
+
+    /** Every check an edit passes, so a test only has to stub the one it is about. */
+    private void givenTheEditIsAllowed() {
+        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
+        when(accessService.requireCanAuthor(anyLong(), anyBoolean(), anyLong(), anyLong(), any()))
+                .thenReturn(Mono.empty());
+        when(validator.validate(any(), any(), any(), any(), any())).thenReturn(Mono.empty());
+    }
+
+    /** A statement of a school, a class and a subject, readable and writable. */
+    private Statement givenAStatementToEdit() {
+        Statement existing = statementOfSchool(1L, 4L, 3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        return existing;
+    }
+
+    private StatementRequest request() {
+        return new StatementRequest(
+                1L, 2L, "Prova de Matemática", "P1", 120, "Variante A", "Leia com atenção", 20.0,
+                7L, 8L, CLASS_ID, 9L);
+    }
+
+    private StatementRequest requestWithoutClass() {
+        return new StatementRequest(
+                1L, 2L, "Prova de Matemática", "P1", 120, null, null, 20.0, 7L, 8L, null, null);
+    }
+
+    private StatementRequest requestWithBlanks() {
+        return new StatementRequest(
+                1L, 2L, "Prova de Matemática", "P1", 120, "  ", "   ", 20.0, 7L, 8L, CLASS_ID, 9L);
     }
 
     /** A statement built in the exam builder: it belongs to a school, a class and a subject. */

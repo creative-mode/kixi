@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.exams.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
@@ -28,17 +29,20 @@ public class StatementService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final InstitutionAccessService accessService;
+    private final StatementLinkValidationService validator;
 
     public StatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
-        InstitutionAccessService accessService
+        InstitutionAccessService accessService,
+        StatementLinkValidationService validator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.accessService = accessService;
+        this.validator = validator;
     }
 
     // =========================================================================
@@ -309,6 +313,69 @@ public class StatementService {
                 statement.setVisible(visible);
                 return statementRepository.save(statement);
             });
+    }
+
+    /**
+     * Correct the metadata of a statement and nothing else.
+     *
+     * <p>The questions and their options are deliberately left untouched: on a
+     * statement the OCR produced they are what the teacher is correcting, and a
+     * full replace would throw them away. For the same reason this does not
+     * touch {@code visible} or {@code needsReview}, which are what
+     * {@link #approveReview} and {@link #setVisible} are for, and it keeps
+     * {@code source} as the record of where the statement came from.
+     *
+     * <p>Authorisation is checked twice, and both halves matter. Against the
+     * statement as it stands, so a teacher cannot pull another teacher's paper
+     * into their own class; and against the metadata being written, so they
+     * cannot hand a paper over to a class they do not teach.
+     *
+     * <p>A statement the OCR produced carries no institution, so the first check
+     * has nothing to weigh against and it is the second one that admits it into
+     * a school.
+     */
+    @Transactional
+    public Mono<Statement> update(Long id, StatementRequest request, Long accountId, boolean admin) {
+        return validator.requireAClassForTeachers(request.classId(), admin)
+            .then(Mono.defer(() -> findById(id)))
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> requireCanWriteAs(request, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> validator.validate(
+                    request.schoolYearId(),
+                    request.termId(),
+                    request.classId(),
+                    request.subjectId(),
+                    request.courseId())
+                .thenReturn(statement))
+            .flatMap(statement -> {
+                apply(statement, request);
+                return statementRepository.save(statement);
+            });
+    }
+
+    /** Whether the account may point a statement at these references. */
+    private Mono<Void> requireCanWriteAs(StatementRequest request, Long accountId, boolean admin) {
+        return Mono.defer(() -> accessService.requireCanAuthor(
+            accountId, admin, request.institutionId(), request.subjectId(), request.classId()));
+    }
+
+    private void apply(Statement statement, StatementRequest request) {
+        statement.setInstitutionId(request.institutionId());
+        statement.setSubjectId(request.subjectId());
+        statement.setTitle(request.title().trim());
+        statement.setExamType(request.examType().trim());
+        statement.setDurationMinutes(request.durationMinutes());
+        statement.setVariant(blankToNull(request.variant()));
+        statement.setInstructions(blankToNull(request.instructions()));
+        statement.setTotalMaxScore(request.totalMaxScore());
+        statement.setSchoolYearId(request.schoolYearId());
+        statement.setTermId(request.termId());
+        statement.setClassId(request.classId());
+        statement.setCourseId(request.courseId());
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     // =========================================================================

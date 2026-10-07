@@ -6,10 +6,14 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 import ao.creativemode.kixi.academic.model.Class;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
+import ao.creativemode.kixi.academic.repository.CourseRepository;
+import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
+import ao.creativemode.kixi.academic.repository.TermRepository;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.service.StatementLinkValidationService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
@@ -60,7 +64,8 @@ import reactor.core.publisher.Mono;
 })
 @Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class,
         CurrentAccountService.class, JwtAuthenticationFilter.class, RequestIdWebFilter.class,
-        StatementService.class, InstitutionAccessService.class, TeachingAssignmentService.class})
+        StatementService.class, InstitutionAccessService.class, TeachingAssignmentService.class,
+        StatementLinkValidationService.class})
 class StatementApprovalAuthorizationTest {
 
     private static final Long ADMIN_ID = 1L;
@@ -106,6 +111,15 @@ class StatementApprovalAuthorizationTest {
 
     @MockBean
     private SubjectRepository subjects;
+
+    @MockBean
+    private SchoolYearRepository schoolYears;
+
+    @MockBean
+    private TermRepository terms;
+
+    @MockBean
+    private CourseRepository courses;
 
     private Statement statement;
 
