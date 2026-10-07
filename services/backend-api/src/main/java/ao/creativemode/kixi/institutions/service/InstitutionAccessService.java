@@ -19,17 +19,41 @@ public class InstitutionAccessService {
     private final InstitutionSubjectRepository subjectLinks;
     private final InstitutionTeacherRepository teacherLinks;
     private final TeacherRepository teacherRepository;
+    private final TeachingAssignmentService teachingAssignments;
 
     public InstitutionAccessService(
         InstitutionRepository institutionRepository,
         InstitutionSubjectRepository subjectLinks,
         InstitutionTeacherRepository teacherLinks,
-        TeacherRepository teacherRepository
+        TeacherRepository teacherRepository,
+        TeachingAssignmentService teachingAssignments
     ) {
         this.institutionRepository = institutionRepository;
         this.subjectLinks = subjectLinks;
         this.teacherLinks = teacherLinks;
         this.teacherRepository = teacherRepository;
+        this.teachingAssignments = teachingAssignments;
+    }
+
+    /**
+     * Completes when the account may author a statement of {@code subjectId} in
+     * {@code classId} for {@code institutionId}; fails otherwise.
+     *
+     * <p>Beyond belonging to the institution and to one of its subjects, a
+     * statement bound to a class is only for a teacher assigned to teach that
+     * class and subject: affiliation says where a teacher works, the assignment
+     * says what they teach.
+     */
+    public Mono<Void> requireCanAuthor(
+        Long accountId,
+        boolean admin,
+        Long institutionId,
+        Long subjectId,
+        Long classId
+    ) {
+        return requireCanAuthor(accountId, admin, institutionId, subjectId)
+            .then(Mono.defer(() ->
+                teachingAssignments.requireTeaches(accountId, admin, classId, subjectId)));
     }
 
     /**

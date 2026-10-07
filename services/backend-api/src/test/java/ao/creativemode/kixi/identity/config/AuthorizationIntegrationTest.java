@@ -1,9 +1,12 @@
 package ao.creativemode.kixi.identity.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
@@ -21,6 +24,7 @@ import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelat
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -41,7 +45,8 @@ import reactor.core.publisher.Mono;
         ao.creativemode.kixi.simulations.controller.SimulationController.class,
         ao.creativemode.kixi.simulations.controller.SimulationAnswerController.class,
         OcrController.class,
-        StatementController.class
+        StatementController.class,
+        ao.creativemode.kixi.institutions.controller.TeachingAssignmentController.class
 })
 @TestPropertySource(properties = {
         "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
@@ -71,6 +76,9 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private ao.creativemode.kixi.exams.service.StatementService statementService;
+
+    @MockBean
+    private ao.creativemode.kixi.institutions.service.TeachingAssignmentService teachingAssignmentService;
 
     /**
      * O springdoc não é carregado no slice {@code @WebFluxTest} (por isso 404);
@@ -290,6 +298,202 @@ class AuthorizationIntegrationTest {
         );
     }
 
+    // ── Statement writes carry the signed-in account to the service ─────────
+
+    @Test
+    void passesTheSignedInTeacherWhenApprovingAStatement() {
+        givenApproveReviewReturnsAStatement();
+
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).approveReview(1L, 7L, false);
+    }
+
+    @Test
+    void passesTheAdministratorFlagWhenApprovingAStatement() {
+        givenApproveReviewReturnsAStatement();
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).approveReview(1L, 1L, true);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenChangingVisibility() {
+        Statement statement = new Statement("EXAM", "Mathematics exam");
+        statement.setId(1L);
+        when(statementService.setVisible(anyLong(), anyBoolean(), anyLong(), anyBoolean()))
+                .thenReturn(Mono.just(statement));
+
+        client.mutateWith(teacherJwt())
+                .patch()
+                .uri("/api/v1/statements/1/visibility?visible=true")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(statementService).setVisible(1L, true, 7L, false);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenDeletingAStatement() {
+        when(statementService.softDelete(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/statements/1")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).softDelete(1L, 7L, false);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenPurgingAStatement() {
+        when(statementService.hardDelete(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/statements/1/purge")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).hardDelete(1L, 7L, false);
+    }
+
+    @Test
+    void passesTheSignedInTeacherWhenRestoringAStatement() {
+        when(statementService.restore(anyLong(), anyLong(), anyBoolean())).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/statements/1/restore")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(statementService).restore(1L, 7L, false);
+    }
+
+    private void givenApproveReviewReturnsAStatement() {
+        Statement statement = new Statement("EXAM", "Mathematics exam");
+        statement.setId(1L);
+        when(statementService.approveReview(anyLong(), anyLong(), anyBoolean()))
+                .thenReturn(Mono.just(statement));
+    }
+
+    // ── Teaching assignments: administered by ADMIN, read by the teacher ────
+
+    @Test
+    void rejectsAnonymousTeachingAssignmentReads() {
+        client.get()
+                .uri("/api/v1/teaching-assignments")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void allowsAdminToListTeachingAssignments() {
+        when(teachingAssignmentService.findAllActive()).thenReturn(Flux.empty());
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/teaching-assignments")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(teachingAssignmentService).findAllActive();
+    }
+
+    @Test
+    void allowsTeacherToReadItsOwnTeachingAssignments() {
+        when(teachingAssignmentService.findMineForAccount(7L)).thenReturn(Flux.empty());
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/teaching-assignments/me")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(teachingAssignmentService).findMineForAccount(7L);
+    }
+
+    @Test
+    void rejectsTeacherReadingOtherTeachingAssignments() {
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/teaching-assignments")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void rejectsTeacherReadingTheTeachingAssignmentTrash() {
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/teaching-assignments/trash")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void rejectsTeacherCreatingTeachingAssignments() {
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/teaching-assignments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(assignmentPayload())
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void rejectsStudentCreatingTeachingAssignments() {
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/teaching-assignments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(assignmentPayload())
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void rejectsStudentReadingItsOwnTeachingAssignments() {
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/teaching-assignments/me")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void rejectsTeacherDeletingTeachingAssignments() {
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/teaching-assignments/1")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    private static Map<String, Object> assignmentPayload() {
+        return Map.of("teacherId", 1L, "classId", 2L, "subjectId", 3L, "schoolYearId", 4L);
+    }
+
     private static WebTestClientConfigurer studentJwt() {
         return mockAuthentication(new UsernamePasswordAuthenticationToken(
                 "42",
@@ -303,6 +507,14 @@ class AuthorizationIntegrationTest {
                 "7",
                 null,
                 List.of(new SimpleGrantedAuthority("ROLE_TEACHER"))
+        ));
+    }
+
+    private static WebTestClientConfigurer adminJwt() {
+        return mockAuthentication(new UsernamePasswordAuthenticationToken(
+                "1",
+                null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))
         ));
     }
 }
