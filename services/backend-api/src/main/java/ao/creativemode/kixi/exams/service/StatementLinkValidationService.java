@@ -13,7 +13,7 @@ import reactor.core.publisher.Mono;
 
 /**
  * Checks that the references on a statement hang together with the academic
- * structure.
+ * structure, and that the caller is allowed to name no class.
  *
  * <p>The foreign keys would already reject an id that does not exist, but not a
  * statement whose class belongs to last year's school year while the statement
@@ -58,6 +58,25 @@ public class StatementLinkValidationService {
             .then(mustExist(subjects::findByIdAndDeletedAtIsNull, subjectId, "The subject"))
             .then(mustExist(courses::findByIdAndDeletedAtIsNull, courseId, "The course"))
             .then(mustBelongToItsOwnYearAndCourse(classId, schoolYearId, courseId));
+    }
+
+    /**
+     * A teacher may only build for a class they teach, and the teaching
+     * assignment is keyed on the class. Naming no class would silently skip that
+     * check, so a statement from a teacher has to name one. An administrator is
+     * not restricted and may build a school-wide statement.
+     *
+     * <p>Lives here so that writing and editing read the same way: the rule once
+     * reached only the creation path, and a teacher could then edit a school-wide
+     * statement that only an administrator was allowed to create.
+     */
+    public Mono<Void> requireAClassForTeachers(Long classId, boolean admin) {
+        if (admin || classId != null) {
+            return Mono.empty();
+        }
+        return Mono.error(ApiException.unprocessableEntity(
+            "A teacher must choose the class they teach; "
+                + "only an administrator may build a statement without a class"));
     }
 
     private <T> Mono<Void> mustExist(Function<Long, Mono<T>> lookup, Long id, String what) {

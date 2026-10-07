@@ -30,45 +30,39 @@ public class ManualStatementService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final InstitutionAccessService accessService;
+    private final StatementLinkValidationService validator;
 
     public ManualStatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
-        InstitutionAccessService accessService
+        InstitutionAccessService accessService,
+        StatementLinkValidationService validator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.accessService = accessService;
+        this.validator = validator;
     }
 
     @Transactional
     public Mono<Statement> create(ManualStatementRequest request, Long accountId, boolean admin) {
-        return requireAClassWhenNotAdmin(request, admin)
+        return validator.requireAClassForTeachers(request.classId(), admin)
             .then(Mono.defer(() -> accessService.requireCanAuthor(
                 accountId, admin, request.institutionId(), request.subjectId(), request.classId())))
+            .then(Mono.defer(() -> validator.validate(
+                request.schoolYearId(),
+                request.termId(),
+                request.classId(),
+                request.subjectId(),
+                request.courseId())))
             .then(Mono.defer(() -> statementRepository.save(toStatement(request, accountId))))
             .flatMap(statement ->
                 Flux.fromIterable(indexed(request.questions()))
                     .concatMap(entry -> saveQuestion(statement.getId(), entry.number(), entry.question()))
                     .then(Mono.just(statement))
             );
-    }
-
-    /**
-     * A teacher may only build for a class they teach, and the teaching
-     * assignment is keyed on the class. Leaving the class out would silently
-     * skip that check, so a statement from a teacher has to name one. An
-     * administrator is not restricted and may build a school-wide statement.
-     */
-    private Mono<Void> requireAClassWhenNotAdmin(ManualStatementRequest request, boolean admin) {
-        if (admin || request.classId() != null) {
-            return Mono.empty();
-        }
-        return Mono.error(ApiException.unprocessableEntity(
-            "A teacher must choose the class they teach; "
-                + "only an administrator may build a statement without a class"));
     }
 
     private Mono<Question> saveQuestion(Long statementId, int number, ManualStatementRequest.Question data) {

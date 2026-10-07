@@ -10,6 +10,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
+import ao.creativemode.kixi.academic.model.Class;
+import ao.creativemode.kixi.academic.model.Subject;
+import ao.creativemode.kixi.academic.repository.ClassRepository;
+import ao.creativemode.kixi.academic.repository.CourseRepository;
+import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
+import ao.creativemode.kixi.academic.repository.SubjectRepository;
+import ao.creativemode.kixi.academic.repository.TermRepository;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
@@ -32,7 +39,13 @@ class ManualStatementServiceTest {
     private QuestionRepository questions;
     private QuestionOptionRepository options;
     private InstitutionAccessService access;
+    private StatementLinkValidationService validator;
+    private SubjectRepository subjects;
+    private ClassRepository classes;
     private ManualStatementService service;
+
+    private static final Long CLASS_ID = 8L;
+    private static final Long SUBJECT_ID = 2L;
 
     @BeforeEach
     void setUp() {
@@ -40,10 +53,28 @@ class ManualStatementServiceTest {
         questions = mock(QuestionRepository.class);
         options = mock(QuestionOptionRepository.class);
         access = mock(InstitutionAccessService.class);
-        service = new ManualStatementService(statements, questions, options, access);
+        subjects = mock(SubjectRepository.class);
+        classes = mock(ClassRepository.class);
+        // The real validator: the rule that a teacher must name a class is the
+        // point of several tests here and would say nothing if stubbed out.
+        validator = new StatementLinkValidationService(
+                mock(SchoolYearRepository.class), mock(TermRepository.class),
+                subjects, mock(CourseRepository.class), classes);
+        service = new ManualStatementService(statements, questions, options, access, validator);
+        givenTheAcademicReferencesExist();
     }
 
-    private static final Long CLASS_ID = 8L;
+    private void givenTheAcademicReferencesExist() {
+        Subject subject = new Subject();
+        subject.setId(SUBJECT_ID);
+        when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject));
+
+        Class klass = new Class();
+        klass.setId(CLASS_ID);
+        klass.setGrade(12);
+        klass.setSchoolYearId(2024L);
+        when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(klass));
+    }
 
     /** A statement from a teacher: it names the class being taught. */
     private ManualStatementRequest request() {
@@ -149,6 +180,22 @@ class ManualStatementServiceTest {
         StepVerifier.create(service.create(requestWithoutClass(), 9L, true)).expectNextCount(1).verifyComplete();
 
         verify(access).requireCanAuthor(9L, true, 1L, 2L, null);
+    }
+
+    @Test
+    void doesNotSaveAnythingWhenTheClassBelongsToAnotherSchoolYear() {
+        // The statement claims 2024/2025 while the class is from last year. The
+        // foreign key would have accepted it, and the teaching assignment would
+        // then be checked against the wrong year.
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.create(request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statements, never()).save(any(Statement.class));
     }
 
     @Test
