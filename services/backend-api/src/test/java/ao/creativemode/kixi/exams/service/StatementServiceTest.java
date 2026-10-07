@@ -618,6 +618,80 @@ class StatementServiceTest {
 
     // ── Fixtures ────────────────────────────────────────────────────────────
 
+// ── The hole in the institution-less carve-out ─────────────────────────
+
+    private static final Long SOMEONE_ELSES_CLASS_ID = 3L;
+
+    @Test
+    void aTeacherMayNotTakeOverAStatementFromTheOcrInSomebodyElsesClass() {
+        // The OCR leaves institution_id empty, and requireCanEdit returned
+        // straight away in that case. Nothing was left to check, so a teacher
+        // could take a statement sitting in a class they do not teach and move
+        // it into their own: the check on the metadata being written passed,
+        // because that class *is* theirs. The class the statement is in is still
+        // there to be weighed, so it has to be.
+        Statement fromTheOcr = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
+        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
+        when(accessService.requireAssignedTo(9L, false, SOMEONE_ELSES_CLASS_ID, 5L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.update(1L, request(), 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void aTeacherMayNotPurgeAStatementFromTheOcrInSomebodyElsesClass() {
+        // The worst of the family: the same missing check on softDelete,
+        // restore and hardDelete, where the statement is destroyed outright.
+        Statement trashed = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
+        trashed.markAsDeleted();
+        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
+        when(accessService.requireAssignedTo(9L, false, SOMEONE_ELSES_CLASS_ID, 5L))
+                .thenReturn(Mono.error(ApiException.forbidden(
+                        "Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(service.hardDelete(1L, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(questionRepository, never()).deleteAllByStatementId(any());
+        verify(statementRepository, never()).delete(any());
+    }
+
+    @Test
+    void aTeacherAssignedToTheClassMayEditAStatementFromTheOcr() {
+        Statement fromTheOcr = statementOfSchool(1L, null, CLASS_ID);
+        givenTheEditIsAllowed();
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
+        when(accessService.requireAssignedTo(9L, false, CLASS_ID, 5L)).thenReturn(Mono.empty());
+        when(statementRepository.save(fromTheOcr)).thenReturn(Mono.just(fromTheOcr));
+
+        StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
+
+        assertThat(fromTheOcr.getInstitutionId()).isEqualTo(1L);
+    }
+
+    @Test
+    void anAdministratorReachesAnOcrStatementWithoutAnAssignment() {
+        Statement fromTheOcr = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
+        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
+        when(accessService.requireAssignedTo(9L, true, SOMEONE_ELSES_CLASS_ID, 5L))
+                .thenReturn(Mono.empty());
+        when(accessService.requireCanAuthor(9L, true, 1L, 2L, CLASS_ID)).thenReturn(Mono.empty());
+        when(validator.validate(any(), any(), any(), any(), any())).thenReturn(Mono.empty());
+        when(statementRepository.save(fromTheOcr)).thenReturn(Mono.just(fromTheOcr));
+
+        StepVerifier.create(service.update(1L, request(), 9L, true)).expectNextCount(1).verifyComplete();
+    }
+
     private static final Long CLASS_ID = 6L;
 
     /** Every check an edit passes, so a test only has to stub the one it is about. */

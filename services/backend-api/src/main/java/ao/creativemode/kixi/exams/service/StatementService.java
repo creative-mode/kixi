@@ -414,10 +414,18 @@ public class StatementService {
      */
     private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
         if (statement.getInstitutionId() == null) {
-            // Statements created before the institution model (the OCR flows)
-            // carry no school, so there is nothing to check them against.
-            // Backfilling them is a separate concern from this rule.
-            return Mono.just(statement);
+            if (statement.getClassId() == null) {
+                // Statements created before the institution model (the OCR flows)
+                // carry no school and no class, so there is nothing to weigh
+                // them against. Backfilling them is a separate concern.
+                return Mono.just(statement);
+            }
+            // No school to check them against, but the class is still on them.
+            // Returning straight away let any teacher edit, delete or approve a
+            // statement sitting in a class they do not teach.
+            return accessService
+                .requireAssignedTo(accountId, admin, statement.getClassId(), statement.getSubjectId())
+                .thenReturn(statement);
         }
         if (statement.getClassId() == null && !admin) {
             // A school statement without a class is not scoped to any class, so

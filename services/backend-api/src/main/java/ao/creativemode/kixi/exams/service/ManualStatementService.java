@@ -8,7 +8,6 @@ import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
-import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
