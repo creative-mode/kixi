@@ -20,6 +20,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.test.web.reactive.server.WebTestClientConfigurer;
 
+import ao.creativemode.kixi.identity.config.CorsConfig;
+import ao.creativemode.kixi.identity.config.CorsProperties;
 import ao.creativemode.kixi.identity.config.SecurityConfig;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.identity.service.JwtService;
@@ -37,7 +39,7 @@ import reactor.core.publisher.Mono;
         "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
         "app.jwt.expiration-ms=86400000"
 })
-@Import({SecurityConfig.class,
+@Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class,
         CurrentAccountService.class, JwtAuthenticationFilter.class, RequestIdWebFilter.class})
 class EnrollmentSecurityTest {
 
