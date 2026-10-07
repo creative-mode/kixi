@@ -26,6 +26,17 @@ public class CourseService {
                 .map(this::toResponse);
     }
 
+    /**
+     * Courses of one school, for the student picking where they study. No filter means
+     * every active course, which is what the admin list uses.
+     */
+    public Flux<CourseResponse> findAllActive(Long institutionId) {
+        Flux<Course> rows = institutionId == null
+                ? repository.findAllByDeletedAtIsNull()
+                : repository.findAllByInstitutionIdAndDeletedAtIsNull(institutionId);
+        return rows.map(this::toResponse);
+    }
+
     public Flux<CourseResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull()
                 .map(this::toResponse);
@@ -42,10 +53,15 @@ public class CourseService {
         String name = request.name().trim();
         String description = request.description() != null ? request.description().trim() : null;
 
+        if (request.institutionId() == null) {
+            return Mono.error(ApiException.badRequest("Institution is required"));
+        }
+
         Course entity = new Course();
         entity.setCode(code);
         entity.setName(name);
         entity.setDescription(description);
+        entity.setInstitutionId(request.institutionId());
         entity.setDeletedAt(null);
 
         return repository.save(entity)
@@ -59,19 +75,24 @@ public class CourseService {
         String name = request.name().trim();
         String description = request.description() != null ? request.description().trim() : null;
 
+        if (request.institutionId() == null) {
+            return Mono.error(ApiException.badRequest("Institution is required"));
+        }
+
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Course not found")))
                 .flatMap(entity -> {
                     entity.setCode(code);
                     entity.setName(name);
                     entity.setDescription(description);
+                    entity.setInstitutionId(request.institutionId());
                     entity.setUpdatedAt(LocalDateTime.now());
 
-                    return repository.save(entity)
-                            .onErrorMap(DataIntegrityViolationException.class,
-                                    e -> ApiException.conflict("Another course with code " + code + " already exists"));
+                    return repository.save(entity);
                 })
-                .map(this::toResponse);
+                .map(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("Another course with code " + code + " already exists"));
     }
 
     public Mono<Void> softDelete(Long id) {
@@ -105,6 +126,7 @@ public class CourseService {
     private CourseResponse toResponse(Course entity) {
         return new CourseResponse(
                 entity.getId(),
+                entity.getInstitutionId(),
                 entity.getCode(),
                 entity.getName(),
                 entity.getDescription(),

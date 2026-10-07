@@ -48,6 +48,18 @@ public interface ClassRepository extends ReactiveCrudRepository<Class, Long> {
     Flux<Class> findByCourseIdAndDeletedAtIsNull(Long courseId);
 
     /**
+     * Classes of one school, active only. The onboarding picker asks for this after the
+     * student chooses the school.
+     */
+    Flux<Class> findAllByInstitutionIdAndDeletedAtIsNull(Long institutionId);
+
+    /**
+     * Classes of one course in one school: the last step of the picker, once the student
+     * has chosen both.
+     */
+    Flux<Class> findAllByCourseIdAndInstitutionIdAndDeletedAtIsNull(Long courseId, Long institutionId);
+
+    /**
      * Find classes by school year
      */
     Flux<Class> findBySchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
