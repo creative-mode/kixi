@@ -80,6 +80,9 @@ services:
       # Application Configuration
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
       SERVER_PORT: 8080
+      # API docs (springdoc): set false in production to hide the API map.
+      SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-true}
+      SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-true}
       # Logging Configuration
       LOGGING_LEVEL_ROOT: ${LOG_LEVEL:-INFO}
       LOGGING_LEVEL_AO_CREATIVEMODE: ${APP_LOG_LEVEL:-DEBUG}
