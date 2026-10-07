@@ -4,6 +4,7 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.academic.dto.courses.CourseRequest;
 import ao.creativemode.kixi.academic.dto.courses.CourseResponse;
 import ao.creativemode.kixi.academic.model.Course;
+import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -16,9 +17,11 @@ import java.time.LocalDateTime;
 public class CourseService {
 
     private final CourseRepository repository;
+    private final ClassRepository classRepository;
 
-    public CourseService(CourseRepository repository) {
+    public CourseService(CourseRepository repository, ClassRepository classRepository) {
         this.repository = repository;
+        this.classRepository = classRepository;
     }
 
     public Flux<CourseResponse> findAllActive() {
@@ -82,17 +85,41 @@ public class CourseService {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Course not found")))
                 .flatMap(entity -> {
-                    entity.setCode(code);
-                    entity.setName(name);
-                    entity.setDescription(description);
-                    entity.setInstitutionId(request.institutionId());
-                    entity.setUpdatedAt(LocalDateTime.now());
+                    boolean schoolChanged = !java.util.Objects.equals(
+                            entity.getInstitutionId(), request.institutionId());
 
-                    return repository.save(entity);
+                    return (schoolChanged
+                            ? requireNoClassesInTheOldSchool(entity)
+                            : Mono.<Void>empty())
+                            .then(Mono.defer(() -> {
+                                entity.setCode(code);
+                                entity.setName(name);
+                                entity.setDescription(description);
+                                entity.setInstitutionId(request.institutionId());
+                                entity.setUpdatedAt(LocalDateTime.now());
+
+                                return repository.save(entity);
+                            }));
                 })
                 .map(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
                         e -> ApiException.conflict("Another course with code " + code + " already exists"));
+    }
+
+    /**
+     * A class carries the school of its course, enforced by a composite foreign key. So
+     * moving a course that already has classes to another school would either fail on
+     * that constraint or, worse, be reported as a duplicate code. Say what is actually
+     * wrong instead: the classes have to move first.
+     */
+    private Mono<Void> requireNoClassesInTheOldSchool(Course course) {
+        return classRepository.findByCourseIdAndDeletedAtIsNull(course.getId())
+                .hasElements()
+                .flatMap(hasClasses -> hasClasses
+                        ? Mono.error(ApiException.conflict(
+                                "This course already has classes in its current school. "
+                                        + "Move the classes to the other school before changing it."))
+                        : Mono.empty());
     }
 
     public Mono<Void> softDelete(Long id) {

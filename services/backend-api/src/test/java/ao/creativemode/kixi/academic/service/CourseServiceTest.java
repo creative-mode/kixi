@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.academic.dto.courses.CourseRequest;
 import ao.creativemode.kixi.academic.model.Course;
+import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,12 +24,14 @@ class CourseServiceTest {
     private static final Long ITEL = 7L;
 
     private CourseRepository repository;
+    private ClassRepository classRepository;
     private CourseService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(CourseRepository.class);
-        service = new CourseService(repository);
+        classRepository = mock(ClassRepository.class);
+        service = new CourseService(repository, classRepository);
     }
 
     @Test
@@ -100,6 +103,56 @@ class CourseServiceTest {
                 .verify();
 
         verify(repository, never()).save(any());
+    }
+
+    /**
+     * A class carries the school of its course, enforced by a composite foreign key.
+     * Without this check, moving a course that has classes fails on that constraint and
+     * gets reported as "a course with this code already exists", which is the same
+     * misleading-error class ClassServiceTest already guards against.
+     */
+    @Test
+    void updateRefusesToMoveACourseThatAlreadyHasClasses() {
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L))
+                .thenReturn(Flux.just(new ao.creativemode.kixi.academic.model.Class()));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("already has classes");
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void updateAllowsMovingACourseWithNoClasses() {
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(repository.save(any(Course.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
+                .assertNext(response -> assertThat(response.institutionId()).isEqualTo(99L))
+                .verifyComplete();
+    }
+
+    @Test
+    void updateIgnoresTheClassesCheckWhenTheSchoolIsUnchanged() {
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(repository.save(any(Course.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD2", "TODOS 2", null, ITEL)))
+                .assertNext(response -> assertThat(response.code()).isEqualTo("TOD2"))
+                .verifyComplete();
+
+        verify(classRepository, never()).findByCourseIdAndDeletedAtIsNull(any());
     }
 
     @Test
