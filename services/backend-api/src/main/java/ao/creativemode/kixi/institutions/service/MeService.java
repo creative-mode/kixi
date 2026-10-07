@@ -20,6 +20,7 @@ import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
+import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
@@ -31,9 +32,10 @@ import reactor.core.publisher.Mono;
  * The signed-in account's profile: identity, roles and current academic
  * context (school, course, class).
  *
- * <p>The school comes from the account's active institution links (the
- * first one when several exist); course and class come from the most
- * recent active enrollment.</p>
+ * <p>The school is the account's own institution link when it has one, and
+ * otherwise the school of the class it is enrolled in — so a student who
+ * enrolled themselves still sees a complete profile. Course and class come
+ * from the most recent active enrollment.</p>
  */
 @Service
 public class MeService {
@@ -83,7 +85,7 @@ public class MeService {
                 loadRoleNames(accountId).collectList(),
                 currentEnrollment(accountId).map(Optional::<EnrollmentContext>of)
                     .defaultIfEmpty(Optional.empty()),
-                currentSchool(accountId).map(Optional::<MeResponse.SchoolInfo>of)
+                resolveSchool(accountId).map(Optional::<MeResponse.SchoolInfo>of)
                     .defaultIfEmpty(Optional.empty())
             ).map(tuple -> {
                 User user = tuple.getT1();
@@ -153,14 +155,42 @@ public class MeService {
                 .map(course -> new EnrollmentContext(tuple.getT1(), course, schoolYearLabel(tuple.getT2())))));
     }
 
-    private Mono<MeResponse.SchoolInfo> currentSchool(Long accountId) {
+    /** Explicit administrator link first, then the school implied by the enrollment. */
+    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId) {
+        return linkedSchool(accountId).switchIfEmpty(enrolledSchool(accountId));
+    }
+
+    /**
+     * The explicit link an administrator can set, which wins when it exists.
+     */
+    private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
         return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
             .singleOrEmpty()
             .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
             .next()
             .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
-            .map(institution -> new MeResponse.SchoolInfo(
-                institution.getId(), institution.getCode(), institution.getName()));
+            .map(MeService::toSchoolInfo);
+    }
+
+    /**
+     * Fallback for a student who enrolled themselves: the school of the class they are
+     * in. Without this, an account that has never been touched by an administrator
+     * answered {@code school: null} even with a valid enrollment.
+     */
+    private Mono<MeResponse.SchoolInfo> enrolledSchool(Long accountId) {
+        return enrollmentRepository.findAllByAccountIdAndDeletedAtIsNull(accountId)
+            .sort(Comparator.comparing(Enrollment::getId).reversed())
+            .next()
+            .flatMap(enrollment -> classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId()))
+            .flatMap(clazz -> clazz.getInstitutionId() == null
+                ? Mono.empty()
+                : institutionRepository.findByIdAndDeletedAtIsNull(clazz.getInstitutionId()))
+            .map(MeService::toSchoolInfo);
+    }
+
+    private static MeResponse.SchoolInfo toSchoolInfo(Institution institution) {
+        return new MeResponse.SchoolInfo(
+            institution.getId(), institution.getCode(), institution.getName());
     }
 
     private static String schoolYearLabel(SchoolYear schoolYear) {
