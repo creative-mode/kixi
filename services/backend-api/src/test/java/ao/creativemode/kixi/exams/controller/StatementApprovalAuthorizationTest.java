@@ -1,9 +1,11 @@
 package ao.creativemode.kixi.exams.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import ao.creativemode.kixi.academic.model.Class;
+import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
@@ -33,12 +35,14 @@ import ao.creativemode.kixi.institutions.service.TeachingAssignmentService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.TestPropertySource;
@@ -74,6 +78,7 @@ class StatementApprovalAuthorizationTest {
     private static final Long TEACHER_ID = 5L;
     private static final Long INSTITUTION_ID = 4L;
     private static final Long CLASS_ID = 3L;
+    private static final Long OTHER_CLASS_ID = 30L;
     private static final Long SUBJECT_ID = 5L;
     private static final Long SCHOOL_YEAR_ID = 2024L;
 
@@ -159,7 +164,7 @@ class StatementApprovalAuthorizationTest {
         givenTheInstitutionTeachesTheSubject();
         when(teachers.findByAccountIdAndDeletedAtIsNull(ADMIN_ID))
                 .thenReturn(Mono.just(teacher(TEACHER_ID)));
-        givenTheClass();
+        givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
         givenTheStatementIsReadable();
@@ -175,6 +180,7 @@ class StatementApprovalAuthorizationTest {
     void aTeacherAssignedToTheClassApproves() {
         givenTheInstitutionTeachesTheSubject();
         givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
         givenTheStatementIsReadable();
@@ -190,6 +196,7 @@ class StatementApprovalAuthorizationTest {
     void aTeacherAssignedToAnotherClassIsForbidden() {
         givenTheInstitutionTeachesTheSubject();
         givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
         givenTheStatementIsReadable();
@@ -213,6 +220,122 @@ class StatementApprovalAuthorizationTest {
                 .expectStatus().isForbidden();
     }
 
+    // ── Creating and editing a statement ─────────────────────────────────
+
+    @Test
+    void aStudentCannotCreateAStatement() {
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/statements")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void aStudentCannotEditAStatement() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void anonymousCannotCreateOrEditAStatement() {
+        client.post()
+                .uri("/api/v1/statements")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.put()
+                .uri("/api/v1/statements/1")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void aTeacherAssignedToTheClassEditsTheMetadata() {
+        givenTheInstitutionTeachesTheSubject();
+        givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
+        givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "institutionId", INSTITUTION_ID,
+                        "subjectId", SUBJECT_ID,
+                        "classId", CLASS_ID,
+                        "examType", "P1",
+                        "title", "Prova corrigida"))
+                .exchange()
+                .expectStatus().isOk();
+
+        assertThat(statement.getTitle()).isEqualTo("Prova corrigida");
+    }
+
+    @Test
+    void aTeacherAssignedToAnotherClassCannotEdit() {
+        givenTheInstitutionTeachesTheSubject();
+        givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
+        givenTheClass(OTHER_CLASS_ID);
+        // Allowed on the statement as it stands, refused on the class it is
+        // being moved to: a teacher must not hand a paper to a class they do
+        // not teach, and the second check is what stops them.
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, OTHER_CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
+        givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "institutionId", INSTITUTION_ID,
+                        "subjectId", SUBJECT_ID,
+                        "classId", OTHER_CLASS_ID,
+                        "examType", "P1",
+                        "title", "Prova roubada"))
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void anAdministratorEditsTheMetadataOfAStatementTheOcrProduced() {
+        // The OCR leaves institution_id empty, so this is the route by which an
+        // OCR statement joins a school: the first authorization check has nothing
+        // to weigh it and the one on the written metadata is what admits it.
+        statement.setInstitutionId(null);
+        statement.setClassId(null);
+        statement.setSource("ocr");
+        givenTheInstitutionTeachesTheSubject();
+        givenTheClass(CLASS_ID);
+        givenTheStatementIsReadable();
+
+        client.mutateWith(adminJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "institutionId", INSTITUTION_ID,
+                        "subjectId", SUBJECT_ID,
+                        "classId", CLASS_ID,
+                        "examType", "Exame",
+                        "title", "Prova do OCR corrigida"))
+                .exchange()
+                .expectStatus().isOk();
+
+        assertThat(statement.getInstitutionId()).isEqualTo(INSTITUTION_ID);
+        assertThat(statement.getSource()).isEqualTo("ocr");
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenTheInstitutionTeachesTheSubject() {
@@ -220,6 +343,11 @@ class StatementApprovalAuthorizationTest {
                 .thenReturn(Mono.just(new Institution()));
         when(institutionSubjects.existsByInstitutionIdAndSubjectIdAndDeletedAtIsNull(
                 INSTITUTION_ID, SUBJECT_ID)).thenReturn(Mono.just(true));
+        // The link validator runs for real, so the academic repositories behind
+        // it have to answer too.
+        Subject subject = new Subject();
+        subject.setId(SUBJECT_ID);
+        when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject));
     }
 
     private void givenTheTeacherIsAffiliated() {
@@ -227,15 +355,14 @@ class StatementApprovalAuthorizationTest {
                 .thenReturn(Mono.just(teacher(TEACHER_ID)));
         when(institutionTeachers.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(
                 INSTITUTION_ID, TEACHER_ID)).thenReturn(Mono.just(true));
-        givenTheClass();
     }
 
-    private void givenTheClass() {
+    private void givenTheClass(Long classId) {
         Class klass = new Class();
-        klass.setId(CLASS_ID);
+        klass.setId(classId);
         klass.setGrade(12);
         klass.setSchoolYearId(SCHOOL_YEAR_ID);
-        when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(klass));
+        when(classes.findByIdAndDeletedAtIsNull(classId)).thenReturn(Mono.just(klass));
     }
 
     private void givenTheStatementIsReadable() {
