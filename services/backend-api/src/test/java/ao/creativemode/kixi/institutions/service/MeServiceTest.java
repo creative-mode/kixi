@@ -196,6 +196,98 @@ class MeServiceTest {
         when(roles.findById(5L)).thenReturn(Mono.just(role));
     }
 
+    /**
+     * The acceptance criterion of BE-04: a student who enrolled themselves, and whose
+     * profile no administrator ever linked to a school, still gets a complete /me. The
+     * school comes from the class they are in, through its course.
+     */
+    @Test
+    void getMeFallsBackToTheSchoolOfTheEnrolledClass() {
+        stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", null, "STUDENT");
+        when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
+        // No institution_students link: nobody from an administration ever set one.
+        when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
+
+        Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
+        enrollment.setId(3L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(enrollment));
+
+        Class clazz = mock(Class.class);
+        when(clazz.getId()).thenReturn(7L);
+        when(clazz.getCode()).thenReturn("10A");
+        when(clazz.getGrade()).thenReturn(10);
+        when(clazz.getCourseId()).thenReturn(3L);
+        when(clazz.getSchoolYearId()).thenReturn(2024L);
+        when(clazz.getInstitutionId()).thenReturn(11L);
+        when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(clazz));
+
+        Course course = mock(Course.class);
+        when(course.getId()).thenReturn(3L);
+        when(course.getCode()).thenReturn("INFO");
+        when(course.getName()).thenReturn("Informática");
+        when(courses.findByIdAndDeletedAtIsNull(3L)).thenReturn(Mono.just(course));
+
+        SchoolYear year = mock(SchoolYear.class);
+        when(year.getStartYear()).thenReturn(2024);
+        when(year.getEndYear()).thenReturn(2025);
+        when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(year));
+
+        Institution institution = mock(Institution.class);
+        when(institution.getId()).thenReturn(11L);
+        when(institution.getCode()).thenReturn("ITEL");
+        when(institution.getName()).thenReturn("Instituto de Telecomunicações");
+        when(institutions.findByIdAndDeletedAtIsNull(11L)).thenReturn(Mono.just(institution));
+
+        StepVerifier.create(service.getMe(42L))
+            .expectNextMatches(me ->
+                me.school() != null && me.school().code().equals("ITEL")
+                    && me.course() != null && me.course().code().equals("INFO")
+                    && me.currentClass() != null && me.currentClass().code().equals("10A"))
+            .verifyComplete();
+    }
+
+    /**
+     * An explicit administrator link still wins over the class, so a student who belongs
+     * to a school the class does not carry keeps the school the administration set.
+     */
+    @Test
+    void getMePrefersTheLinkedSchoolOverTheEnrolledClass() {
+        stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", null, "STUDENT");
+        when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
+        when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L))
+            .thenReturn(Flux.just(new InstitutionStudent(77L, 9L)));
+
+        Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
+        enrollment.setId(3L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(enrollment));
+
+        Class clazz = mock(Class.class);
+        when(clazz.getCourseId()).thenReturn(3L);
+        when(clazz.getInstitutionId()).thenReturn(11L);
+        when(clazz.getSchoolYearId()).thenReturn(2024L);
+        when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(clazz));
+
+        Course course = mock(Course.class);
+        when(courses.findByIdAndDeletedAtIsNull(3L)).thenReturn(Mono.just(course));
+
+        SchoolYear year = mock(SchoolYear.class);
+        when(year.getStartYear()).thenReturn(2024);
+        when(year.getEndYear()).thenReturn(2025);
+        when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(year));
+
+        Institution linked = mock(Institution.class);
+        when(linked.getId()).thenReturn(77L);
+        when(linked.getCode()).thenReturn("ISPTEC");
+        when(linked.getName()).thenReturn("ISPTEC");
+        when(institutions.findByIdAndDeletedAtIsNull(77L)).thenReturn(Mono.just(linked));
+        // The class school must never be asked for once a link exists.
+        when(institutions.findByIdAndDeletedAtIsNull(11L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.getMe(42L))
+            .expectNextMatches(me -> me.school() != null && me.school().code().equals("ISPTEC"))
+            .verifyComplete();
+    }
+
     private void stubAcademicContext(Long accountId) {
         Enrollment enrollment = new Enrollment(accountId, 7L, 2024L);
         enrollment.setId(3L);

@@ -20,6 +20,8 @@ import reactor.test.StepVerifier;
 
 class CourseServiceTest {
 
+    private static final Long ITEL = 7L;
+
     private CourseRepository repository;
     private CourseService service;
 
@@ -67,7 +69,7 @@ class CourseServiceTest {
             return Mono.just(entity);
         });
 
-        StepVerifier.create(service.create(new CourseRequest("  tod  ", "  TODOS  ", "  desc  ")))
+        StepVerifier.create(service.create(new CourseRequest("  tod  ", "  TODOS  ", "  desc  ", ITEL)))
                 .assertNext(response -> {
                     assertThat(response.code()).isEqualTo("TOD");
                     assertThat(response.name()).isEqualTo("TODOS");
@@ -81,7 +83,7 @@ class CourseServiceTest {
         when(repository.save(any(Course.class)))
                 .thenReturn(Mono.error(new DataIntegrityViolationException("duplicate")));
 
-        StepVerifier.create(service.create(new CourseRequest("TOD", "TODOS", null)))
+        StepVerifier.create(service.create(new CourseRequest("TOD", "TODOS", null, ITEL)))
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
@@ -93,7 +95,7 @@ class CourseServiceTest {
     void updateRejectsMissingCourseWithoutSaving() {
         when(repository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.update(99L, new CourseRequest("X", "Nome", null)))
+        StepVerifier.create(service.update(99L, new CourseRequest("X", "Nome", null, ITEL)))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
                 .verify();
 
@@ -106,7 +108,7 @@ class CourseServiceTest {
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(repository.save(any(Course.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.update(1L, new CourseRequest("tod2", "TODOS 2", "desc2")))
+        StepVerifier.create(service.update(1L, new CourseRequest("tod2", "TODOS 2", "desc2", ITEL)))
                 .assertNext(response -> {
                     assertThat(response.code()).isEqualTo("TOD2");
                     assertThat(response.name()).isEqualTo("TODOS 2");
@@ -182,11 +184,58 @@ class CourseServiceTest {
         verify(repository).delete(deleted);
     }
 
+    @Test
+    void findAllActiveCarriesTheSchoolOfEachCourse() {
+        when(repository.findAllByDeletedAtIsNull()).thenReturn(Flux.just(course(1L, "TISM", "Tecnico")));
+
+        StepVerifier.create(service.findAllActive())
+                .assertNext(response -> assertThat(response.institutionId()).isEqualTo(ITEL))
+                .verifyComplete();
+    }
+
+    @Test
+    void findAllActiveFiltersBySchoolWhenOneIsGiven() {
+        when(repository.findAllByInstitutionIdAndDeletedAtIsNull(ITEL))
+                .thenReturn(Flux.just(course(1L, "TISM", "Tecnico")));
+
+        StepVerifier.create(service.findAllActive(ITEL))
+                .assertNext(response -> assertThat(response.id()).isEqualTo(1L))
+                .verifyComplete();
+
+        verify(repository, never()).findAllByDeletedAtIsNull();
+    }
+
+    @Test
+    void createRequiresASchool() {
+        StepVerifier.create(service.create(new CourseRequest("X", "Nome", null, null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(400);
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createStoresTheSchoolOnTheCourse() {
+        when(repository.save(any(Course.class))).thenAnswer(invocation -> {
+            Course entity = invocation.getArgument(0);
+            entity.setId(9L);
+            return Mono.just(entity);
+        });
+
+        StepVerifier.create(service.create(new CourseRequest("TISM", "Tecnico", null, ITEL)))
+                .assertNext(response -> assertThat(response.institutionId()).isEqualTo(ITEL))
+                .verifyComplete();
+    }
+
     private Course course(Long id, String code, String name) {
         Course course = new Course();
         course.setId(id);
         course.setCode(code);
         course.setName(name);
+        course.setInstitutionId(ITEL);
         return course;
     }
 }
