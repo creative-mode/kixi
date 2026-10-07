@@ -47,7 +47,7 @@ import reactor.core.publisher.Mono;
         "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
         "app.jwt.expiration-ms=86400000"
 })
-@Import({SecurityConfig.class, CurrentAccountService.class, JwtAuthenticationFilter.class,
+@Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class, CurrentAccountService.class, JwtAuthenticationFilter.class,
         RequestIdWebFilter.class})
 class AuthorizationIntegrationTest {
 
