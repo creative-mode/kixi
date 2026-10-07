@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.identity.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -70,6 +71,22 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private ao.creativemode.kixi.exams.service.StatementService statementService;
+
+    /**
+     * O springdoc não é carregado no slice {@code @WebFluxTest} (por isso 404);
+     * o que se valida é a regra de segurança deixar o caminho passar — se não
+     * deixasse, a resposta seria 401/403 antes de chegar ao handler.
+     * O endpoint documentado a sério está verificado em ambiente real:
+     * {@code GET /v3/api-docs} devolve 200 sem autenticação.
+     */
+    @Test
+    void permitsAnonymousApiDocs() {
+        client.get()
+                .uri("/v3/api-docs")
+                .exchange()
+                .expectStatus()
+                .value(status -> assertThat(status).isNotIn(401, 403));
+    }
 
     @Test
     void rejectsAnonymousSimulationReads() {

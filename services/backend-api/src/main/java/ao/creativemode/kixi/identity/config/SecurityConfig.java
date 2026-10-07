@@ -39,6 +39,9 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
+                        // API documentation (springdoc): schema público, não expõe dados.
+                        .pathMatchers("/v3/api-docs/**", "/swagger-ui.html",
+                                "/swagger-ui/**", "/webjars/**").permitAll()
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
