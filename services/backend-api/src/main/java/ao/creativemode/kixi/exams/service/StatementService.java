@@ -325,6 +325,18 @@ public class StatementService {
      * {@link #approveReview} and {@link #setVisible} are for, and it keeps
      * {@code source} as the record of where the statement came from.
      *
+     * <p>{@code totalMaxScore} is taken from the caller rather than derived, which
+     * is the one place where leaving the questions alone shows: on creation the
+     * total is summed from them, so an edit can leave a statement whose declared
+     * total no longer matches its questions. That is the price of letting a
+     * teacher correct a score the OCR read off a scan, and it is why the field is
+     * accepted here at all.
+     *
+     * <p>Everything else is a replace, including the fields left out of the
+     * request: this is a PUT, so omitting {@code schoolYearId} clears it — which
+     * also switches off the class-to-year check, since a null year gives the
+     * validator nothing to compare against.
+     *
      * <p>Authorisation is checked twice, and both halves matter. Against the
      * statement as it stands, so a teacher cannot pull another teacher's paper
      * into their own class; and against the metadata being written, so they

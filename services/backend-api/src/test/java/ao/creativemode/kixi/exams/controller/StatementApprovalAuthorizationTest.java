@@ -79,6 +79,7 @@ class StatementApprovalAuthorizationTest {
     private static final Long INSTITUTION_ID = 4L;
     private static final Long CLASS_ID = 3L;
     private static final Long OTHER_CLASS_ID = 30L;
+    private static final Long COURSE_ID = 40L;
     private static final Long SUBJECT_ID = 5L;
     private static final Long SCHOOL_YEAR_ID = 2024L;
 
@@ -336,6 +337,68 @@ class StatementApprovalAuthorizationTest {
         assertThat(statement.getSource()).isEqualTo("ocr");
     }
 
+    @Test
+    void aTeacherCannotTakeOverAStatementFromTheOcrInAClassTheyDoNotTeach() {
+        // The carve-out this PR closes, over HTTP with the real chain: the OCR
+        // leaves institution_id empty, and the statement is sitting in a class
+        // this teacher does not teach. Before, requireCanEdit returned straight
+        // away on the empty institution and nothing was weighed at all — the
+        // teacher could move the statement into their own class, or purge it.
+        statement.setInstitutionId(null);
+        statement.setClassId(OTHER_CLASS_ID);
+        givenTheInstitutionTeachesTheSubject();
+        givenTheTeacherIsAffiliated();
+        givenTheClass(OTHER_CLASS_ID);
+        givenTheClass(CLASS_ID);
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, OTHER_CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
+        givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "institutionId", INSTITUTION_ID,
+                        "subjectId", SUBJECT_ID,
+                        "classId", CLASS_ID,
+                        "examType", "P1",
+                        "title", "Prova roubada"))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        org.mockito.Mockito.verify(statements, org.mockito.Mockito.never())
+                .save(org.mockito.ArgumentMatchers.any(Statement.class));
+    }
+
+    @Test
+    void aTeacherAssignedToTheClassMayEditAStatementFromTheOcr() {
+        statement.setInstitutionId(null);
+        givenTheInstitutionTeachesTheSubject();
+        givenTheTeacherIsAffiliated();
+        givenTheClass(CLASS_ID);
+        when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
+                TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
+        givenTheStatementIsReadable();
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/statements/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "institutionId", INSTITUTION_ID,
+                        "subjectId", SUBJECT_ID,
+                        "classId", CLASS_ID,
+                        "examType", "P1",
+                        "title", "Prova corrigida"))
+                .exchange()
+                .expectStatus().isOk();
+
+        assertThat(statement.getInstitutionId()).isEqualTo(INSTITUTION_ID);
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenTheInstitutionTeachesTheSubject() {
@@ -362,6 +425,9 @@ class StatementApprovalAuthorizationTest {
         klass.setId(classId);
         klass.setGrade(12);
         klass.setSchoolYearId(SCHOOL_YEAR_ID);
+        // classes.course_id is NOT NULL in V10; leaving it null would NPE the
+        // validator's course branch as soon as a payload carried a courseId.
+        klass.setCourseId(COURSE_ID);
         when(classes.findByIdAndDeletedAtIsNull(classId)).thenReturn(Mono.just(klass));
     }
 

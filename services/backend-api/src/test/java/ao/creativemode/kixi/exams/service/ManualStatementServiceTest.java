@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
 import ao.creativemode.kixi.academic.model.Class;
+import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
@@ -42,10 +44,13 @@ class ManualStatementServiceTest {
     private StatementLinkValidationService validator;
     private SubjectRepository subjects;
     private ClassRepository classes;
+    private SchoolYearRepository schoolYears;
     private ManualStatementService service;
 
     private static final Long CLASS_ID = 8L;
     private static final Long SUBJECT_ID = 2L;
+    private static final Long SCHOOL_YEAR_ID = 2024L;
+    private static final Long COURSE_ID = 9L;
 
     @BeforeEach
     void setUp() {
@@ -55,10 +60,11 @@ class ManualStatementServiceTest {
         access = mock(InstitutionAccessService.class);
         subjects = mock(SubjectRepository.class);
         classes = mock(ClassRepository.class);
+        schoolYears = mock(SchoolYearRepository.class);
         // The real validator: the rule that a teacher must name a class is the
         // point of several tests here and would say nothing if stubbed out.
         validator = new StatementLinkValidationService(
-                mock(SchoolYearRepository.class), mock(TermRepository.class),
+                schoolYears, mock(TermRepository.class),
                 subjects, mock(CourseRepository.class), classes);
         service = new ManualStatementService(statements, questions, options, access, validator);
         givenTheAcademicReferencesExist();
@@ -69,18 +75,31 @@ class ManualStatementServiceTest {
         subject.setId(SUBJECT_ID);
         when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject));
 
+        SchoolYear schoolYear = new SchoolYear();
+        schoolYear.setId(SCHOOL_YEAR_ID);
+        // Any school year exists; the fixture is about the class disagreeing
+        // with the one on the statement, not about a missing year.
+        when(schoolYears.findByIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.just(schoolYear));
+
         Class klass = new Class();
         klass.setId(CLASS_ID);
         klass.setGrade(12);
-        klass.setSchoolYearId(2024L);
+        klass.setSchoolYearId(SCHOOL_YEAR_ID);
+        // classes.course_id is NOT NULL in V10, so a fixture without it is a trap
+        // for the validator's course branch.
+        klass.setCourseId(COURSE_ID);
         when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(klass));
     }
 
     /** A statement from a teacher: it names the class being taught. */
     private ManualStatementRequest request() {
+        return requestOfSchoolYear(null);
+    }
+
+    private ManualStatementRequest requestOfSchoolYear(Long schoolYearId) {
         return new ManualStatementRequest(
             1L, 2L, "Prova de Matemática", "Teste", 90, null, null,
-            null, null, CLASS_ID, null, true,
+            schoolYearId, null, CLASS_ID, null, true,
             List.of(
                 new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null),
                 new ManualStatementRequest.Question("Escolha", 3.5, List.of(
@@ -184,15 +203,35 @@ class ManualStatementServiceTest {
 
     @Test
     void doesNotSaveAnythingWhenTheClassBelongsToAnotherSchoolYear() {
-        // The statement claims 2024/2025 while the class is from last year. The
+        // The statement claims 2026/2027 while the class is from 2024/2025. The
         // foreign key would have accepted it, and the teaching assignment would
-        // then be checked against the wrong year.
+        // then be checked against the wrong year. The school year has to be on
+        // the request for this rule to be reachable at all: with it null the
+        // validator has nothing to compare the class against.
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.create(requestOfSchoolYear(SCHOOL_YEAR_ID + 2), 9L, false))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    assertThat(error.getMessage()).contains("school year must be the one of the class");
+                })
+                .verify();
+
+        verify(statements, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void doesNotSaveAnythingWhenTheSubjectDoesNotExist() {
         when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
         when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.create(request(), 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    assertThat(error.getMessage()).contains("subject does not exist");
+                })
                 .verify();
 
         verify(statements, never()).save(any(Statement.class));

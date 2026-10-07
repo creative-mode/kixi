@@ -131,6 +131,32 @@ class StatementLinkValidationServiceTest {
         StepVerifier.create(service.validate(null, null, CLASS_ID, null, null)).verifyComplete();
     }
 
+    // ── requireAClassForTeachers: the rule that reached only the create path ──
+
+    @Test
+    void aTeacherMustNameAClass() {
+        expectClassRequiredUnprocessable(null, false);
+    }
+
+    @Test
+    void aTeacherMayNameAClass() {
+        StepVerifier.create(service.requireAClassForTeachers(CLASS_ID, false)).verifyComplete();
+    }
+
+    @Test
+    void anAdministratorMayNameNoClass() {
+        StepVerifier.create(service.requireAClassForTeachers(null, true)).verifyComplete();
+    }
+
+    @Test
+    void aTeacherNamedAClassThatDoesNotExistStillFailsLaterOn() {
+        // This rule only asks whether a class was named; whether it exists is
+        // validate()'s business, so nothing here touches the repositories.
+        StepVerifier.create(service.requireAClassForTeachers(999L, false)).verifyComplete();
+
+        verifyNoInteractions(schoolYears, terms, subjects, courses, classes);
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenEveryReferenceExists() {
@@ -144,8 +170,17 @@ class StatementLinkValidationServiceTest {
                 .thenReturn(Mono.just(klass(CLASS_ID, SCHOOL_YEAR_ID, COURSE_ID)));
     }
 
-    private void expectUnprocessable(
-        Long schoolYearId,
+    private void expectClassRequiredUnprocessable(Long classId, boolean admin) {
+        StepVerifier.create(service.requireAClassForTeachers(classId, admin))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    assertThat(error.getMessage()).contains("must choose the class");
+                })
+                .verify();
+    }
+
+    private void expectUnprocessable(        Long schoolYearId,
         Long termId,
         Long classId,
         Long subjectId,

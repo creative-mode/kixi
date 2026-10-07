@@ -95,9 +95,12 @@ class StatementWriteControllerTest {
                 .expectStatus().isCreated()
                 .expectHeader().valueMatches("Location", ".*/api/v1/statements/10")
                 .expectBody()
-                .jsonPath("$.id").isEqualTo(10)
-                .jsonPath("$.source").isEqualTo("manual");
+                .jsonPath("$.id").isEqualTo(10);
 
+        // The summary carries no source assertion on purpose: the service is a
+        // mock here, so reading back the fixture's own "manual" would prove
+        // nothing about ManualStatementService. That claim is pinned on the
+        // real entity in ManualStatementServiceTest.
         verify(manualStatementService).create(any(), eq(TEACHER_ID), eq(false));
     }
 
@@ -112,8 +115,7 @@ class StatementWriteControllerTest {
                 .bodyValue(manualPayload())
                 .exchange()
                 .expectStatus().isCreated()
-                .expectBody()
-                .jsonPath("$.source").isEqualTo("manual");
+                .expectHeader().valueMatches("Location", ".*/api/v1/statements/10");
 
         verify(manualStatementService).create(any(), eq(TEACHER_ID), eq(false));
     }

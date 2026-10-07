@@ -616,6 +616,54 @@ class StatementServiceTest {
         verify(statementRepository, never()).save(any());
     }
 
+    @Test
+    void updateReplacesEveryFieldItIsGivenAndClearsTheOnesItIsNot() {
+        // PUT semantics, pinned on purpose: the optional references are cleared
+        // when omitted, not kept. Clearing schoolYearId also switches off the
+        // class-to-year check, since there is then nothing to compare against.
+        Statement existing = givenAStatementToEdit();
+        existing.setTermId(8L);
+        existing.setCourseId(9L);
+        existing.setDurationMinutes(60);
+        givenTheEditIsAllowed();
+
+        StepVerifier.create(service.update(1L, requestWithoutTheOptionalReferences(), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(existing.getTermId()).isNull();
+        assertThat(existing.getCourseId()).isNull();
+        assertThat(existing.getDurationMinutes()).isEqualTo(120);
+        assertThat(existing.getSchoolYearId()).isEqualTo(7L);
+    }
+
+    @Test
+    void updateTakesTheTotalScoreFromTheCallerAndNotFromTheQuestions() {
+        // The deliberate asymmetry with creation, where the total is summed from
+        // the questions: here it is the teacher's number, because correcting what
+        // the OCR read off a scan is the point of the edit.
+        Statement existing = givenAStatementToEdit();
+        givenTheEditIsAllowed();
+
+        StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
+
+        assertThat(existing.getTotalMaxScore()).isEqualTo(20.0);
+        verifyNoInteractions(questionRepository);
+    }
+
+    @Test
+    void updateClearsTheTotalScoreWhenTheCallerOmitsIt() {
+        Statement existing = givenAStatementToEdit();
+        existing.setTotalMaxScore(20.0);
+        givenTheEditIsAllowed();
+
+        StepVerifier.create(service.update(1L, requestWithoutTotalScore(), 9L, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(existing.getTotalMaxScore()).isNull();
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
 // ── The hole in the institution-less carve-out ─────────────────────────
@@ -724,6 +772,16 @@ class StatementServiceTest {
     private StatementRequest requestWithBlanks() {
         return new StatementRequest(
                 1L, 2L, "Prova de Matemática", "P1", 120, "  ", "   ", 20.0, 7L, 8L, CLASS_ID, 9L);
+    }
+
+    private StatementRequest requestWithoutTotalScore() {
+        return new StatementRequest(
+                1L, 2L, "Prova de Matemática", "P1", 120, null, null, null, 7L, 8L, CLASS_ID, 9L);
+    }
+
+    private StatementRequest requestWithoutTheOptionalReferences() {
+        return new StatementRequest(
+                1L, 2L, "Prova de Matemática", "P1", 120, null, null, 20.0, 7L, null, CLASS_ID, null);
     }
 
     /** A statement built in the exam builder: it belongs to a school, a class and a subject. */
