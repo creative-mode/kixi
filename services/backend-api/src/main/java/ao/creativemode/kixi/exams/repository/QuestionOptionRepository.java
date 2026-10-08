@@ -115,10 +115,18 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
     Mono<Integer> softDeleteAllByQuestionId(Long questionId);
 
     /**
-     * Find the next order index for a question
+     * Find the next order index for a question.
+     *
+     * <p>Counts the soft-deleted rows too, so an index is never handed out twice
+     * and the ordering stays deterministic after a removal.
      */
-    @Query("SELECT COALESCE(MAX(order_index), 0) + 1 FROM question_options WHERE question_id = :questionId AND deleted_at IS NULL")
+    @Query("SELECT COALESCE(MAX(order_index), 0) + 1 FROM question_options WHERE question_id = :questionId")
     Mono<Integer> findNextOrderIndex(Long questionId);
+
+    /** Any state (active or trashed), so a removed label is restored instead of colliding. */
+    Mono<QuestionOption> findByQuestionIdAndOptionLabel(Long questionId, String optionLabel);
+
+    Flux<QuestionOption> findAllByQuestionIdAndDeletedAtIsNotNull(Long questionId);
 
     /**
      * Mark all options as incorrect for a question

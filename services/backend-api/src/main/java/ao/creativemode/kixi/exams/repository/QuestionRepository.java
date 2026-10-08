@@ -26,6 +26,8 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
      */
     Flux<Question> findAllByStatementIdAndDeletedAtIsNull(Long statementId);
 
+    Flux<Question> findAllByStatementIdAndDeletedAtIsNotNull(Long statementId);
+
     /**
      * Find all questions for a statement, ordered by question number
      */
@@ -225,10 +227,16 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Mono<Integer> findNextOrderIndex(Long statementId);
 
     /**
-     * Find the next question number for a statement
-     */
+     * Find the next question number for a statement.
+     *
+     * <p>Counts the soft-deleted rows too. uk_questions_statement_number covers
+     * (statement_id, number) without deleted_at, so a deleted question keeps its
+     * number for good; taking MAX over the active rows only would hand out a
+     * number that is already taken and fail the insert. Numbers therefore move
+     * forward and are never reused.
+ */
     @Query(
-        "SELECT COALESCE(MAX(number), 0) + 1 FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+        "SELECT COALESCE(MAX(number), 0) + 1 FROM questions WHERE statement_id = :statementId"
     )
     Mono<Integer> findNextQuestionNumber(Long statementId);
 
