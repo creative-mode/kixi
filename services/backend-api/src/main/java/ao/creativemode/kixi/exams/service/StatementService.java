@@ -8,7 +8,10 @@ import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -294,15 +297,82 @@ public class StatementService {
 
     /**
      * Approve a statement review, making it visible.
+     *
+     * <p>Two things are checked before the statement becomes visible, because
+     * either one makes it wrong rather than merely unfinished:
+     *
+     * <ul>
+     *   <li>Every multiple-choice question has an answer. Without one the
+     *       question cannot be graded at all, and it is the teacher who finds
+     *       out at marking time, not the author.</li>
+     *   <li>The question scores add up to the declared total. A statement whose
+     *       parts do not add to its total tells everyone the paper is worth a
+     *       number it is not.</li>
+     * </ul>
+     *
+     * <p>Both answer 422 and name what is missing, so the caller can fix it
+     * without going back through the data to find out what it was.
      */
     @Transactional
     public Mono<Statement> approveReview(Long id, Long accountId, boolean admin) {
         return findById(id)
             .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> requireAnAnswerKey(statement).thenReturn(statement))
+            .flatMap(statement -> requireTheScoresToAddUp(statement).thenReturn(statement))
             .flatMap(statement -> {
                 statement.approveReview();
                 return statementRepository.save(statement);
             });
+    }
+
+    /** Every multiple-choice question of the statement has an active correct option. */
+    private Mono<Void> requireAnAnswerKey(Statement statement) {
+        return questionRepository.findMultipleChoiceWithoutCorrectOption(statement.getId())
+            .map(Question::getNumber)
+            .collectList()
+            .flatMap(unanswered -> {
+                if (unanswered.isEmpty()) {
+                    return Mono.empty();
+                }
+                return Mono.error(ApiException.unprocessableEntity(
+                    "These questions have no correct option marked: question "
+                        + unanswered.stream().map(String::valueOf).collect(Collectors.joining(", "))));
+            });
+    }
+
+    /**
+     * The question scores add up to the declared total.
+     *
+     * <p>Compared at scale 2 because the columns are {@code DECIMAL(10, 2)} and
+     * a sum of decimals does not always come back as the exact value that was
+     * written: 0.1 + 0.2 is not 0.3 in binary floating point, and a paper
+     * rejected for that would be a paper nobody could fix.
+     *
+     * <p>A statement with no declared total is left alone. The column is
+     * nullable and the OCR statements predate it, so there is nothing to compare
+     * against and no value to correct.
+     */
+    private Mono<Void> requireTheScoresToAddUp(Statement statement) {
+        Double declared = statement.getTotalMaxScore();
+        if (declared == null) {
+            return Mono.empty();
+        }
+        return questionRepository.calculateTotalMaxScore(statement.getId())
+            .defaultIfEmpty(0.0)
+            .flatMap(sum -> {
+                BigDecimal fromQuestions = scaled(sum);
+                BigDecimal fromStatement = scaled(declared);
+                if (fromQuestions.compareTo(fromStatement) == 0) {
+                    return Mono.empty();
+                }
+                return Mono.error(ApiException.unprocessableEntity(
+                    "The question scores add up to " + fromQuestions.toPlainString()
+                        + " but the statement is worth " + fromStatement.toPlainString()));
+            });
+    }
+
+    private BigDecimal scaled(Double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

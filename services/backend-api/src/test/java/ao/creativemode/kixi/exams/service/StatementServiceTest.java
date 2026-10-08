@@ -281,10 +281,139 @@ class StatementServiceTest {
         existing.setNeedsReview(true);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        givenTheScoresAddUp(0.0);
 
         StepVerifier.create(service.approveReview(1L, 9L, true))
                 .assertNext(result -> assertThat(result.getNeedsReview()).isFalse())
                 .verifyComplete();
+    }
+
+    // ── What has to be true before a statement goes live ────────────────────
+
+    @Test
+    void refusesToApproveWhileAMultipleChoiceQuestionHasNoAnswer() {
+        // An unanswered question cannot be graded, and the teacher who finds
+        // that out is the one marking it, long after the paper looked ready.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(2L, 2), question(5L, 7)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    // Named, not just counted: the caller has to know which.
+                    assertThat(error.getMessage()).contains("2").contains("7");
+                })
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void anAnswerOnARemovedOptionDoesNotCount() {
+        // is_correct is only read from the active options, so a correct flag
+        // left on a removed option is not an answer.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(3L, 4)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectError(ApiException.class)
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void refusesToApproveWhenTheScoresDoNotAddUpToTheDeclaredTotal() {
+        // A paper whose parts do not add to its total announces a value it is
+        // not worth.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(20.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.just(18.5));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    // Both sides of the comparison, so it is clear which is wrong.
+                    assertThat(error.getMessage()).contains("18.50").contains("20.00");
+                })
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void theScoreCheckToleratesTheFloatingPointSumOfDecimals() {
+        // 0.1 + 0.2 is not 0.3 in binary floating point. The columns are
+        // DECIMAL(10, 2) and the sum comes back as a double, so comparing
+        // without scaling would reject a paper nobody could fix.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(0.3);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.just(0.30000000000000004));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void aStatementWithNoDeclaredTotalIsNotAskedToAddUp() {
+        // The column is nullable and the OCR statements predate it, so there is
+        // no value to compare against and nothing to correct.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(null);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+
+        verify(questionRepository, never()).calculateTotalMaxScore(anyLong());
+    }
+
+    @Test
+    void aStatementWithoutQuestionsHasNothingToAnswer() {
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(0.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void theAnswerKeyIsCheckedBeforeTheScores() {
+        // Both are needed, but the one that names its questions is the one worth
+        // acting on first: it says exactly what to do.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(20.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(4L, 3)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage()).contains("no correct option"))
+                .verify();
+
+        verify(questionRepository, never()).calculateTotalMaxScore(anyLong());
     }
 
     @Test
@@ -394,6 +523,8 @@ class StatementServiceTest {
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
         givenTheWriteRuleAllows();
+        givenTheAnswerKeyIsComplete();
+        givenTheScoresAddUp(0.0);
 
         StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
 
@@ -451,6 +582,21 @@ class StatementServiceTest {
         statement.setId(id);
         statement.setTitle("Prova Teste");
         return statement;
+    }
+
+    /** Every multiple-choice question of the statement has an answer. */
+    private void givenTheAnswerKeyIsComplete() {
+        when(questionRepository.findMultipleChoiceWithoutCorrectOption(anyLong())).thenReturn(Flux.empty());
+    }
+
+    private void givenTheScoresAddUp(double sum) {
+        when(questionRepository.calculateTotalMaxScore(anyLong())).thenReturn(Mono.just(sum));
+    }
+
+    private Question question(Long id, Integer number) {
+        Question question = new Question(1L, number, "texto", "multiple_choice");
+        question.setId(id);
+        return question;
     }
 
     // ── Editing the metadata, never the questions ──────────────────────────

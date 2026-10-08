@@ -214,9 +214,29 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
      * Calculate total max score for a statement
      */
     @Query(
-        "SELECT COALESCE(SUM(max_score), 0) FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+            "SELECT COALESCE(SUM(max_score), 0) FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
     )
     Mono<Double> calculateTotalMaxScore(Long statementId);
+
+    /**
+     * The multiple-choice questions of a statement that no active option answers.
+     *
+     * <p>One row per unanswered question, so the caller can name them in the error
+     * instead of only counting them. The option has to be active as well as
+     * correct: an answer on a removed option is not an answer.
+     */
+    @Query(
+            "SELECT q.* FROM questions q "
+                    + "WHERE q.statement_id = :statementId "
+                    + "AND q.question_type = 'multiple_choice' "
+                    + "AND q.deleted_at IS NULL "
+                    + "AND NOT EXISTS ("
+                    + "  SELECT 1 FROM question_options o "
+                    + "  WHERE o.question_id = q.id AND o.deleted_at IS NULL AND o.is_correct = TRUE"
+                    + ") "
+                    + "ORDER BY q.number ASC"
+    )
+    Flux<Question> findMultipleChoiceWithoutCorrectOption(Long statementId);
 
     /**
      * Find the next order index for a statement
