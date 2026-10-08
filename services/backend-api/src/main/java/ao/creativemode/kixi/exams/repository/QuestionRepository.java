@@ -241,8 +241,18 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     /**
      * Find the next order index for a statement
      */
+    /**
+     * The next display position for a statement.
+     *
+     * <p>Counts the soft-deleted rows too, like the option equivalent, so a
+     * position is never handed out a second time and the order stays
+     * deterministic across a removal. There is no unique constraint over
+     * order_index — it would not even hold, since reordering renumbers only the
+     * active rows — so this is tidiness rather than correctness. It is {@code
+     * number} that must never come back, and that is what the constraint covers.
+     */
     @Query(
-        "SELECT COALESCE(MAX(order_index), 0) + 1 FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+        "SELECT COALESCE(MAX(order_index), 0) + 1 FROM questions WHERE statement_id = :statementId"
     )
     Mono<Integer> findNextOrderIndex(Long statementId);
 

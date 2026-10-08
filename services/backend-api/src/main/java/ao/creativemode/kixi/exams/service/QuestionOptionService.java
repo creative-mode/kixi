@@ -46,24 +46,27 @@ public class QuestionOptionService {
 
     // ── Reads ───────────────────────────────────────────────────────────────
 
-    public Flux<QuestionOptionResponse> findAll(Long statementId, Long questionId) {
-        return requireQuestion(statementId, questionId)
+    public Flux<QuestionOptionResponse> findAll(Long statementId, Long questionId, boolean staff) {
+        return requireReadableQuestion(statementId, questionId, staff)
             // Deferred so the listing is never even asked for when the question
             // turns out not to be there.
             .thenMany(Flux.defer(() -> options.findAllByQuestionIdOrderedByOrderIndex(questionId)))
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, staff));
     }
 
-    public Flux<QuestionOptionResponse> findAllDeleted(Long statementId, Long questionId) {
-        return requireQuestion(statementId, questionId)
+    public Flux<QuestionOptionResponse> findAllDeleted(Long statementId, Long questionId, boolean staff) {
+        return requireReadableQuestion(statementId, questionId, staff)
+            .then(Mono.defer(() -> staff
+                ? Mono.<Void>empty()
+                : Mono.<Void>error(ApiException.notFound("Statement not found: " + statementId))))
             .thenMany(Flux.defer(() -> options.findAllByQuestionIdAndDeletedAtIsNotNull(questionId)))
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, staff));
     }
 
-    public Mono<QuestionOptionResponse> findById(Long statementId, Long questionId, Long optionId) {
-        return requireQuestion(statementId, questionId)
+    public Mono<QuestionOptionResponse> findById(Long statementId, Long questionId, Long optionId, boolean staff) {
+        return requireReadableQuestion(statementId, questionId, staff)
             .then(Mono.defer(() -> findActiveOption(questionId, optionId)))
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, staff));
     }
 
     // ── Writes ──────────────────────────────────────────────────────────────
@@ -75,7 +78,13 @@ public class QuestionOptionService {
      * option_label) and does not know about deleted_at, so a label that was
      * removed stays taken. The label is an identity the teacher chose rather
      * than a position, so reusing it restores the option instead of colliding.
+     *
+     * <p>Transactional because bringing one back writes twice: the option, then
+     * the rewrite of {@code is_correct} if the request asked for it to be the
+     * answer. Without it, a failure between the two leaves an option created and
+     * no answer key to match.
      */
+    @Transactional
     public Mono<QuestionOptionResponse> create(
         Long statementId,
         Long questionId,
@@ -96,6 +105,12 @@ public class QuestionOptionService {
                     existing.restore();
                     apply(existing, data);
                     existing.setOrderIndex(nextOrder);
+                    // The row came out of the trash carrying whatever it was
+                    // marked as back then. Saving that back would give the
+                    // question a second answer whenever another option is
+                    // already correct, so it comes back unmarked and only
+                    // markCorrectIfAsked puts it back.
+                    existing.setIsCorrect(false);
                     return Mono.defer(() -> options.save(existing));
                 })
                 .switchIfEmpty(Mono.defer(() -> {
@@ -108,7 +123,7 @@ public class QuestionOptionService {
             // still marked correct. Rewriting the column afterwards is what
             // keeps the question's single answer a single answer.
             .flatMap(option -> markCorrectIfAsked(option, data))
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, true));
     }
 
     private Mono<QuestionOption> markCorrectIfAsked(QuestionOption option, QuestionOptionRequest data) {
@@ -135,7 +150,7 @@ public class QuestionOptionService {
                 apply(option, data);
                 return Mono.defer(() -> options.save(option));
             })
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, true));
     }
 
     @Transactional
@@ -150,8 +165,8 @@ public class QuestionOptionService {
             .then(Mono.defer(() -> requireQuestion(statementId, questionId)))
             .then(Mono.defer(() ->
                 options.findAllByQuestionIdAndDeletedAtIsNull(questionId).collectList()))
-            .flatMapMany(active -> applyOrder(questionId, active, optionIds))
-            .map(QuestionOptionService::toResponse);
+            .flatMapMany(active -> applyOrder(active, optionIds))
+            .map(option -> toResponse(option, true));
     }
 
     public Mono<Void> softDelete(Long statementId, Long questionId, Long optionId, Long accountId, boolean admin) {
@@ -164,6 +179,19 @@ public class QuestionOptionService {
             });
     }
 
+    /**
+     * Brings a removed option back.
+     *
+     * <p>Saved with {@code is_correct} cleared rather than with whatever it
+     * carried while it sat in the trash, and then the answer key is rewritten if
+     * it had been marked correct. Both halves matter: {@code setCorrectOption}
+     * only touches the active rows, so a correct option in the trash keeps its
+     * flag, and saving the loaded entity straight back would resurrect that flag
+     * next to whichever option is correct now — two answers to one question, with
+     * {@code findCorrectOptionByQuestionId} answering with a {@code LIMIT 1}.
+     * Rewriting through the query is what puts a single one back.
+     */
+    @Transactional
     public Mono<Void> restore(Long statementId, Long questionId, Long optionId, Long accountId, boolean admin) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
             .then(Mono.defer(() -> requireQuestion(statementId, questionId)))
@@ -172,8 +200,14 @@ public class QuestionOptionService {
                 .switchIfEmpty(Mono.error(ApiException.notFound(
                     "Only a deleted option of this question can be restored: " + optionId)))))
             .flatMap(option -> {
+                boolean wasTheAnswer = Boolean.TRUE.equals(option.getIsCorrect());
                 option.restore();
-                return Mono.defer(() -> options.save(option)).then();
+                option.setIsCorrect(false);
+                return Mono.defer(() -> options.save(option))
+                    .then(Mono.defer(() -> wasTheAnswer
+                        ? options.setCorrectOption(questionId, optionId)
+                        : Mono.<Integer>empty()))
+                    .then();
             });
     }
 
@@ -211,13 +245,44 @@ public class QuestionOptionService {
             .flatMap(option -> Mono.defer(() -> options.setCorrectOption(questionId, optionId))
                 .then(Mono.defer(() -> options.findByIdAndDeletedAtIsNull(option.getId())))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Option not found: " + optionId))))
-            .map(QuestionOptionService::toResponse);
+            .map(option -> toResponse(option, true));
+    }
+
+    /**
+     * The same thing reached by question id alone, which is the path the issue
+     * spells out: {@code PUT /api/v1/questions/{id}/correct-option}.
+     *
+     * <p>A question id is enough to find the statement it belongs to, so nothing
+     * is given up by not asking for it — but the statement has to be looked up
+     * anyway, because the write rule weighs the statement rather than the
+     * question. Going through the question is what leaves no statement id in the
+     * request to get wrong.
+     *
+     * <p>A question id that is not there, or that is in the trash, is a 404 and
+     * not a 403. The resource being addressed is the one that is missing, and
+     * the same answer covers "does not exist" and "not yours" without telling the
+     * caller which of the two it was.
+     */
+    @Transactional
+    public Mono<QuestionOptionResponse> setCorrectOptionOfQuestion(
+        Long questionId,
+        Long optionId,
+        Long accountId,
+        boolean admin
+    ) {
+        return Mono.defer(() -> questions.findByIdAndDeletedAtIsNull(questionId))
+            .switchIfEmpty(Mono.error(ApiException.notFound("Question not found: " + questionId)))
+            .flatMap(question -> writeAccess.requireCanWrite(question.getStatementId(), accountId, admin)
+                .then(Mono.defer(() -> findActiveOption(questionId, optionId))))
+            .flatMap(option -> Mono.defer(() -> options.setCorrectOption(questionId, optionId))
+                .then(Mono.defer(() -> options.findByIdAndDeletedAtIsNull(option.getId())))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Option not found: " + optionId))))
+            .map(option -> toResponse(option, true));
     }
 
     // ── Internals ───────────────────────────────────────────────────────────
 
     private Flux<QuestionOption> applyOrder(
-        Long questionId,
         List<QuestionOption> active,
         List<Long> requested
     ) {
@@ -243,14 +308,25 @@ public class QuestionOptionService {
             });
     }
 
-    private Mono<Void> requireQuestion(Long statementId, Long questionId) {
-        return Mono.defer(() -> statements.findByIdAndDeletedAtIsNull(statementId))
+    /**
+     * The question has to be there and belong to the statement. On a read the
+     * statement also has to be readable by this caller: an account that may not
+     * write it only reaches a published one, and gets no answer key.
+     */
+    private Mono<Void> requireReadableQuestion(Long statementId, Long questionId, boolean staff) {
+        return Mono.defer(() -> staff
+                ? statements.findByIdAndDeletedAtIsNull(statementId)
+                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
             .then(Mono.defer(() -> questions.findByIdAndDeletedAtIsNull(questionId)))
             .filter(question -> question.getStatementId().equals(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound(
                 "Question not found: " + questionId + " on statement " + statementId)))
             .then();
+    }
+
+    private Mono<Void> requireQuestion(Long statementId, Long questionId) {
+        return requireReadableQuestion(statementId, questionId, true);
     }
 
     private Mono<QuestionOption> findActiveOption(Long questionId, Long optionId) {
@@ -264,16 +340,18 @@ public class QuestionOptionService {
         option.setOptionText(data.optionText().trim());
     }
 
-    private static QuestionOptionResponse toResponse(QuestionOption option) {
+    /** {@code isCorrect} is the answer key, so it only travels to staff. */
+    private static QuestionOptionResponse toResponse(QuestionOption option, boolean staff) {
         return new QuestionOptionResponse(
             option.getId(),
             option.getQuestionId(),
             option.getOptionLabel(),
             option.getOptionText(),
-            option.getIsCorrect(),
+            staff ? option.getIsCorrect() : null,
             option.getOrderIndex(),
             option.getCreatedAt(),
-            option.getUpdatedAt()
+            option.getUpdatedAt(),
+            staff ? option.getDeletedAt() : null
         );
     }
 }

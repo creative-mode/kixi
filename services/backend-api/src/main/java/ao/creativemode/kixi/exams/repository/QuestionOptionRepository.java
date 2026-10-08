@@ -127,13 +127,20 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
      * Soft delete all options of a question, stamped with the same
      * {@code deletedAt} as the question so a restore can tell which options its
      * own cascade touched, rather than reviving options removed beforehand.
- */
-    @Query("UPDATE question_options SET deleted_at = :deletedAt WHERE question_id = :questionId AND deleted_at IS NULL")
+     *
+     * <p>{@code updated_at} moves with it: this row changed, and
+     * {@link QuestionOptionResponse#getUpdatedAt()} is what the client reads to
+     * know. The two rewrites of {@code is_correct} in this interface set it too,
+     * so leaving it out here would be the odd one out.
+     */
+    @Query("UPDATE question_options SET deleted_at = :deletedAt, updated_at = CURRENT_TIMESTAMP "
+        + "WHERE question_id = :questionId AND deleted_at IS NULL")
     Mono<Integer> softDeleteAllByQuestionIdAndDeletedAt(Long questionId,
         java.time.LocalDateTime deletedAt);
 
     /** The other half of the cascade above. */
-    @Query("UPDATE question_options SET deleted_at = NULL WHERE question_id = :questionId AND deleted_at = :deletedAt")
+    @Query("UPDATE question_options SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP "
+        + "WHERE question_id = :questionId AND deleted_at = :deletedAt")
     Mono<Integer> restoreAllDeletedByQuestionIdAndDeletedAt(Long questionId,
         java.time.LocalDateTime deletedAt);
 

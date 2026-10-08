@@ -51,6 +51,9 @@ public class QuestionOptionController {
 
     // =========================================================================
     // Reads
+    //
+    // Open to any authenticated caller, but a student gets a published statement
+    // and its options without is_correct. See QuestionController for the split.
     // =========================================================================
 
     @GetMapping
@@ -58,7 +61,8 @@ public class QuestionOptionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return questionOptionService.findAll(statementId, questionId)
+        return isStaff()
+            .flatMapMany(staff -> questionOptionService.findAll(statementId, questionId, staff))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -68,7 +72,8 @@ public class QuestionOptionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return questionOptionService.findAllDeleted(statementId, questionId)
+        return isStaff()
+            .flatMapMany(staff -> questionOptionService.findAllDeleted(statementId, questionId, staff))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -79,7 +84,8 @@ public class QuestionOptionController {
         @PathVariable Long questionId,
         @PathVariable Long optionId
     ) {
-        return questionOptionService.findById(statementId, questionId, optionId)
+        return isStaff()
+            .flatMap(staff -> questionOptionService.findById(statementId, questionId, optionId, staff))
             .map(ResponseEntity::ok);
     }
 
@@ -180,6 +186,11 @@ public class QuestionOptionController {
             currentAccountService.requiredAccountId(),
             currentAccountService.hasAnyRole("ADMIN")
         );
+    }
+
+    /** Whether the caller may see the answer key and a statement not published. */
+    private Mono<Boolean> isStaff() {
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER");
     }
 
     private URI locationOf(

@@ -296,10 +296,12 @@ public class StatementService {
     }
 
     /**
-     * Approve a statement review, making it visible.
+     * Approve a statement review, so it is no longer awaiting correction.
      *
-     * <p>Two things are checked before the statement becomes visible, because
-     * either one makes it wrong rather than merely unfinished:
+     * <p>Clearing {@code needs_review} is not the same as publishing: visibility
+     * is set by {@code PATCH /statements/{id}/visibility}. What this guards is
+     * the moment a statement stops being a draft, and two things make it wrong
+     * rather than merely unfinished at that point:
      *
      * <ul>
      *   <li>Every multiple-choice question has an answer. Without one the
@@ -317,7 +319,7 @@ public class StatementService {
     public Mono<Statement> approveReview(Long id, Long accountId, boolean admin) {
         return findById(id)
             .flatMap(statement -> requireCanEdit(statement, accountId, admin))
-            .flatMap(statement -> requireAnAnswerKey(statement).thenReturn(statement))
+            .flatMap(statement -> answerKeyComplete(statement).thenReturn(statement))
             .flatMap(statement -> requireTheScoresToAddUp(statement).thenReturn(statement))
             .flatMap(statement -> {
                 statement.approveReview();
@@ -325,8 +327,15 @@ public class StatementService {
             });
     }
 
-    /** Every multiple-choice question of the statement has an active correct option. */
-    private Mono<Void> requireAnAnswerKey(Statement statement) {
+    /**
+     * Every multiple-choice question of the statement has an active correct
+     * option. The name is the one the issue gives the rule.
+     *
+     * <p>Active as well as correct: {@code setCorrectOption} and the marking
+     * query both ignore removed rows, so a correct flag left on a removed option
+     * is not an answer.
+     */
+    private Mono<Void> answerKeyComplete(Statement statement) {
         return questionRepository.findMultipleChoiceWithoutCorrectOption(statement.getId())
             .map(Question::getNumber)
             .collectList()
@@ -343,10 +352,15 @@ public class StatementService {
     /**
      * The question scores add up to the declared total.
      *
-     * <p>Compared at scale 2 because the columns are {@code DECIMAL(10, 2)} and
-     * a sum of decimals does not always come back as the exact value that was
-     * written: 0.1 + 0.2 is not 0.3 in binary floating point, and a paper
-     * rejected for that would be a paper nobody could fix.
+     * <p>Compared at scale 2, and the reason is the type rather than the
+     * arithmetic: the columns are {@code DECIMAL(10, 2)} and the sum comes back
+     * through R2DBC as a {@code double}, which cannot hold every decimal. Going
+     * through {@link BigDecimal#valueOf(double)} first is what keeps that value
+     * intact — it goes through the shortest string that reads back as the same
+     * double, not through the binary expansion. Reading the comparison as "0.1 +
+     * 0.2 is not 0.3" would lead someone to replace it with
+     * {@code new BigDecimal(double)}, which is the version that is actually
+     * wrong.
      *
      * <p>A statement with no declared total is left alone. The column is
      * nullable and the OCR statements predate it, so there is nothing to compare

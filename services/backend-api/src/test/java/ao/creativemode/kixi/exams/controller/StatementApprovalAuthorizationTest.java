@@ -2,6 +2,8 @@ package ao.creativemode.kixi.exams.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
@@ -13,6 +15,7 @@ import ao.creativemode.kixi.academic.repository.SubjectRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.academic.repository.TermRepository;
+import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
@@ -139,7 +142,7 @@ class StatementApprovalAuthorizationTest {
 
     @BeforeEach
     void setUp() {
-        statement = new Statement("Teste", "Prova de Matemática");
+        statement = new Statement("Teste", "Prova de MatemÃƒÂ¡tica");
         statement.setId(1L);
         statement.setInstitutionId(INSTITUTION_ID);
         statement.setClassId(CLASS_ID);
@@ -225,7 +228,7 @@ class StatementApprovalAuthorizationTest {
                 .expectStatus().isForbidden();
     }
 
-    // ── Creating and editing a statement ─────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Creating and editing a statement Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     @Test
     void aStudentCannotCreateAStatement() {
@@ -346,7 +349,7 @@ class StatementApprovalAuthorizationTest {
         // The carve-out this PR closes, over HTTP with the real chain: the OCR
         // leaves institution_id empty, and the statement is sitting in a class
         // this teacher does not teach. Before, requireCanEdit returned straight
-        // away on the empty institution and nothing was weighed at all — the
+        // away on the empty institution and nothing was weighed at all Ã¢â‚¬â€ the
         // teacher could move the statement into their own class, or purge it.
         statement.setInstitutionId(null);
         statement.setClassId(OTHER_CLASS_ID);
@@ -422,7 +425,7 @@ class StatementApprovalAuthorizationTest {
 
     @Test
     void metadataThatDoesNotHangTogetherIsUnprocessableOverHttp() {
-        // "Validação de vínculo com a estrutura académica" is a named task of the
+        // "ValidaÃƒÂ§ÃƒÂ£o de vÃƒÂ­nculo com a estrutura acadÃƒÂ©mica" is a named task of the
         // issue and until now every assertion of it sat at service level, so the
         // wiring from the route down to the validator was unproven.
         givenTheInstitutionTeachesTheSubject();
@@ -454,14 +457,14 @@ givenTheStatementIsReadable();
         body.put("subjectId", SUBJECT_ID);
         body.put("classId", classId);
         body.put("examType", "P1");
-        body.put("title", "Prova de Matemática");
+        body.put("title", "Prova de MatemÃƒÂ¡tica");
         if (schoolYearId != null) {
             body.put("schoolYearId", schoolYearId);
         }
         return body;
     }
 
-    // ── Fixtures ────────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Fixtures Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     private void givenTheInstitutionTeachesTheSubject() {
         when(institutions.findByIdAndDeletedAtIsNull(INSTITUTION_ID))
@@ -519,6 +522,48 @@ givenTheStatementIsReadable();
         givenTheStatementIsReadable();
         when(questions.findMultipleChoiceWithoutCorrectOption(1L)).thenReturn(Flux.empty());
         when(questions.calculateTotalMaxScore(1L)).thenReturn(Mono.just(0.0));
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ What has to be true before a statement leaves draft Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    //
+    // The gate itself is in StatementServiceTest. These two are here because the
+    // acceptance criterion is about the status a caller gets, and only the route
+    // can answer that.
+
+    @Test
+    void approvingWithoutACompleteAnswerKeyAnswersUnprocessable() {
+        givenTheInstitutionTeachesTheSubject();
+        givenTheStatementIsReadable();
+        Question unanswered = new Question(1L, 3, "Qual?", "multiple_choice");
+        unanswered.setId(70L);
+        when(questions.findMultipleChoiceWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(unanswered));
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isEqualTo(422)
+                .expectBody()
+                .jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("3"));
+
+        verify(statements, never()).save(org.mockito.ArgumentMatchers.any(Statement.class));
+    }
+
+    @Test
+    void approvingWhenTheScoresDoNotAddUpAnswersUnprocessable() {        givenTheInstitutionTeachesTheSubject();
+        givenTheStatementIsReadable();
+        statement.setTotalMaxScore(20.0);
+        when(questions.findMultipleChoiceWithoutCorrectOption(1L)).thenReturn(Flux.empty());
+        when(questions.calculateTotalMaxScore(1L)).thenReturn(Mono.just(18.5));
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/statements/1/approve")
+                .exchange()
+                .expectStatus().isEqualTo(422);
+
+        verify(statements, never()).save(org.mockito.ArgumentMatchers.any(Statement.class));
     }
 
     private Teacher teacher(Long id) {

@@ -48,34 +48,58 @@ public class QuestionService {
 
     /**
      * Reading is open to any authenticated caller, like the statement routes
-     * themselves; only that the statement has to be there.
+     * themselves, but not to the same extent: an account that may not write the
+     * statement only reaches a published one, and gets its questions without the
+     * answer key. {@code staff} is the caller's side of that.
      */
-    private Mono<Void> requireStatement(Long statementId) {
-        return Mono.defer(() -> statements.findByIdAndDeletedAtIsNull(statementId))
+    private Mono<Void> requireReadableStatement(Long statementId, boolean staff) {
+        return Mono.defer(() -> staff
+                ? statements.findByIdAndDeletedAtIsNull(statementId)
+                // Same 404 as "does not exist", so an unpublished statement of
+                // another class is not confirmed to exist by the status code.
+                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
             .then();
     }
 
+    /** The trashed questions are for whoever corrects the paper, not for a reader. */
+    private Mono<Void> requireStatementForTrash(Long statementId, boolean staff) {
+        return requireReadableStatement(statementId, staff)
+            .then(Mono.defer(() -> {
+                if (staff) {
+                    return Mono.empty();
+                }
+                return Mono.error(ApiException.notFound("Statement not found: " + statementId));
+            }));
+    }
+
     // ── Reads ───────────────────────────────────────────────────────────────
 
-    public Flux<QuestionResponse> findAllActive(Long statementId) {
-        return requireStatement(statementId)
+    /**
+     * Ordered by the display position, not by the number.
+     *
+     * <p>{@code number} is the stable ordinal a question keeps for good; the
+     * order the teacher sets is what {@code reorder} writes and what a listing
+     * has to honour. Sorting by the number would make every reordering invisible.
+     */
+    public Flux<QuestionResponse> findAllActive(Long statementId, boolean staff) {
+        return requireReadableStatement(statementId, staff)
             // Deferred so the listing is never even asked for when the statement
             // turns out not to be there.
-            .thenMany(Flux.defer(() -> questions.findAllByStatementIdOrderedByNumber(statementId)))
-            .map(QuestionService::toResponse);
+            .thenMany(Flux.defer(() -> questions.findAllByStatementIdOrderedByOrderIndex(statementId)))
+            .map(question -> toResponse(question, staff));
     }
 
-    public Flux<QuestionResponse> findAllDeleted(Long statementId) {
-        return requireStatement(statementId)
+    public Flux<QuestionResponse> findAllDeleted(Long statementId, boolean staff) {
+        return requireStatementForTrash(statementId, staff)
             .thenMany(Flux.defer(() -> questions.findAllByStatementIdAndDeletedAtIsNotNull(statementId)))
-            .map(QuestionService::toResponse);
+            .map(question -> toResponse(question, staff));
     }
 
-    public Mono<QuestionResponse> findById(Long statementId, Long questionId) {
-        return requireStatement(statementId)
+    public Mono<QuestionResponse> findById(Long statementId, Long questionId, boolean staff) {
+        return requireReadableStatement(statementId, staff)
             .then(Mono.defer(() -> findActiveQuestion(statementId, questionId)))
-            .map(QuestionService::toResponse);
+            .map(question -> toResponse(question, staff));
     }
 
     // ── Writes ──────────────────────────────────────────────────────────────
@@ -104,7 +128,7 @@ public class QuestionService {
                 question.setNeedsReview(false);
                 return Mono.defer(() -> questions.save(question));
             })
-            .map(QuestionService::toResponse);
+            .map(question -> toResponse(question, true));
     }
 
     public Mono<QuestionResponse> update(
@@ -128,7 +152,7 @@ public class QuestionService {
                 question.setModelAnswer(blankToNull(data.modelAnswer()));
                 return Mono.defer(() -> questions.save(question));
             })
-            .map(QuestionService::toResponse);
+            .map(question -> toResponse(question, true));
     }
 
     /**
@@ -149,11 +173,11 @@ public class QuestionService {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
             .then(Mono.defer(() ->
                 questions.findAllByStatementIdAndDeletedAtIsNull(statementId).collectList()))
-            .flatMapMany(active -> applyOrder(statementId, active, questionIds))
-            .map(QuestionService::toResponse);
+            .flatMapMany(active -> applyOrder(active, questionIds))
+            .map(question -> toResponse(question, true));
     }
 
-    private Flux<Question> applyOrder(Long statementId, List<Question> active, List<Long> requested) {
+    private Flux<Question> applyOrder(List<Question> active, List<Long> requested) {
         boolean coversExactlyTheActiveOnes = requested != null
             && requested.size() == active.size()
             && requested.stream().distinct().count() == requested.size()
@@ -193,6 +217,15 @@ public class QuestionService {
             });
     }
 
+    /**
+     * Brings a removed question back, with the options its own removal took.
+     *
+     * <p>Transactional for the same reason {@link #softDelete} is: the two
+     * writes have to stand or fall together. Restored alone, a multiple-choice
+     * question comes back with no active option, the approval gate then refuses
+     * the statement, and nothing anywhere says the paper is missing its answers.
+     */
+    @Transactional
     public Mono<Void> restore(Long statementId, Long questionId, Long accountId, boolean admin) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
             .then(Mono.defer(() -> findDeletedQuestion(statementId, questionId)))
@@ -240,7 +273,12 @@ public class QuestionService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private static QuestionResponse toResponse(Question question) {
+    /**
+     * The answer key and the review flag only travel with a question to someone
+     * who may write the statement. For anyone else they come back null, and the
+     * response omits them.
+     */
+    private static QuestionResponse toResponse(Question question, boolean staff) {
         return new QuestionResponse(
             question.getId(),
             question.getStatementId(),
@@ -250,10 +288,11 @@ public class QuestionService {
             question.getMaxScore(),
             question.getOrderIndex(),
             question.getPageIndex(),
-            question.getModelAnswer(),
-            question.getNeedsReview(),
+            staff ? question.getModelAnswer() : null,
+            staff ? question.getNeedsReview() : null,
             question.getCreatedAt(),
-            question.getUpdatedAt()
+            question.getUpdatedAt(),
+            staff ? question.getDeletedAt() : null
         );
     }
 }

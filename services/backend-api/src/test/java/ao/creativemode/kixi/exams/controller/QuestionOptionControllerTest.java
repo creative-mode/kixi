@@ -75,13 +75,19 @@ class QuestionOptionControllerTest {
     @MockBean
     private QuestionService questionService;
 
+    @MockBean
+    private CurrentAccountService currentAccountService;
+
     @BeforeEach
     void setUp() {
-        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID))
+        when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(TEACHER_ID));
+        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(true));
+        when(currentAccountService.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
+        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, true))
                 .thenReturn(Flux.just(optionResponse()));
     }
 
-    // ── Reads ───────────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Reads Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     @Test
     void listsTheOptionsOfTheQuestionUnderBothParents() {
@@ -94,7 +100,7 @@ class QuestionOptionControllerTest {
                 .jsonPath("$[0].id").isEqualTo(OPTION_ID)
                 .jsonPath("$[0].questionId").isEqualTo(QUESTION_ID);
 
-        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID);
+        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, true);
     }
 
     @Test
@@ -108,7 +114,7 @@ class QuestionOptionControllerTest {
 
     @Test
     void listsTheRemovedOptionsOnTheirOwnPath() {
-        when(questionOptionService.findAllDeleted(STATEMENT_ID, QUESTION_ID))
+        when(questionOptionService.findAllDeleted(STATEMENT_ID, QUESTION_ID, true))
                 .thenReturn(Flux.just(optionResponse()));
 
         client.mutateWith(studentJwt())
@@ -120,7 +126,7 @@ class QuestionOptionControllerTest {
 
     @Test
     void findsOneOption() {
-        when(questionOptionService.findById(STATEMENT_ID, QUESTION_ID, OPTION_ID))
+        when(questionOptionService.findById(STATEMENT_ID, QUESTION_ID, OPTION_ID, true))
                 .thenReturn(Mono.just(optionResponse()));
 
         client.mutateWith(teacherJwt())
@@ -130,7 +136,7 @@ class QuestionOptionControllerTest {
                 .expectStatus().isOk();
     }
 
-    // ── Writes ──────────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Writes Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     @Test
     void createsAnOptionAndPointsAtIt() {
@@ -291,12 +297,12 @@ class QuestionOptionControllerTest {
                 .create(anyLong(), anyLong(), any(), anyLong(), anyBoolean());
     }
 
-    // ── Fixtures ────────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Fixtures Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     private QuestionOptionResponse optionResponse() {
         return new QuestionOptionResponse(
                 OPTION_ID, QUESTION_ID, "B", "x = 1", false, 1,
-                LocalDateTime.now(), LocalDateTime.now());
+                LocalDateTime.now(), LocalDateTime.now(), null);
     }
 
     private static WebTestClientConfigurer teacherJwt() {

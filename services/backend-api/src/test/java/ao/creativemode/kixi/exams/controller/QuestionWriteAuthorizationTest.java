@@ -332,9 +332,9 @@ class QuestionWriteAuthorizationTest {
     // ── Students ────────────────────────────────────────────────────────────
 
     @Test
-    void aStudentMayReadTheQuestions() {
-        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement));
-        when(questions.findAllByStatementIdOrderedByNumber(STATEMENT_ID))
+    void aStudentMayReadTheQuestionsOfAPublishedStatement() {
+        givenTheStatementIsPublished();
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
                 .thenReturn(reactor.core.publisher.Flux.just(question()));
 
         client.mutateWith(studentJwt())
@@ -346,12 +346,16 @@ class QuestionWriteAuthorizationTest {
 
     @Test
     void aStudentMayNotSeeTheAnswerKey() {
-        // Reading is open to every authenticated caller, so it would be easy to
-        // assume the answer travels with the question. It does not: is_correct
-        // is only in the response of the routes that write it.
-        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement));
-        when(questions.findAllByStatementIdOrderedByNumber(STATEMENT_ID))
-                .thenReturn(reactor.core.publisher.Flux.just(question()));
+        // Reading the questions is open to any authenticated caller, so it would
+        // be easy to assume the answer travels with them. It does not. The
+        // fixture carries a model answer on purpose: with it null the assertion
+        // below would pass whether or not the field were being withheld.
+        givenTheStatementIsPublished();
+        Question answered = question();
+        answered.setModelAnswer("x = 1");
+        answered.setNeedsReview(true);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
+                .thenReturn(reactor.core.publisher.Flux.just(answered));
 
         client.mutateWith(studentJwt())
                 .get()
@@ -359,13 +363,80 @@ class QuestionWriteAuthorizationTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$[0].isCorrect").doesNotExist()
-                .jsonPath("$[0].modelAnswer").doesNotExist();
+                .jsonPath("$[0].text").isEqualTo("Resolva x+1=2")
+                .jsonPath("$[0].modelAnswer").doesNotExist()
+                .jsonPath("$[0].needsReview").doesNotExist();
+    }
+
+    @Test
+    void staffDoSeeTheAnswerKey() {
+        // The other half of the case above: withheld from a student, present for
+        // someone who may correct the paper. Without both, the omission would be
+        // indistinguishable from the field simply not existing.
+        givenTheStatementIsThere();
+        Question answered = question();
+        answered.setModelAnswer("x = 1");
+        answered.setNeedsReview(true);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
+                .thenReturn(reactor.core.publisher.Flux.just(answered));
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri(QUESTIONS)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].modelAnswer").isEqualTo("x = 1")
+                .jsonPath("$[0].needsReview").isEqualTo(true);
+    }
+
+    @Test
+    void aStudentMayNotSeeWhichOptionIsTheAnswer() {
+        givenTheStatementIsPublished();
+        givenTheQuestionIsThere();
+        QuestionOption answered = option();
+        answered.markAsCorrect();
+        when(options.findAllByQuestionIdOrderedByOrderIndex(QUESTION_ID))
+                .thenReturn(reactor.core.publisher.Flux.just(answered));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri(OPTIONS)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].optionText").isEqualTo("x = 1")
+                .jsonPath("$[0].isCorrect").doesNotExist();
+    }
+
+    @Test
+    void aStudentCannotReachADraftOfAnotherClass() {
+        // The statement is not published, so a student is answered with the same
+        // 404 as for an id that does not exist. Answering 200 would hand out
+        // another class's paper, and answering 403 would confirm it exists.
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri(QUESTIONS)
+                .exchange()
+                .expectStatus().isNotFound();
+    }
+
+    @Test
+    void aStudentCannotListTheTrash() {
+        givenTheStatementIsPublished();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri(QUESTIONS + "/trash")
+                .exchange()
+                .expectStatus().isNotFound();
     }
 
     @Test
     void aStudentCannotAddAnOption() {
-        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement));
+        givenTheStatementIsPublished();
 
         client.mutateWith(studentJwt())
                 .post()
@@ -382,6 +453,19 @@ class QuestionWriteAuthorizationTest {
 
     private void givenTheStatementIsThere() {
         when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement));
+    }
+
+    /**
+     * The statement is published, which is what a reader is entitled to.
+     *
+     * <p>A separate fixture from {@link #givenTheStatementIsThere()} on purpose:
+     * the two lookups are different queries, and stubbing only one of them is
+     * how a student ends up reading a draft of another class by accident.
+     */
+    private void givenTheStatementIsPublished() {
+        statement.setVisible(true);
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID))
+                .thenReturn(Mono.just(statement));
     }
 
     private void givenTheQuestionIsWritable() {

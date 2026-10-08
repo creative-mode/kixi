@@ -58,13 +58,19 @@ public class QuestionController {
 
     // =========================================================================
     // Reads
+    //
+    // Open to any authenticated caller, like the statement routes, but a
+    // student gets a published statement and its questions without the answer
+    // key. The split is the same one StatementController already makes between a
+    // staff query and a student query; these routes only had to honour it.
     // =========================================================================
 
     @GetMapping
     public Mono<ResponseEntity<List<QuestionResponse>>> listAll(
         @PathVariable Long statementId
     ) {
-        return questionService.findAllActive(statementId)
+        return isStaff()
+            .flatMapMany(staff -> questionService.findAllActive(statementId, staff))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -73,7 +79,8 @@ public class QuestionController {
     public Mono<ResponseEntity<List<QuestionResponse>>> listDeleted(
         @PathVariable Long statementId
     ) {
-        return questionService.findAllDeleted(statementId)
+        return isStaff()
+            .flatMapMany(staff -> questionService.findAllDeleted(statementId, staff))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -83,7 +90,8 @@ public class QuestionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return questionService.findById(statementId, questionId)
+        return isStaff()
+            .flatMap(staff -> questionService.findById(statementId, questionId, staff))
             .map(ResponseEntity::ok);
     }
 
@@ -198,6 +206,14 @@ public class QuestionController {
             currentAccountService.requiredAccountId(),
             currentAccountService.hasAnyRole("ADMIN")
         );
+    }
+
+    /**
+     * Whether the caller may see the answer key and a statement that is not
+     * published.
+     */
+    private Mono<Boolean> isStaff() {
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER");
     }
 
     private URI locationOf(UriComponentsBuilder uriBuilder, Long statementId, Long questionId) {

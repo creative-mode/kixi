@@ -46,7 +46,7 @@ class QuestionServiceTest {
         service = new QuestionService(questions, options, statements, writeAccess);
     }
 
-    // ── Numbering ───────────────────────────────────────────────────────────
+    // â”€â”€ Numbering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void createTakesTheNextNumberAndOrderFromWhatTheStatementHolds() {
@@ -111,7 +111,7 @@ class QuestionServiceTest {
                 .verifyComplete();
     }
 
-    // ── Ownership ───────────────────────────────────────────────────────────
+    // â”€â”€ Ownership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void aQuestionOfAnotherStatementIsNotFoundAndNothingIsWritten() {
@@ -146,13 +146,13 @@ class QuestionServiceTest {
     void aStatementThatIsGoneIsNotFound() {
         when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID))
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, true))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
     }
 
-    // ── Reordering ──────────────────────────────────────────────────────────
+    // â”€â”€ Reordering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void reorderRefusesAListThatMissesAQuestion() {
@@ -202,7 +202,7 @@ class QuestionServiceTest {
         assertThat(second.getNumber()).isEqualTo(2);
     }
 
-    // ── Removal, and the options that go with the question ──────────────────
+    // â”€â”€ Removal, and the options that go with the question â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void softDeleteStampsTheQuestionAndItsOptionsWithTheSameMoment() {
@@ -258,6 +258,44 @@ class QuestionServiceTest {
     }
 
     @Test
+    void aRemovedQuestionCanBePurgedAndAnActiveOneCannot() {
+        // Purge is for good, so it is only offered on something already in the
+        // trash: otherwise a mistaken DELETE would leave nothing to undo.
+        givenTheStatementIsWritable();
+        Question removed = question(QUESTION_ID, 7);
+        removed.setDeletedAt(LocalDateTime.now());
+        when(questions.findByIdAndDeletedAtIsNotNull(QUESTION_ID)).thenReturn(Mono.just(removed));
+        when(questions.delete(removed)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false))
+                .verifyComplete();
+
+        verify(questions).delete(removed);
+
+        when(questions.findByIdAndDeletedAtIsNotNull(QUESTION_ID)).thenReturn(Mono.empty());
+        StepVerifier.create(service.hardDelete(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    @Test
+    void purgingAQuestionOfAnotherStatementIsNotFound() {
+        givenTheStatementIsWritable();
+        Question elsewhere = question(QUESTION_ID, 7);
+        elsewhere.setStatementId(99L);
+        elsewhere.setDeletedAt(LocalDateTime.now());
+        when(questions.findByIdAndDeletedAtIsNotNull(QUESTION_ID)).thenReturn(Mono.just(elsewhere));
+
+        StepVerifier.create(service.hardDelete(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verify(questions, never()).delete(any(Question.class));
+    }
+
+    @Test
     void updateKeepsTheNumberItAlreadyHas() {
         givenTheStatementIsWritable();
         Question existing = question(QUESTION_ID, 7);
@@ -290,7 +328,7 @@ class QuestionServiceTest {
                 .verifyComplete();
     }
 
-    // ── Fixtures ────────────────────────────────────────────────────────────
+    // â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void givenTheStatementIsWritable() {
         when(writeAccess.requireCanWrite(STATEMENT_ID, ACCOUNT_ID, false))
@@ -307,7 +345,7 @@ class QuestionServiceTest {
     }
 
     private Statement statement(Long id) {
-        Statement statement = new Statement("P1", "Prova de Matemática");
+        Statement statement = new Statement("P1", "Prova de MatemÃ¡tica");
         statement.setId(id);
         statement.setInstitutionId(1L);
         statement.setClassId(2L);

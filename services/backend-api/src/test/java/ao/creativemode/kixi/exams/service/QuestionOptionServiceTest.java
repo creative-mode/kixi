@@ -49,7 +49,7 @@ class QuestionOptionServiceTest {
         service = new QuestionOptionService(options, questions, statements, writeAccess);
     }
 
-    // ── The answer key ──────────────────────────────────────────────────────
+    // â”€â”€ The answer key â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void markingTheCorrectOptionClearsTheOthers() {
@@ -113,7 +113,7 @@ class QuestionOptionServiceTest {
         verify(options, never()).setCorrectOption(anyLong(), anyLong());
     }
 
-    // ── Labels and creation ─────────────────────────────────────────────────
+    // â”€â”€ Labels and creation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void createRestoresAnOptionWhoseLabelWasRemoved() {
@@ -215,7 +215,7 @@ class QuestionOptionServiceTest {
                 .verifyComplete();
     }
 
-    // ── Reordering ──────────────────────────────────────────────────────────
+    // â”€â”€ Reordering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void reorderRefusesAListThatMissesAQuestion() {
@@ -261,7 +261,7 @@ class QuestionOptionServiceTest {
         assertThat(first.getOrderIndex()).isEqualTo(1);
     }
 
-    // ── Removal ─────────────────────────────────────────────────────────────
+    // â”€â”€ Removal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @Test
     void softDeleteThenRestoreLeavesTheOptionActiveAgain() {
@@ -281,6 +281,81 @@ class QuestionOptionServiceTest {
     }
 
     @Test
+    void restoringTheAnswerReMarksItAndLeavesTheQuestionWithOneAnswer() {
+        // setCorrectOption only touches the active rows, so a correct option in
+        // the trash keeps its flag. Restoring the loaded entity as it stands
+        // would bring that flag back next to whichever option is correct now —
+        // two answers, and findCorrectOptionByQuestionId answers with LIMIT 1.
+        givenTheQuestionIsWritable();
+        QuestionOption wasTheAnswer = activeOption(OPTION_ID, "B");
+        wasTheAnswer.markAsCorrect();
+        wasTheAnswer.markAsDeleted();
+        when(options.findByIdAndDeletedAtIsNotNull(OPTION_ID)).thenReturn(Mono.just(wasTheAnswer));
+        when(options.save(any(QuestionOption.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(options.setCorrectOption(QUESTION_ID, OPTION_ID)).thenReturn(Mono.just(2));
+
+        StepVerifier.create(service.restore(STATEMENT_ID, QUESTION_ID, OPTION_ID, ACCOUNT_ID, false))
+                .verifyComplete();
+
+        assertThat(wasTheAnswer.isDeleted()).isFalse();
+        verify(options).setCorrectOption(QUESTION_ID, OPTION_ID);
+    }
+
+    @Test
+    void restoringAnOptionThatWasNotTheAnswerLeavesTheKeyAlone() {
+        givenTheQuestionIsWritable();
+        QuestionOption ordinary = activeOption(OPTION_ID, "A");
+        ordinary.markAsDeleted();
+        when(options.findByIdAndDeletedAtIsNotNull(OPTION_ID)).thenReturn(Mono.just(ordinary));
+        when(options.save(any(QuestionOption.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.restore(STATEMENT_ID, QUESTION_ID, OPTION_ID, ACCOUNT_ID, false))
+                .verifyComplete();
+
+        assertThat(ordinary.isDeleted()).isFalse();
+        verify(options, never()).setCorrectOption(anyLong(), anyLong());
+    }
+
+    @Test
+    void aRemovedOptionCanBePurgedAndAnActiveOneCannot() {
+        givenTheQuestionIsWritable();
+        QuestionOption removed = activeOption(OPTION_ID, "A");
+        removed.markAsDeleted();
+        when(options.findByIdAndDeletedAtIsNotNull(OPTION_ID)).thenReturn(Mono.just(removed));
+        when(options.delete(removed)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.hardDelete(STATEMENT_ID, QUESTION_ID, OPTION_ID, ACCOUNT_ID, false))
+                .verifyComplete();
+
+        verify(options).delete(removed);
+
+        when(options.findByIdAndDeletedAtIsNotNull(OPTION_ID)).thenReturn(Mono.empty());
+        StepVerifier.create(service.hardDelete(STATEMENT_ID, QUESTION_ID, OPTION_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    @Test
+    void reusingTheLabelOfAnOptionThatWasTheAnswerDoesNotSilentlyMakeItOne() {
+        // The caller asked for an option that is not the answer and would have
+        // got one that is: the row came out of the trash carrying its old flag.
+        givenTheQuestionIsWritable();
+        when(options.findNextOrderIndex(QUESTION_ID)).thenReturn(Mono.just(2));
+        QuestionOption removed = activeOption(OPTION_ID, "A");
+        removed.markAsCorrect();
+        removed.markAsDeleted();
+        when(options.findByQuestionIdAndOptionLabel(QUESTION_ID, "A")).thenReturn(Mono.just(removed));
+        when(options.save(removed)).thenAnswer(invocation -> Mono.just(removed));
+
+        StepVerifier.create(service.create(STATEMENT_ID, QUESTION_ID, request("A", "outro", false), ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.isCorrect()).isFalse())
+                .verifyComplete();
+
+        verify(options, never()).setCorrectOption(anyLong(), anyLong());
+    }
+
+    @Test
     void aQuestionFromAnotherStatementIsNotFound() {
         when(writeAccess.requireCanWrite(STATEMENT_ID, ACCOUNT_ID, false))
                 .thenReturn(Mono.just(statement(STATEMENT_ID)));
@@ -290,7 +365,7 @@ class QuestionOptionServiceTest {
         question.setStatementId(999L);
         when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(question));
 
-        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID))
+        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, true))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -298,7 +373,7 @@ class QuestionOptionServiceTest {
         verifyNoInteractions(options);
     }
 
-    // ── Fixtures ────────────────────────────────────────────────────────────
+    // â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void givenTheQuestionIsWritable() {
         when(writeAccess.requireCanWrite(STATEMENT_ID, ACCOUNT_ID, false))
@@ -328,7 +403,7 @@ class QuestionOptionServiceTest {
     }
 
     private Statement statement(Long id) {
-        Statement statement = new Statement("P1", "Prova de Matemática");
+        Statement statement = new Statement("P1", "Prova de MatemÃ¡tica");
         statement.setId(id);
         statement.setInstitutionId(1L);
         statement.setClassId(2L);
