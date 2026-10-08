@@ -1,11 +1,13 @@
 package ao.creativemode.kixi.exams.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,15 +28,21 @@ public class StatementService {
     private final StatementRepository statementRepository;
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
+    private final InstitutionAccessService accessService;
+    private final StatementLinkValidationService validator;
 
     public StatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
-        QuestionOptionRepository optionRepository
+        QuestionOptionRepository optionRepository,
+        InstitutionAccessService accessService,
+        StatementLinkValidationService validator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
+        this.accessService = accessService;
+        this.validator = validator;
     }
 
     // =========================================================================
@@ -215,8 +223,9 @@ public class StatementService {
      * beforehand.
      */
     @Transactional
-    public Mono<Void> softDelete(Long id) {
+    public Mono<Void> softDelete(Long id, Long accountId, boolean admin) {
         return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement -> {
                 LocalDateTime deletedAt = LocalDateTime.now();
                 statement.setDeletedAt(deletedAt);
@@ -232,7 +241,7 @@ public class StatementService {
      * own soft delete had cascaded.
      */
     @Transactional
-    public Mono<Void> restore(Long id) {
+    public Mono<Void> restore(Long id, Long accountId, boolean admin) {
         return statementRepository
             .findByIdAndDeletedAtIsNotNull(id)
             .switchIfEmpty(
@@ -240,6 +249,7 @@ public class StatementService {
                     ApiException.notFound("Deleted statement not found: " + id)
                 )
             )
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement -> {
                 LocalDateTime deletedAt = statement.getDeletedAt();
                 statement.restore();
@@ -255,7 +265,7 @@ public class StatementService {
      * Hard delete a statement and its questions/options.
      */
     @Transactional
-    public Mono<Void> hardDelete(Long id) {
+    public Mono<Void> hardDelete(Long id, Long accountId, boolean admin) {
         // A purge is only allowed on a trashed statement, so the lookup must
         // filter on deleted_at IS NOT NULL. Using findById (active only) made
         // every purge attempt fail with 404 and left the cleanup unreachable.
@@ -266,6 +276,7 @@ public class StatementService {
                     ApiException.notFound("Trashed statement not found: " + id)
                 )
             )
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement ->
                 // Options and images go with their question through the
                 // ON DELETE CASCADE constraints, so deleting the questions is
@@ -279,25 +290,104 @@ public class StatementService {
     }
 
     /**
-     * Approve a statement review.
+     * Approve a statement review, making it visible.
      */
     @Transactional
-    public Mono<Statement> approveReview(Long id) {
-        return findById(id).flatMap(statement -> {
-            statement.approveReview();
-            return statementRepository.save(statement);
-        });
+    public Mono<Statement> approveReview(Long id, Long accountId, boolean admin) {
+        return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> {
+                statement.approveReview();
+                return statementRepository.save(statement);
+            });
     }
 
     /**
      * Set statement visibility.
      */
     @Transactional
-    public Mono<Statement> setVisible(Long id, boolean visible) {
-        return findById(id).flatMap(statement -> {
-            statement.setVisible(visible);
-            return statementRepository.save(statement);
-        });
+    public Mono<Statement> setVisible(Long id, boolean visible, Long accountId, boolean admin) {
+        return findById(id)
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> {
+                statement.setVisible(visible);
+                return statementRepository.save(statement);
+            });
+    }
+
+    /**
+     * Correct the metadata of a statement and nothing else.
+     *
+     * <p>The questions and their options are deliberately left untouched: on a
+     * statement the OCR produced they are what the teacher is correcting, and a
+     * full replace would throw them away. For the same reason this does not
+     * touch {@code visible} or {@code needsReview}, which are what
+     * {@link #approveReview} and {@link #setVisible} are for, and it keeps
+     * {@code source} as the record of where the statement came from.
+     *
+     * <p>{@code totalMaxScore} is taken from the caller rather than derived, which
+     * is the one place where leaving the questions alone shows: on creation the
+     * total is summed from them, so an edit can leave a statement whose declared
+     * total no longer matches its questions. That is the price of letting a
+     * teacher correct a score the OCR read off a scan, and it is why the field is
+     * accepted here at all.
+     *
+     * <p>Everything else is a replace, including the fields left out of the
+     * request: this is a PUT, so omitting {@code schoolYearId} clears it — which
+     * also switches off the class-to-year check, since a null year gives the
+     * validator nothing to compare against.
+     *
+     * <p>Authorisation is checked twice, and both halves matter. Against the
+     * statement as it stands, so a teacher cannot pull another teacher's paper
+     * into their own class; and against the metadata being written, so they
+     * cannot hand a paper over to a class they do not teach.
+     *
+     * <p>A statement the OCR produced carries no institution, so the first check
+     * has nothing to weigh against and it is the second one that admits it into
+     * a school.
+     */
+    @Transactional
+    public Mono<Statement> update(Long id, StatementRequest request, Long accountId, boolean admin) {
+        return validator.requireAClassForTeachers(request.classId(), admin)
+            .then(Mono.defer(() -> findById(id)))
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> requireCanWriteAs(request, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> validator.validate(
+                    request.schoolYearId(),
+                    request.termId(),
+                    request.classId(),
+                    request.subjectId(),
+                    request.courseId())
+                .thenReturn(statement))
+            .flatMap(statement -> {
+                apply(statement, request);
+                return statementRepository.save(statement);
+            });
+    }
+
+    /** Whether the account may point a statement at these references. */
+    private Mono<Void> requireCanWriteAs(StatementRequest request, Long accountId, boolean admin) {
+        return Mono.defer(() -> accessService.requireCanAuthor(
+            accountId, admin, request.institutionId(), request.subjectId(), request.classId()));
+    }
+
+    private void apply(Statement statement, StatementRequest request) {
+        statement.setInstitutionId(request.institutionId());
+        statement.setSubjectId(request.subjectId());
+        statement.setTitle(request.title().trim());
+        statement.setExamType(request.examType().trim());
+        statement.setDurationMinutes(request.durationMinutes());
+        statement.setVariant(blankToNull(request.variant()));
+        statement.setInstructions(blankToNull(request.instructions()));
+        statement.setTotalMaxScore(request.totalMaxScore());
+        statement.setSchoolYearId(request.schoolYearId());
+        statement.setTermId(request.termId());
+        statement.setClassId(request.classId());
+        statement.setCourseId(request.courseId());
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     // =========================================================================
@@ -323,5 +413,50 @@ public class StatementService {
      */
     public Mono<Long> countBySource(String source) {
         return statementRepository.countBySourceAndDeletedAtIsNull(source);
+    }
+
+    // =========================================================================
+    // Authorization
+    // =========================================================================
+
+    /**
+     * Whether the account may change this statement: an administrator may do
+     * anything, a teacher only the statements of the classes and subjects they
+     * were assigned to.
+     */
+    private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
+        if (statement.getInstitutionId() == null) {
+            if (statement.getClassId() == null) {
+                // Statements created before the institution model (the OCR flows)
+                // carry no school and no class, so there is nothing to weigh
+                // them against. Backfilling them is a separate concern.
+                return Mono.just(statement);
+            }
+            // No school to check them against, but the class is still on them.
+            // Returning straight away let any teacher edit, delete or approve a
+            // statement sitting in a class they do not teach.
+            return accessService
+                .requireAssignedTo(accountId, admin, statement.getClassId(), statement.getSubjectId())
+                .thenReturn(statement);
+        }
+        if (statement.getClassId() == null && !admin) {
+            // A school statement without a class is not scoped to any class, so
+            // no teaching assignment can be checked against it. Only an
+            // administrator may build one (ManualStatementService), and the
+            // rule has to read the same way on the way back in: otherwise any
+            // teacher affiliated to the school, holding no assignment at all,
+            // could approve or delete a statement the school made on purpose.
+            return Mono.error(ApiException.forbidden(
+                "Only an administrator may change a statement without a class"));
+        }
+        return accessService
+            .requireCanAuthor(
+                accountId,
+                admin,
+                statement.getInstitutionId(),
+                statement.getSubjectId(),
+                statement.getClassId()
+            )
+            .thenReturn(statement);
     }
 }

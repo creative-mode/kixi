@@ -10,7 +10,13 @@
 **roles** (id, name, description, createdAt, updatedAt, deletedAt); </br>
 **accountRoles** (accountId, roleId, createdAt, deletedAt); </br>
 **sessions** (id, accountId, token, ipAddress, expiresAt, lastUsed, createdAt, updatedAt, deletedAt); </br>
-**statements** (id, examType, durationMinutes, variant, title, instructions, totalMaxScore, schoolYearId, termId, subjectId, classId, courseId, createdBy, visible, createdAt, updatedAt, deletedAt); </br>
+**institutions** (id, code, name, shortName, logo, createdAt, updatedAt, deletedAt); </br>
+**teachers** (id, accountId, firstName, lastName, email, photo, specialty, employeeNumber, createdAt, updatedAt, deletedAt); </br>
+**institutionSubjects** (id, institutionId, subjectId, createdAt, deletedAt); </br>
+**institutionTeachers** (id, institutionId, teacherId, createdAt, deletedAt); </br>
+**institutionStudents** (id, institutionId, userId, createdAt, deletedAt); </br>
+**teachingAssignments** (id, teacherId, classId, subjectId, schoolYearId, tutorStyle, createdAt, deletedAt); </br>
+**statements** (id, examType, durationMinutes, variant, title, instructions, totalMaxScore, schoolYearId, termId, subjectId, classId, courseId, institutionId, createdBy, visible, createdAt, updatedAt, deletedAt); </br>
 **questions** (id, statementId, number, text, questionType, maxScore, orderIndex, createdAt, updatedAt, deletedAt); </br>
 **questionImages** (id, questionId, imageUrl, caption, orderIndex, createdAt, updatedAt, deletedAt); </br>
 **questionOptions** (id, questionId, optionLabel, optionText, isCorrect, orderIndex, createdAt, updatedAt, deletedAt); </br>
