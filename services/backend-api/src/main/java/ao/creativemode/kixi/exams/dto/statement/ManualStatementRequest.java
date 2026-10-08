@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.exams.dto.statement;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -53,6 +54,8 @@ public record ManualStatementRequest(
         String text,
 
         @PositiveOrZero(message = "The score cannot be negative")
+        @Digits(integer = 8, fraction = 2,
+            message = "The score must be at most 99999999.99")
         Double maxScore,
 
         @Valid

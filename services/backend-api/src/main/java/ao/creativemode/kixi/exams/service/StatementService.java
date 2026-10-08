@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.exams.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
@@ -28,17 +29,20 @@ public class StatementService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final InstitutionAccessService accessService;
+    private final StatementLinkValidationService validator;
 
     public StatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
-        InstitutionAccessService accessService
+        InstitutionAccessService accessService,
+        StatementLinkValidationService validator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.accessService = accessService;
+        this.validator = validator;
     }
 
     // =========================================================================
@@ -311,6 +315,81 @@ public class StatementService {
             });
     }
 
+    /**
+     * Correct the metadata of a statement and nothing else.
+     *
+     * <p>The questions and their options are deliberately left untouched: on a
+     * statement the OCR produced they are what the teacher is correcting, and a
+     * full replace would throw them away. For the same reason this does not
+     * touch {@code visible} or {@code needsReview}, which are what
+     * {@link #approveReview} and {@link #setVisible} are for, and it keeps
+     * {@code source} as the record of where the statement came from.
+     *
+     * <p>{@code totalMaxScore} is taken from the caller rather than derived, which
+     * is the one place where leaving the questions alone shows: on creation the
+     * total is summed from them, so an edit can leave a statement whose declared
+     * total no longer matches its questions. That is the price of letting a
+     * teacher correct a score the OCR read off a scan, and it is why the field is
+     * accepted here at all.
+     *
+     * <p>Everything else is a replace, including the fields left out of the
+     * request: this is a PUT, so omitting {@code schoolYearId} clears it — which
+     * also switches off the class-to-year check, since a null year gives the
+     * validator nothing to compare against.
+     *
+     * <p>Authorisation is checked twice, and both halves matter. Against the
+     * statement as it stands, so a teacher cannot pull another teacher's paper
+     * into their own class; and against the metadata being written, so they
+     * cannot hand a paper over to a class they do not teach.
+     *
+     * <p>A statement the OCR produced carries no institution, so the first check
+     * has nothing to weigh against and it is the second one that admits it into
+     * a school.
+     */
+    @Transactional
+    public Mono<Statement> update(Long id, StatementRequest request, Long accountId, boolean admin) {
+        return validator.requireAClassForTeachers(request.classId(), admin)
+            .then(Mono.defer(() -> findById(id)))
+            .flatMap(statement -> requireCanEdit(statement, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> requireCanWriteAs(request, accountId, admin).thenReturn(statement))
+            .flatMap(statement -> validator.validate(
+                    request.schoolYearId(),
+                    request.termId(),
+                    request.classId(),
+                    request.subjectId(),
+                    request.courseId())
+                .thenReturn(statement))
+            .flatMap(statement -> {
+                apply(statement, request);
+                return statementRepository.save(statement);
+            });
+    }
+
+    /** Whether the account may point a statement at these references. */
+    private Mono<Void> requireCanWriteAs(StatementRequest request, Long accountId, boolean admin) {
+        return Mono.defer(() -> accessService.requireCanAuthor(
+            accountId, admin, request.institutionId(), request.subjectId(), request.classId()));
+    }
+
+    private void apply(Statement statement, StatementRequest request) {
+        statement.setInstitutionId(request.institutionId());
+        statement.setSubjectId(request.subjectId());
+        statement.setTitle(request.title().trim());
+        statement.setExamType(request.examType().trim());
+        statement.setDurationMinutes(request.durationMinutes());
+        statement.setVariant(blankToNull(request.variant()));
+        statement.setInstructions(blankToNull(request.instructions()));
+        statement.setTotalMaxScore(request.totalMaxScore());
+        statement.setSchoolYearId(request.schoolYearId());
+        statement.setTermId(request.termId());
+        statement.setClassId(request.classId());
+        statement.setCourseId(request.courseId());
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     // =========================================================================
     // Statistics
     // =========================================================================
@@ -347,10 +426,18 @@ public class StatementService {
      */
     private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
         if (statement.getInstitutionId() == null) {
-            // Statements created before the institution model (the OCR flows)
-            // carry no school, so there is nothing to check them against.
-            // Backfilling them is a separate concern from this rule.
-            return Mono.just(statement);
+            if (statement.getClassId() == null) {
+                // Statements created before the institution model (the OCR flows)
+                // carry no school and no class, so there is nothing to weigh
+                // them against. Backfilling them is a separate concern.
+                return Mono.just(statement);
+            }
+            // No school to check them against, but the class is still on them.
+            // Returning straight away let any teacher edit, delete or approve a
+            // statement sitting in a class they do not teach.
+            return accessService
+                .requireAssignedTo(accountId, admin, statement.getClassId(), statement.getSubjectId())
+                .thenReturn(statement);
         }
         if (statement.getClassId() == null && !admin) {
             // A school statement without a class is not scoped to any class, so

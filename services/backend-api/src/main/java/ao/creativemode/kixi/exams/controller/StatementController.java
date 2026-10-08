@@ -1,14 +1,20 @@
 package ao.creativemode.kixi.exams.controller;
 
 import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
+import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import jakarta.validation.Valid;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
@@ -34,13 +40,16 @@ import reactor.util.function.Tuple2;
 public class StatementController {
 
     private final StatementService statementService;
+    private final ManualStatementService manualStatementService;
     private final CurrentAccountService currentAccountService;
 
     public StatementController(
         StatementService statementService,
+        ManualStatementService manualStatementService,
         CurrentAccountService currentAccountService
     ) {
         this.statementService = statementService;
+        this.manualStatementService = manualStatementService;
         this.currentAccountService = currentAccountService;
     }
 
@@ -196,6 +205,40 @@ public class StatementController {
     ) {
         return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
             .flatMap(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+    }
+
+    /**
+     * Build a statement by hand in the exam builder. This is the canonical route;
+     * POST /api/v1/statements/manual is the same call under its older name.
+     */
+    @PostMapping
+    public Mono<ResponseEntity<StatementSummary>> create(
+            @Valid @RequestBody ManualStatementRequest request,
+            UriComponentsBuilder uriBuilder
+    ) {
+        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
+                .flatMap(author -> manualStatementService.create(request, author.getT1(), author.getT2()))
+                .map(statement -> {
+                    URI location = uriBuilder
+                            .path("/api/v1/statements/{id}")
+                            .buildAndExpand(statement.getId())
+                            .toUri();
+                    return ResponseEntity.created(location).body(StatementSummary.from(statement));
+                });
+    }
+
+    /**
+     * Correct the metadata of a statement. The questions are left as they are.
+     */
+    @PutMapping("/{id}")
+    public Mono<ResponseEntity<StatementSummary>> update(
+            @PathVariable Long id,
+            @Valid @RequestBody StatementRequest request
+    ) {
+        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
+                .flatMap(author -> statementService.update(id, request, author.getT1(), author.getT2()))
+                .map(StatementSummary::from)
+                .map(ResponseEntity::ok);
     }
 
     /**

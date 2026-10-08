@@ -8,7 +8,6 @@ import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
-import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -30,45 +29,39 @@ public class ManualStatementService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final InstitutionAccessService accessService;
+    private final StatementLinkValidationService validator;
 
     public ManualStatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
-        InstitutionAccessService accessService
+        InstitutionAccessService accessService,
+        StatementLinkValidationService validator
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.accessService = accessService;
+        this.validator = validator;
     }
 
     @Transactional
     public Mono<Statement> create(ManualStatementRequest request, Long accountId, boolean admin) {
-        return requireAClassWhenNotAdmin(request, admin)
+        return validator.requireAClassForTeachers(request.classId(), admin)
             .then(Mono.defer(() -> accessService.requireCanAuthor(
                 accountId, admin, request.institutionId(), request.subjectId(), request.classId())))
+            .then(Mono.defer(() -> validator.validate(
+                request.schoolYearId(),
+                request.termId(),
+                request.classId(),
+                request.subjectId(),
+                request.courseId())))
             .then(Mono.defer(() -> statementRepository.save(toStatement(request, accountId))))
             .flatMap(statement ->
                 Flux.fromIterable(indexed(request.questions()))
                     .concatMap(entry -> saveQuestion(statement.getId(), entry.number(), entry.question()))
                     .then(Mono.just(statement))
             );
-    }
-
-    /**
-     * A teacher may only build for a class they teach, and the teaching
-     * assignment is keyed on the class. Leaving the class out would silently
-     * skip that check, so a statement from a teacher has to name one. An
-     * administrator is not restricted and may build a school-wide statement.
-     */
-    private Mono<Void> requireAClassWhenNotAdmin(ManualStatementRequest request, boolean admin) {
-        if (admin || request.classId() != null) {
-            return Mono.empty();
-        }
-        return Mono.error(ApiException.unprocessableEntity(
-            "A teacher must choose the class they teach; "
-                + "only an administrator may build a statement without a class"));
     }
 
     private Mono<Question> saveQuestion(Long statementId, int number, ManualStatementRequest.Question data) {
@@ -105,8 +98,8 @@ public class ManualStatementService {
         statement.setTitle(request.title().trim());
         statement.setExamType(request.examType().trim());
         statement.setDurationMinutes(request.durationMinutes());
-        statement.setVariant(request.variant());
-        statement.setInstructions(request.instructions());
+        statement.setVariant(blankToNull(request.variant()));
+        statement.setInstructions(blankToNull(request.instructions()));
         statement.setTotalMaxScore(totalScore(request));
         statement.setSchoolYearId(request.schoolYearId());
         statement.setTermId(request.termId());
@@ -128,6 +121,11 @@ public class ManualStatementService {
             .filter(score -> score != null)
             .mapToDouble(Double::doubleValue)
             .sum();
+    }
+
+    /** Shared with the edit path so a blank reads the same on both routes. */
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private record NumberedQuestion(int number, ManualStatementRequest.Question question) {}

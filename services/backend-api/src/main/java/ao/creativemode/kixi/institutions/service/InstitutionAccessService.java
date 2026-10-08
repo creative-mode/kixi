@@ -36,6 +36,19 @@ public class InstitutionAccessService {
     }
 
     /**
+     * Completes when the account is assigned to teach {@code subjectId} in
+     * {@code classId}, with no institution to weigh against.
+     *
+     * <p>For the statements that predate the institution model — the OCR flows
+     * leave {@code institution_id} empty. There is no school to check them
+     * against, but the class is still on them, and skipping it entirely let any
+     * teacher edit or delete a statement sitting in a class they do not teach.
+     */
+    public Mono<Void> requireAssignedTo(Long accountId, boolean admin, Long classId, Long subjectId) {
+        return Mono.defer(() -> teachingAssignments.requireTeaches(accountId, admin, classId, subjectId));
+    }
+
+    /**
      * Completes when the account may author a statement of {@code subjectId} in
      * {@code classId} for {@code institutionId}; fails otherwise.
      *

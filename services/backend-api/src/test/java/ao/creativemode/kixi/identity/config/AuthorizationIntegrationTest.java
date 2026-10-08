@@ -77,6 +77,9 @@ class AuthorizationIntegrationTest {
     private ao.creativemode.kixi.exams.service.StatementService statementService;
 
     @MockBean
+    private ao.creativemode.kixi.exams.service.ManualStatementService manualStatementService;
+
+    @MockBean
     private ao.creativemode.kixi.institutions.service.TeachingAssignmentService teachingAssignmentService;
 
     @Test
