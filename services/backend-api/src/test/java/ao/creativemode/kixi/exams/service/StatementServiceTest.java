@@ -70,7 +70,7 @@ class StatementServiceTest {
         // The null guard matters: when a test then stubs this method itself,
         // Mockito runs the call with any() supplying null, and Mono.just(null)
         // would blow up while the stub is being registered.
-        when(writeAccess.requireCanWrite(any(), anyLong(), anyBoolean())).thenAnswer(invocation -> {
+        when(writeAccess.checkCanWrite(any(), anyLong(), anyBoolean())).thenAnswer(invocation -> {
             Statement statement = invocation.getArgument(0);
             return statement == null ? Mono.empty() : Mono.just(statement);
         });
@@ -305,7 +305,7 @@ class StatementServiceTest {
     void approveReviewIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(writeAccess.requireCanWrite(any(), eq(9L), eq(false)))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -321,7 +321,7 @@ class StatementServiceTest {
     void setVisibilityIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(writeAccess.requireCanWrite(any(), eq(9L), eq(false)))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -337,7 +337,7 @@ class StatementServiceTest {
     void softDeleteIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(writeAccess.requireCanWrite(any(), eq(9L), eq(false)))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -355,7 +355,7 @@ class StatementServiceTest {
         Statement trashed = statementOfSchool(1L, 4L, 3L);
         trashed.markAsDeleted();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
-        when(writeAccess.requireCanWrite(any(), eq(9L), eq(false)))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -373,7 +373,7 @@ class StatementServiceTest {
         Statement trashed = statementOfSchool(1L, 4L, 3L);
         trashed.markAsDeleted();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
-        when(writeAccess.requireCanWrite(any(), eq(9L), eq(false)))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -397,7 +397,7 @@ class StatementServiceTest {
 
         StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
 
-        verify(writeAccess).requireCanWrite(existing, 9L, false);
+        verify(writeAccess).checkCanWrite(existing, 9L, false);
     }
 
     // ── The rule itself ─────────────────────────────────────────────────────
@@ -422,7 +422,7 @@ class StatementServiceTest {
 
         StepVerifier.create(service.hardDelete(1L, 9L, false)).verifyComplete();
 
-        verify(writeAccess).requireCanWrite(trashed, 9L, false);
+        verify(writeAccess).checkCanWrite(trashed, 9L, false);
     }
 
     @Test
@@ -500,7 +500,7 @@ class StatementServiceTest {
         // Once the statement as it stands, which the write rule weighs, and once the
         // metadata being written. Dropping either half lets a teacher steal
         // another teacher's paper, or hand one to a class they do not teach.
-        verify(writeAccess).requireCanWrite(any(), eq(9L), eq(false));
+        verify(writeAccess).checkCanWrite(any(), eq(9L), eq(false));
         verify(accessService).requireCanAuthor(9L, false, 1L, 2L, CLASS_ID);
     }
 

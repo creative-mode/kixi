@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.exams.service;
 
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
@@ -21,12 +22,36 @@ import reactor.core.publisher.Mono;
 public class StatementWriteAccessService {
 
     private final InstitutionAccessService accessService;
+    private final StatementRepository statementRepository;
 
-    public StatementWriteAccessService(InstitutionAccessService accessService) {
+    public StatementWriteAccessService(
+        InstitutionAccessService accessService,
+        StatementRepository statementRepository
+    ) {
         this.accessService = accessService;
+        this.statementRepository = statementRepository;
     }
 
-    public Mono<Statement> requireCanWrite(Statement statement, Long accountId, boolean admin) {
+    /**
+     * Loads a statement and applies the rule to it. For the nested question and
+     * option routes, which carry the statement id in the path and must not be
+     * able to reach a statement they were not given.
+     */
+    public Mono<Statement> requireCanWrite(Long statementId, Long accountId, boolean admin) {
+        return Mono.defer(() -> statementRepository.findByIdAndDeletedAtIsNull(statementId))
+            .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
+            .flatMap(statement -> checkCanWrite(statement, accountId, admin));
+    }
+
+    /**
+     * The rule itself, for a caller that already holds the statement.
+     *
+     * <p>Named apart from {@link #requireCanWrite(Long, Long, boolean)} on
+     * purpose: with both taking a reference type first, {@code any()} in a test
+     * would bind to whichever the compiler picked, quietly stubbing the wrong
+     * one.
+     */
+    public Mono<Statement> checkCanWrite(Statement statement, Long accountId, boolean admin) {
         if (statement.getInstitutionId() == null) {
             if (statement.getClassId() == null) {
                 // Statements created before the institution model (the OCR flows)

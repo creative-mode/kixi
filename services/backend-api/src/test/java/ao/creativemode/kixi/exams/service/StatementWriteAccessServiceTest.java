@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,12 +29,41 @@ class StatementWriteAccessServiceTest {
     private static final Long SUBJECT_ID = 5L;
 
     private InstitutionAccessService accessService;
+    private StatementRepository statements;
     private StatementWriteAccessService service;
 
     @BeforeEach
     void setUp() {
         accessService = mock(InstitutionAccessService.class);
-        service = new StatementWriteAccessService(accessService);
+        statements = mock(StatementRepository.class);
+        service = new StatementWriteAccessService(accessService, statements);
+    }
+
+    @Test
+    void anIdThatIsNotThereIsNotFoundRatherThanForbidden() {
+        // The nested routes take the statement id from the path. Answering
+        // "forbidden" for an id that does not exist would tell an authenticated
+        // caller which statement ids are real.
+        when(statements.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.requireCanWrite(7L, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verifyNoInteractions(accessService);
+    }
+
+    @Test
+    void anIdIsLoadedAndThenWeighed() {
+        Statement found = ofSchool(CLASS_ID);
+        when(statements.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(found));
+        when(accessService.requireCanAuthor(ACCOUNT_ID, false, INSTITUTION_ID, SUBJECT_ID, CLASS_ID))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(service.requireCanWrite(7L, ACCOUNT_ID, false))
+                .expectNextCount(1)
+                .verifyComplete();
     }
 
     @Test
@@ -41,7 +71,7 @@ class StatementWriteAccessServiceTest {
         when(accessService.requireCanAuthor(ACCOUNT_ID, true, INSTITUTION_ID, SUBJECT_ID, CLASS_ID))
                 .thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireCanWrite(ofSchool(CLASS_ID), ACCOUNT_ID, true))
+        StepVerifier.create(service.checkCanWrite(ofSchool(CLASS_ID), ACCOUNT_ID, true))
                 .expectNextCount(1)
                 .verifyComplete();
     }
@@ -51,7 +81,7 @@ class StatementWriteAccessServiceTest {
         when(accessService.requireCanAuthor(ACCOUNT_ID, false, INSTITUTION_ID, SUBJECT_ID, CLASS_ID))
                 .thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireCanWrite(ofSchool(CLASS_ID), ACCOUNT_ID, false))
+        StepVerifier.create(service.checkCanWrite(ofSchool(CLASS_ID), ACCOUNT_ID, false))
                 .expectNextCount(1)
                 .verifyComplete();
     }
@@ -76,7 +106,7 @@ class StatementWriteAccessServiceTest {
         when(accessService.requireCanAuthor(ACCOUNT_ID, true, INSTITUTION_ID, SUBJECT_ID, null))
                 .thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireCanWrite(ofSchool(null), ACCOUNT_ID, true))
+        StepVerifier.create(service.checkCanWrite(ofSchool(null), ACCOUNT_ID, true))
                 .expectNextCount(1)
                 .verifyComplete();
     }
@@ -87,7 +117,7 @@ class StatementWriteAccessServiceTest {
         when(accessService.requireAssignedTo(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .thenReturn(Mono.empty());
 
-        StepVerifier.create(service.requireCanWrite(fromTheOcr, ACCOUNT_ID, false))
+        StepVerifier.create(service.checkCanWrite(fromTheOcr, ACCOUNT_ID, false))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -100,7 +130,7 @@ class StatementWriteAccessServiceTest {
         when(accessService.requireAssignedTo(ACCOUNT_ID, false, CLASS_ID, SUBJECT_ID))
                 .thenReturn(Mono.error(ApiException.forbidden("not assigned")));
 
-        StepVerifier.create(service.requireCanWrite(fromTheOcr, ACCOUNT_ID, false))
+        StepVerifier.create(service.checkCanWrite(fromTheOcr, ACCOUNT_ID, false))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -110,7 +140,7 @@ class StatementWriteAccessServiceTest {
     void aStatementFromTheOcrWithNeitherSchoolNorClassHasNothingToWeigh() {
         Statement orphan = statement(1L, null, null);
 
-        StepVerifier.create(service.requireCanWrite(orphan, ACCOUNT_ID, false))
+        StepVerifier.create(service.checkCanWrite(orphan, ACCOUNT_ID, false))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -118,7 +148,7 @@ class StatementWriteAccessServiceTest {
     }
 
     private void expectForbidden(Statement statement, boolean admin) {
-        StepVerifier.create(service.requireCanWrite(statement, ACCOUNT_ID, admin))
+        StepVerifier.create(service.checkCanWrite(statement, ACCOUNT_ID, admin))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();

@@ -424,6 +424,6 @@ public class StatementService {
 
     /** The statement-scoped write rule, shared with the question and option services. */
     private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
-        return writeAccess.requireCanWrite(statement, accountId, admin);
+        return writeAccess.checkCanWrite(statement, accountId, admin);
     }
 }

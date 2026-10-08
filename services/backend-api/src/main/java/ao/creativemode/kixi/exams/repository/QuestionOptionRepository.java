@@ -123,6 +123,20 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
     @Query("SELECT COALESCE(MAX(order_index), 0) + 1 FROM question_options WHERE question_id = :questionId")
     Mono<Integer> findNextOrderIndex(Long questionId);
 
+    /**
+     * Soft delete all options of a question, stamped with the same
+     * {@code deletedAt} as the question so a restore can tell which options its
+     * own cascade touched, rather than reviving options removed beforehand.
+ */
+    @Query("UPDATE question_options SET deleted_at = :deletedAt WHERE question_id = :questionId AND deleted_at IS NULL")
+    Mono<Integer> softDeleteAllByQuestionIdAndDeletedAt(Long questionId,
+        java.time.LocalDateTime deletedAt);
+
+    /** The other half of the cascade above. */
+    @Query("UPDATE question_options SET deleted_at = NULL WHERE question_id = :questionId AND deleted_at = :deletedAt")
+    Mono<Integer> restoreAllDeletedByQuestionIdAndDeletedAt(Long questionId,
+        java.time.LocalDateTime deletedAt);
+
     /** Any state (active or trashed), so a removed label is restored instead of colliding. */
     Mono<QuestionOption> findByQuestionIdAndOptionLabel(Long questionId, String optionLabel);
 
