@@ -162,10 +162,38 @@ class QuestionOptionServiceTest {
             option.setId(OPTION_ID);
             return Mono.just(option);
         });
+        when(options.setCorrectOption(QUESTION_ID, OPTION_ID)).thenReturn(Mono.just(1));
+        when(options.findByIdAndDeletedAtIsNull(OPTION_ID)).thenAnswer(invocation -> {
+            QuestionOption option = activeOption(OPTION_ID, "A");
+            option.markAsCorrect();
+            return Mono.just(option);
+        });
 
         StepVerifier.create(service.create(STATEMENT_ID, QUESTION_ID, request("A", "um", true), ACCOUNT_ID, false))
                 .assertNext(response -> assertThat(response.isCorrect()).isTrue())
                 .verifyComplete();
+
+        // Saving the flag on the insert alone would leave whatever was already
+        // correct still correct, so the question would answer two ways.
+        verify(options).setCorrectOption(QUESTION_ID, OPTION_ID);
+    }
+
+    @Test
+    void createWithoutTheCorrectFlagLeavesTheColumnAlone() {
+        givenTheQuestionIsWritable();
+        when(options.findNextOrderIndex(QUESTION_ID)).thenReturn(Mono.just(1));
+        when(options.findByQuestionIdAndOptionLabel(QUESTION_ID, "A")).thenReturn(Mono.empty());
+        when(options.save(any(QuestionOption.class))).thenAnswer(invocation -> {
+            QuestionOption option = invocation.getArgument(0);
+            option.setId(OPTION_ID);
+            return Mono.just(option);
+        });
+
+        StepVerifier.create(service.create(STATEMENT_ID, QUESTION_ID, request("A", "um", false), ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.isCorrect()).isFalse())
+                .verifyComplete();
+
+        verify(options, never()).setCorrectOption(anyLong(), anyLong());
     }
 
     @Test

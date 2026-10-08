@@ -102,12 +102,22 @@ public class QuestionOptionService {
                     QuestionOption option = new QuestionOption(
                         questionId, data.optionLabel().trim(), data.optionText().trim());
                     option.setOrderIndex(nextOrder);
-                    if (Boolean.TRUE.equals(data.isCorrect())) {
-                        option.markAsCorrect();
-                    }
                     return Mono.defer(() -> options.save(option));
                 })))
+            // Saving the flag on the insert alone would leave a second option
+            // still marked correct. Rewriting the column afterwards is what
+            // keeps the question's single answer a single answer.
+            .flatMap(option -> markCorrectIfAsked(option, data))
             .map(QuestionOptionService::toResponse);
+    }
+
+    private Mono<QuestionOption> markCorrectIfAsked(QuestionOption option, QuestionOptionRequest data) {
+        if (!Boolean.TRUE.equals(data.isCorrect())) {
+            return Mono.just(option);
+        }
+        return Mono.defer(() -> options.setCorrectOption(option.getQuestionId(), option.getId()))
+            .then(Mono.defer(() -> options.findByIdAndDeletedAtIsNull(option.getId())))
+            .switchIfEmpty(Mono.just(option));
     }
 
     public Mono<QuestionOptionResponse> update(
