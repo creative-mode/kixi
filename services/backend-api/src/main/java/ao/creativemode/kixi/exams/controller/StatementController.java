@@ -1,18 +1,25 @@
 package ao.creativemode.kixi.exams.controller;
 
 import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
+import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
+import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import jakarta.validation.Valid;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 /**
  * REST Controller for Statement (exam paper) management.
@@ -33,13 +40,16 @@ import reactor.core.publisher.Mono;
 public class StatementController {
 
     private final StatementService statementService;
+    private final ManualStatementService manualStatementService;
     private final CurrentAccountService currentAccountService;
 
     public StatementController(
         StatementService statementService,
+        ManualStatementService manualStatementService,
         CurrentAccountService currentAccountService
     ) {
         this.statementService = statementService;
+        this.manualStatementService = manualStatementService;
         this.currentAccountService = currentAccountService;
     }
 
@@ -165,6 +175,14 @@ public class StatementController {
             .map(ResponseEntity::ok);
     }
 
+    /** The signed-in account and whether it is an administrator, for the write operations. */
+    private Mono<Tuple2<Long, Boolean>> currentAuthor() {
+        return Mono.zip(
+            currentAccountService.requiredAccountId(),
+            currentAccountService.hasAnyRole("ADMIN")
+        );
+    }
+
     private Flux<Statement> readableStatements(
         Supplier<Flux<Statement>> staffQuery,
         Supplier<Flux<Statement>> studentQuery
@@ -190,12 +208,46 @@ public class StatementController {
     }
 
     /**
+     * Build a statement by hand in the exam builder. This is the canonical route;
+     * POST /api/v1/statements/manual is the same call under its older name.
+     */
+    @PostMapping
+    public Mono<ResponseEntity<StatementSummary>> create(
+            @Valid @RequestBody ManualStatementRequest request,
+            UriComponentsBuilder uriBuilder
+    ) {
+        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
+                .flatMap(author -> manualStatementService.create(request, author.getT1(), author.getT2()))
+                .map(statement -> {
+                    URI location = uriBuilder
+                            .path("/api/v1/statements/{id}")
+                            .buildAndExpand(statement.getId())
+                            .toUri();
+                    return ResponseEntity.created(location).body(StatementSummary.from(statement));
+                });
+    }
+
+    /**
+     * Correct the metadata of a statement. The questions are left as they are.
+     */
+    @PutMapping("/{id}")
+    public Mono<ResponseEntity<StatementSummary>> update(
+            @PathVariable Long id,
+            @Valid @RequestBody StatementRequest request
+    ) {
+        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
+                .flatMap(author -> statementService.update(id, request, author.getT1(), author.getT2()))
+                .map(StatementSummary::from)
+                .map(ResponseEntity::ok);
+    }
+
+    /**
      * Soft delete a statement.
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return statementService
-            .softDelete(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.softDelete(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -204,8 +256,8 @@ public class StatementController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return statementService
-            .restore(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.restore(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -214,8 +266,8 @@ public class StatementController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return statementService
-            .hardDelete(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.hardDelete(id, author.getT1(), author.getT2()))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -226,8 +278,8 @@ public class StatementController {
     public Mono<ResponseEntity<StatementSummary>> approveReview(
         @PathVariable Long id
     ) {
-        return statementService
-            .approveReview(id)
+        return currentAuthor()
+            .flatMap(author -> statementService.approveReview(id, author.getT1(), author.getT2()))
             .map(StatementSummary::from)
             .map(ResponseEntity::ok);
     }
@@ -240,8 +292,9 @@ public class StatementController {
         @PathVariable Long id,
         @RequestParam boolean visible
     ) {
-        return statementService
-            .setVisible(id, visible)
+        return currentAuthor()
+            .flatMap(author ->
+                statementService.setVisible(id, visible, author.getT1(), author.getT2()))
             .map(StatementSummary::from)
             .map(ResponseEntity::ok);
     }
@@ -293,7 +346,8 @@ public class StatementController {
         Long schoolYearId,
         Long termId,
         Long subjectId,
-        Long classId
+        Long classId,
+        Long institutionId
     ) {
         public static StatementSummary from(Statement statement) {
             return new StatementSummary(
@@ -310,7 +364,8 @@ public class StatementController {
                 statement.getSchoolYearId(),
                 statement.getTermId(),
                 statement.getSubjectId(),
-                statement.getClassId()
+                statement.getClassId(),
+                statement.getInstitutionId()
             );
         }
     }

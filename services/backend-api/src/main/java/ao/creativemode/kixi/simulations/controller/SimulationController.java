@@ -15,7 +15,7 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/simulations")
+@RequestMapping({"/api/v1/simulations", "/api/simulations"})
 public class SimulationController {
 
     private final SimulationService service;

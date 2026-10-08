@@ -85,6 +85,20 @@ class GlobalExceptionHandlerTest {
                 .verifyComplete();
     }
 
+    @Test
+    void registrationRateLimitIncludesRetryAfterHeader() {
+        ServerWebExchange exchange = exchange();
+
+        ResponseEntity<ProblemDetail> response = handler
+                .handleApiException(new RegistrationRateLimitException(317), exchange)
+                .block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(response.getHeaders().getFirst("Retry-After")).isEqualTo("317");
+        assertThat(response.getBody().status()).isEqualTo(429);
+    }
+
     /**
      * A unique-constraint violation reaching the handler unmapped used to be
      * reported as a 500, which told the client to retry a request that can
