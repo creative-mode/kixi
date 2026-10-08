@@ -2,7 +2,6 @@ package ao.creativemode.kixi.shared.exception;
 
 import java.net.URI;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -65,43 +64,37 @@ public class GlobalExceptionHandler {
         return Mono.just(response.body(problem));
     }
 
-/**
- * Handle validation errors from request body binding.
- */
-@ExceptionHandler(WebExchangeBindException.class)
-public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
-    WebExchangeBindException ex,
-    ServerWebExchange exchange
-) {
-        Map<String, Object> fieldErrors = ex
+    /**
+     * Handle validation errors from request body binding.
+     */
+    @ExceptionHandler(WebExchangeBindException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
+        WebExchangeBindException ex,
+        ServerWebExchange exchange
+    ) {
+        // The copy widens Map<String, String> to the Map<String, Object> that ProblemDetail takes.
+        Map<String, Object> fieldErrors = new LinkedHashMap<>(ex
             .getFieldErrors()
             .stream()
             .collect(
                 // A field can break more than one constraint at once — an empty string
                 // fails both @NotBlank and @Size — and toMap throws on a duplicate key,
-                // turning a validation error into a 500. Keep every message instead of
-                // picking one: which constraint the validator reports first is not
-                // guaranteed, and silently dropping one loses information the caller
-                // would otherwise act on.
+                // turning a validation error into a 500. Join the messages per field
+                // instead of picking one: which constraint the validator reports first
+                // is not guaranteed, so keeping a single message would make the answer
+                // depend on ordering.
+                //
+                // Every value stays a plain string. The clients read these with
+                // Object.values(properties).filter(v => typeof v === 'string'), so a
+                // nested object here is silently dropped and the field reads as having
+                // no error at all.
                 Collectors.groupingBy(
                     fieldError -> fieldError.getField(),
                     LinkedHashMap::new,
-                    Collectors.mapping(this::messageFor, Collectors.toList())
+                    Collectors.mapping(
+                        this::messageFor,
+                        Collectors.joining(" · "))
                 )
-            )
-            .entrySet()
-            .stream()
-            .collect(Collectors.toMap(
-                Map.Entry::getKey,
-                entry -> {
-                    List<Object> messages = entry.getValue();
-                    if (messages.size() == 1) {
-                        return messages.get(0);
-                    }
-                    return Map.of("message", messages.get(0), "messages", messages);
-                },
-                (first, ignored) -> first,
-                LinkedHashMap::new
             ));
 
         ProblemDetail problem = ProblemDetail.validationError(
@@ -114,16 +107,11 @@ public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
         return Mono.just(ResponseEntity.badRequest().body(problem));
     }
 
-/** The message to report for one field error, wrapped when the value was rejected. */
-    private Object messageFor(org.springframework.validation.FieldError fieldError) {
-        String msg =
-            fieldError.getDefaultMessage() != null
-                ? fieldError.getDefaultMessage()
-                : "Invalid value";
-        if (fieldError.getRejectedValue() != null) {
-            return Map.of("message", msg);
-        }
-        return msg;
+    /** The message for one field error, as plain text so callers never unwrap a shape. */
+    private String messageFor(org.springframework.validation.FieldError fieldError) {
+        return fieldError.getDefaultMessage() != null
+            ? fieldError.getDefaultMessage()
+            : "Invalid value";
     }
 
     /**
