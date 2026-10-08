@@ -43,6 +43,7 @@ class ClassControllerTest {
                 12,
                 new Course(),
                 new SchoolYear(),
+                7L,
                 LocalDateTime.now(),
                 LocalDateTime.now(),
                 null);
@@ -74,6 +75,7 @@ class ClassControllerTest {
                 12,
                 new Course(),
                 new SchoolYear(),
+                7L,
                 LocalDateTime.now(),
                 LocalDateTime.now(),
                 null);

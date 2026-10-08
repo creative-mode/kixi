@@ -36,12 +36,22 @@ class ClassServiceTest {
     private SchoolYearRepository schoolYearRepository;
     private ClassService service;
 
+    private static final Long ITEL = 7L;
+
     @BeforeEach
     void setUp() {
         repository = mock(ClassRepository.class);
         courseRepository = mock(CourseRepository.class);
         schoolYearRepository = mock(SchoolYearRepository.class);
         service = new ClassService(repository, courseRepository, schoolYearRepository);
+    }
+
+    private Course courseOfSchool(Long institutionId) {
+        Course course = new Course();
+        course.setId(1L);
+        course.setCode("TISM");
+        course.setInstitutionId(institutionId);
+        return course;
     }
 
     @Test
@@ -62,7 +72,7 @@ class ClassServiceTest {
 
     @Test
     void createRejectsNonexistentSchoolYearWithoutTouchingRepository() {
-        when(courseRepository.findById(1L)).thenReturn(Mono.just(new Course()));
+        when(courseRepository.findById(1L)).thenReturn(Mono.just(courseOfSchool(ITEL)));
         when(schoolYearRepository.findById(9999L)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.create(new ClassRequest("12-X", 12, 1L, 9999L)))
@@ -82,6 +92,7 @@ class ClassServiceTest {
         course.setId(1L);
         course.setCode("TOD");
         course.setName("TODOS");
+        course.setInstitutionId(ITEL);
         SchoolYear schoolYear = new SchoolYear();
         schoolYear.setId(1L);
 
@@ -97,8 +108,69 @@ class ClassServiceTest {
                 .assertNext(response -> {
                     assertThat(response.id()).isEqualTo(42L);
                     assertThat(response.code()).isEqualTo("12-TOD");
+                    assertThat(response.institutionId()).isEqualTo(ITEL);
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    void createCopiesTheSchoolOfTheCourseOntoTheClass() {
+        when(courseRepository.findById(1L)).thenReturn(Mono.just(courseOfSchool(99L)));
+        when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
+        when(repository.save(any(Class.class))).thenAnswer(invocation -> {
+            Class entity = invocation.getArgument(0);
+            entity.setId(42L);
+            return Mono.just(entity);
+        });
+
+        StepVerifier.create(service.create(new ClassRequest("12-B", 12, 1L, 1L)))
+                .assertNext(response -> assertThat(response.institutionId()).isEqualTo(99L))
+                .verifyComplete();
+    }
+
+    @Test
+    void createRejectsACourseWithNoSchool() {
+        when(courseRepository.findById(1L)).thenReturn(Mono.just(courseOfSchool(null)));
+        when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
+
+        StepVerifier.create(service.create(new ClassRequest("12-B", 12, 1L, 1L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getMessage())
+                            .isEqualTo("Course has no institution: 1");
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void findAllActiveFiltersBySchoolWhenOneIsGiven() {
+        Class entity = new Class();
+        entity.setId(3L);
+        entity.setCourseId(1L);
+        entity.setSchoolYearId(1L);
+        entity.setInstitutionId(ITEL);
+        when(repository.findAllByInstitutionIdAndDeletedAtIsNull(ITEL))
+                .thenReturn(Flux.just(entity));
+        when(courseRepository.findById(1L)).thenReturn(Mono.just(courseOfSchool(ITEL)));
+        when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
+
+        StepVerifier.create(service.findAllActive(ITEL, null))
+                .assertNext(response -> assertThat(response.institutionId()).isEqualTo(ITEL))
+                .verifyComplete();
+
+        verify(repository, never()).findAllByDeletedAtIsNull();
+    }
+
+    @Test
+    void findAllActiveNarrowsToOneCourseOfTheSchool() {
+        when(repository.findAllByCourseIdAndInstitutionIdAndDeletedAtIsNull(1L, ITEL))
+                .thenReturn(Flux.empty());
+
+        StepVerifier.create(service.findAllActive(ITEL, 1L)).verifyComplete();
+
+        verify(repository, never()).findAllByInstitutionIdAndDeletedAtIsNull(org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test

@@ -21,72 +21,105 @@ public class ClassService {
     private final CourseRepository courseRepository;
     private final SchoolYearRepository schoolYearRepository;
 
-
-    public ClassService(ClassRepository repository,CourseRepository courseRepository,SchoolYearRepository schoolYearRepository){
+    public ClassService(
+            ClassRepository repository,
+            CourseRepository courseRepository,
+            SchoolYearRepository schoolYearRepository) {
         this.repository = repository;
         this.courseRepository = courseRepository;
         this.schoolYearRepository = schoolYearRepository;
     }
 
-
     // Retrieve all active classes
-    public Flux<ClassResponse> findAllActive(){
+    public Flux<ClassResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull().flatMap(this::toResponse);
     }
 
+    /**
+     * Active classes, optionally narrowed to one school and one course. The onboarding
+     * screen passes both: the student picks the school, then the course, then the class.
+     * A class inherits its school from its course, so both filters go through the course.
+     */
+    public Flux<ClassResponse> findAllActive(Long institutionId, Long courseId) {
+        Flux<Class> rows;
+        if (institutionId != null && courseId != null) {
+            rows = repository.findAllByCourseIdAndInstitutionIdAndDeletedAtIsNull(courseId, institutionId);
+        } else if (institutionId != null) {
+            rows = repository.findAllByInstitutionIdAndDeletedAtIsNull(institutionId);
+        } else if (courseId != null) {
+            rows = repository.findByCourseIdAndDeletedAtIsNull(courseId);
+        } else {
+            rows = repository.findAllByDeletedAtIsNull();
+        }
+        return rows.flatMap(this::toResponse);
+    }
+
     // Retrieve all soft-deleted classes
-    public Flux<ClassResponse> findAllDeteted(){
+    public Flux<ClassResponse> findAllDeteted() {
         return repository.findAllByDeletedAtIsNotNull().flatMap(this::toResponse);
     }
 
     // Find a specific active class by ID
-    public Mono<ClassResponse> findByIdActive(Long id){
+    public Mono<ClassResponse> findByIdActive(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("class not found")))
                 .flatMap(this::toResponse);
     }
 
     // Create a new class
-    public Mono<ClassResponse> create(ClassRequest data){
+    public Mono<ClassResponse> create(ClassRequest data) {
         return requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())
-                .then(Mono.defer(() -> {
+                .flatMap(institutionId -> {
                     Class entity = new Class();
                     entity.setCode(data.code());
                     entity.setGrade(data.grade());
                     entity.setCourseId(data.courseId());
                     entity.setSchoolYearId(data.schoolYearId());
+                    entity.setInstitutionId(institutionId);
                     entity.setDeletedAt(null);
 
-                    return repository.save(entity)
-                            .flatMap(this::toResponse)
-                            .onErrorMap(DataIntegrityViolationException.class,
-                                    e -> ApiException.conflict("Class violates a database constraint"));
-                }));
+                    return repository.save(entity);
+                })
+                .flatMap(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("Class violates a database constraint"));
     }
 
     //Update a class
-    public Mono<ClassResponse> update(Long id, ClassRequest data){
+    public Mono<ClassResponse> update(Long id, ClassRequest data) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("class with this id not found")))
                 .flatMap(entity -> requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())
-                        .then(Mono.defer(() -> {
+                        .flatMap(institutionId -> {
                             entity.setCode(data.code());
                             entity.setGrade(data.grade());
                             entity.setSchoolYearId(data.schoolYearId());
                             entity.setCourseId(data.courseId());
-                            return repository.save(entity)
-                                    .onErrorMap(DataIntegrityViolationException.class,
-                                            e -> ApiException.conflict("Class violates a database constraint"));
-                        })))
-                .flatMap(this::toResponse);
+                            entity.setInstitutionId(institutionId);
+                            return repository.save(entity);
+                        }))
+                .flatMap(this::toResponse)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("Class violates a database constraint"));
     }
 
-    private Mono<Void> requireCourseAndSchoolYear(Long courseId, Long schoolYearId) {
+    /**
+     * Validates both references before anything is saved, and hands back the school of
+     * the course: a class always sits in the school of its course, so the school is read
+     * rather than asked for, and the database enforces the same rule.
+     */
+    private Mono<Long> requireCourseAndSchoolYear(Long courseId, Long schoolYearId) {
         return courseRepository.findById(courseId)
                 .switchIfEmpty(Mono.error(ApiException.badRequest("Course not found: " + courseId)))
-                .then(schoolYearRepository.findById(schoolYearId)
-                        .switchIfEmpty(Mono.error(ApiException.badRequest("School year not found: " + schoolYearId))))
-                .then();
+                .flatMap(course -> schoolYearRepository.findById(schoolYearId)
+                        .switchIfEmpty(Mono.error(ApiException.badRequest("School year not found: " + schoolYearId)))
+                        // flatMap, not map: a course with no institution must empty the
+                        // Mono so the switchIfEmpty below can reject it, and Reactor's map
+                        // throws on a null result instead of completing empty.
+                        .flatMap(ignored -> course.getInstitutionId() == null
+                                ? Mono.empty()
+                                : Mono.just(course.getInstitutionId())))
+                .switchIfEmpty(Mono.error(ApiException.badRequest("Course has no institution: " + courseId)));
     }
 
 
@@ -119,6 +152,11 @@ public class ClassService {
     }
 
 
+    /**
+     * Resolves the course and the school year. The school travels as an opaque id, which
+     * is all this module may know about it; a missing course or year yields an empty
+     * object rather than failing the whole list.
+     */
     private Mono<ClassResponse> toResponse(Class entity) {
 
         Mono<Course> courseMono = courseRepository.findById(entity.getCourseId())
@@ -136,8 +174,9 @@ public class ClassService {
                             entity.getId(),
                             entity.getCode(),
                             entity.getGrade(),
-                            courseObj,      //  Complete Course
-                            schoolYearObj,  // Complete SchoolYear
+                            courseObj,          // Complete Course
+                            schoolYearObj,      // Complete SchoolYear
+                            entity.getInstitutionId(),
                             entity.getCreatedAt(),
                             entity.getUpdatedAt(),
                             entity.getDeletedAt()

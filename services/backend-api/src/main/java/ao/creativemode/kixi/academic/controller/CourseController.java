@@ -23,11 +23,13 @@ public class CourseController {
     }
 
     /**
-     * Retrieves all active (non-deleted) courses.
+     * Retrieves all active (non-deleted) courses, optionally only those of one school.
+     * The student onboarding picks the school first and asks for its courses.
      */
     @GetMapping
-    public Mono<ResponseEntity<List<CourseResponse>>> listAllActive() {
-        return service.findAllActive()
+    public Mono<ResponseEntity<List<CourseResponse>>> listAllActive(
+            @RequestParam(required = false) Long institutionId) {
+        return service.findAllActive(institutionId)
                 .collectList()
                 .map(ResponseEntity::ok);
     }

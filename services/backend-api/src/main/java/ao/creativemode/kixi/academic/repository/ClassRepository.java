@@ -48,6 +48,25 @@ public interface ClassRepository extends ReactiveCrudRepository<Class, Long> {
     Flux<Class> findByCourseIdAndDeletedAtIsNull(Long courseId);
 
     /**
+     * Every class of a course, trashed ones included. Soft delete only stamps
+     * {@code deleted_at}, so a deleted class still holds the composite key that ties it
+     * to the school of its course and still blocks moving that course to another school.
+     */
+    Flux<Class> findByCourseId(Long courseId);
+
+    /**
+     * Classes of one school, active only. The onboarding picker asks for this after the
+     * student chooses the school.
+     */
+    Flux<Class> findAllByInstitutionIdAndDeletedAtIsNull(Long institutionId);
+
+    /**
+     * Classes of one course in one school: the last step of the picker, once the student
+     * has chosen both.
+     */
+    Flux<Class> findAllByCourseIdAndInstitutionIdAndDeletedAtIsNull(Long courseId, Long institutionId);
+
+    /**
      * Find classes by school year
      */
     Flux<Class> findBySchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
