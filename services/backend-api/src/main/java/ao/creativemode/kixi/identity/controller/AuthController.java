@@ -7,6 +7,7 @@ import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,9 @@ import java.util.Locale;
  */
 @RestController
 @RequestMapping("/api/v1/auth")
+// Rotas públicas: anula o requisito global de bearer para não mostrar o
+// cadeado no Swagger de login/registo, que não exigem token.
+@SecurityRequirements()
 public class AuthController {
 
     private static final String STATE_COOKIE_NAME = "kixi_oauth_state";

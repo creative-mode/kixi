@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.identity.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -82,6 +83,22 @@ class AuthorizationIntegrationTest {
     @MockBean
     private ao.creativemode.kixi.institutions.service.TeachingAssignmentService teachingAssignmentService;
 
+    /**
+     * O springdoc não é carregado no slice {@code @WebFluxTest} (por isso 404);
+     * o que se valida é a regra de segurança deixar o caminho passar — se não
+     * deixasse, a resposta seria 401/403 antes de chegar ao handler.
+     * O endpoint documentado a sério está verificado em ambiente real:
+     * {@code GET /v3/api-docs} devolve 200 sem autenticação.
+     */
+    @Test
+    void permitsAnonymousApiDocs() {
+        client.get()
+                .uri("/v3/api-docs")
+                .exchange()
+                .expectStatus()
+                .value(status -> assertThat(status).isNotIn(401, 403));
+    }
+
     @Test
     void rejectsAnonymousSimulationReads() {
         client.get()
@@ -90,6 +107,37 @@ class AuthorizationIntegrationTest {
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectHeader().valueMatches("X-Request-ID", "req-[0-9a-f]+");
+    }
+
+    @Test
+    void rejectsAnonymousSimulationReadsOnVersionedRoute() {
+        client.get()
+                .uri("/api/v1/simulations")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void scopesStudentSimulationReadsOnVersionedRoute() {
+        when(simulationService.findAllActiveForAccount(42L)).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/simulations")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(simulationService).findAllActiveForAccount(42L);
+    }
+
+    @Test
+    void rejectsStudentSimulationTrashOnVersionedRoute() {
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/simulations/trash")
+                .exchange()
+                .expectStatus().isForbidden();
     }
 
     @Test

@@ -44,6 +44,11 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
+                        // API documentation (springdoc): schema público, não expõe
+                        // dados. Pode ser desligado via SPRINGDOC_API_DOCS_ENABLED /
+                        // SPRINGDOC_SWAGGER_UI_ENABLED (false fora de dev).
+                        .pathMatchers("/v3/api-docs/**", "/swagger-ui.html",
+                                "/swagger-ui/**", "/webjars/**").permitAll()
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
@@ -99,11 +104,14 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers/trash",
+                                "/api/v1/simulations/trash",
                                 "/api/simulations/trash")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations",
+                                "/api/v1/simulations/**",
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .authenticated()
@@ -113,17 +121,22 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations",
+                                "/api/v1/simulations/**",
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers(HttpMethod.PUT,
+                                "/api/v1/simulations/*/restore",
                                 "/api/simulations/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulation-answers/*",
+                                "/api/v1/simulations/*",
                                 "/api/simulations/*")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers("/api/v1/simulation-answers", "/api/v1/simulation-answers/**",
+                                "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .anyExchange().authenticated()
