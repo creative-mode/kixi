@@ -2,7 +2,8 @@ package ao.creativemode.kixi.shared.exception;
 
 import org.springframework.http.HttpStatus;
 
-public final class RegistrationRateLimitException extends ApiException {
+/** Carries its own retry delay so the global handler can set Retry-After. */
+public final class RegistrationRateLimitException extends ApiException implements RetryAfter {
 
     private final long retryAfterSeconds;
 

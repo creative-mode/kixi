@@ -73,6 +73,14 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
                                 "/api/v1/me", "/api/v1/me/**")
                         .authenticated()
+                        // The AI tutor (issue #114). Every signed-in account may
+                        // chat; the service scopes each turn to the caller's own
+                        // session and to that session's visible statement. An
+                        // explicit rule keeps this path out of anyExchange() —
+                        // the fall-through that twice let a student reach
+                        // material it should not (teaching-assignments, gabarito).
+                        .pathMatchers("/api/v1/chat/**")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
