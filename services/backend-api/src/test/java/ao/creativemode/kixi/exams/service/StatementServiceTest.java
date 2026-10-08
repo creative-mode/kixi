@@ -666,7 +666,7 @@ class StatementServiceTest {
 
     // ── Fixtures ────────────────────────────────────────────────────────────
 
-// ── The hole in the institution-less carve-out ─────────────────────────
+    // ── The hole in the institution-less carve-out ─────────────────────────
 
     private static final Long SOMEONE_ELSES_CLASS_ID = 3L;
 

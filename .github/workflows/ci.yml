@@ -14,6 +14,31 @@ permissions:
   contents: read
 
 jobs:
+  hygiene:
+    name: Higiene de texto
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Encoding e indentação. Nenhum dos dois falha o build, e ambos já
+      # passaram por revisão humana: os bytes de U+2500 reinterpretados como
+      # Latin-1 ao resolver conflitos, e membros encostados à coluna zero.
+      - name: Verificar encoding e indentação
+        run: node .github/scripts/text-hygiene.js
+
+      # O checker novo tem de se manter honesto: um teste que passa sem
+      # apanhar nada é pior do que nenhum teste.
+      - name: Testar os scripts
+        run: |
+          node --test .github/scripts/bots.test.js
+          node --test .github/scripts/text-hygiene.test.js
+
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
