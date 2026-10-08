@@ -20,6 +20,7 @@ import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
+import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
@@ -31,9 +32,10 @@ import reactor.core.publisher.Mono;
  * The signed-in account's profile: identity, roles and current academic
  * context (school, course, class).
  *
- * <p>The school comes from the account's active institution links (the
- * first one when several exist); course and class come from the most
- * recent active enrollment.</p>
+ * <p>The school comes from the most recent active enrollment — through the
+ * class, which carries the school of its course — and falls back to the
+ * account's own institution link when there is no enrollment to read it from.
+ * Course and class come from that same enrollment.</p>
  */
 @Service
 public class MeService {
@@ -83,7 +85,7 @@ public class MeService {
                 loadRoleNames(accountId).collectList(),
                 currentEnrollment(accountId).map(Optional::<EnrollmentContext>of)
                     .defaultIfEmpty(Optional.empty()),
-                currentSchool(accountId).map(Optional::<MeResponse.SchoolInfo>of)
+                resolveSchool(accountId).map(Optional::<MeResponse.SchoolInfo>of)
                     .defaultIfEmpty(Optional.empty())
             ).map(tuple -> {
                 User user = tuple.getT1();
@@ -153,14 +155,47 @@ public class MeService {
                 .map(course -> new EnrollmentContext(tuple.getT1(), course, schoolYearLabel(tuple.getT2())))));
     }
 
-    private Mono<MeResponse.SchoolInfo> currentSchool(Long accountId) {
+    /**
+     * The school of the class the account is enrolled in. This wins over an explicit
+     * administrator link: the enrollment already names a class, the class carries the
+     * school of its course, and showing one school with the course and class of another
+     * reads as a mistake on the screen. The link is what fills the gap when there is no
+     * enrollment to read the school from.
+     */
+    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId) {
+        return enrolledSchool(accountId).switchIfEmpty(linkedSchool(accountId));
+    }
+
+    /**
+     * The school of the most recent active enrollment, resolved through the class.
+     */
+    private Mono<MeResponse.SchoolInfo> enrolledSchool(Long accountId) {
+        return enrollmentRepository.findAllByAccountIdAndDeletedAtIsNull(accountId)
+            .sort(Comparator.comparing(Enrollment::getId).reversed())
+            .next()
+            .flatMap(enrollment -> classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId()))
+            .flatMap(clazz -> clazz.getInstitutionId() == null
+                ? Mono.empty()
+                : institutionRepository.findByIdAndDeletedAtIsNull(clazz.getInstitutionId()))
+            .map(MeService::toSchoolInfo);
+    }
+
+    /**
+     * The explicit link an administrator set, used only when the account has no
+     * enrollment to read a school from.
+     */
+    private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
         return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
             .singleOrEmpty()
             .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
             .next()
             .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
-            .map(institution -> new MeResponse.SchoolInfo(
-                institution.getId(), institution.getCode(), institution.getName()));
+            .map(MeService::toSchoolInfo);
+    }
+
+    private static MeResponse.SchoolInfo toSchoolInfo(Institution institution) {
+        return new MeResponse.SchoolInfo(
+            institution.getId(), institution.getCode(), institution.getName());
     }
 
     private static String schoolYearLabel(SchoolYear schoolYear) {
