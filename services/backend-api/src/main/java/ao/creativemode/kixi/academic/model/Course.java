@@ -28,6 +28,13 @@ public class Course {
     @Column("description")
     private String description;
 
+    /**
+     * The school that offers this course. A class carries no institution of its own:
+     * it inherits the school from here, so the two can never disagree.
+     */
+    @Column("institution_id")
+    private Long institutionId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;

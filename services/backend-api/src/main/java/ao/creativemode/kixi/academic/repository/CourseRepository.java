@@ -27,6 +27,12 @@ public interface CourseRepository extends ReactiveCrudRepository<Course, Long> {
     Flux<Course> findByNameIgnoreCaseAndDeletedAtIsNull(String name);
 
     /**
+     * Courses offered by one school. This is what the onboarding picker needs:
+     * pick the school, then only its courses.
+     */
+    Flux<Course> findAllByInstitutionIdAndDeletedAtIsNull(Long institutionId);
+
+    /**
      * Find courses by name containing (case-insensitive)
      */
     Flux<Course> findByNameContainingIgnoreCaseAndDeletedAtIsNull(String name);
