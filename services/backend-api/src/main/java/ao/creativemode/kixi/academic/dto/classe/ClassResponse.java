@@ -10,6 +10,8 @@ public record ClassResponse(
     Integer grade,
     Course course,
     SchoolYear schoolYear,
+    /** Opaque reference to the school, always equal to the course's institution. */
+    Long institutionId,
     LocalDateTime createdAt,
     LocalDateTime updatedAt,
     LocalDateTime deletedAt

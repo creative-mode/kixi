@@ -27,6 +27,14 @@ public class Class {
     @Column("school_year_id")
     private Long schoolYearId;
 
+    /**
+     * The school this class sits in. The backend requires it to equal the course's
+     * institution, enforced by a composite foreign key, so the two cannot drift.
+     * It is an opaque id here: this module does not depend on the institutions one.
+     */
+    @Column("institution_id")
+    private Long institutionId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
