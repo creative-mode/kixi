@@ -328,15 +328,21 @@ public class StatementService {
     }
 
     /**
-     * Every multiple-choice question of the statement has an active correct
+     * Every question of the statement that has alternatives has an active correct
      * option. The name is the one the issue gives the rule.
+     *
+     * <p>Keyed on the options being there rather than on {@code question_type}: a
+     * question is written before its alternatives exist, so the column cannot be
+     * relied on to say which questions are multiple choice, and three spellings of
+     * it are in circulation besides. What makes a question one that needs an answer
+     * is that it offers alternatives.
      *
      * <p>Active as well as correct: {@code setCorrectOption} and the marking
      * query both ignore removed rows, so a correct flag left on a removed option
      * is not an answer.
      */
     private Mono<Void> answerKeyComplete(Statement statement) {
-        return questionRepository.findMultipleChoiceWithoutCorrectOption(statement.getId())
+        return questionRepository.findQuestionsWithoutCorrectOption(statement.getId())
             .map(Question::getNumber)
             .collectList()
             .flatMap(unanswered -> {
@@ -344,7 +350,7 @@ public class StatementService {
                     return Mono.empty();
                 }
                 return Mono.error(ApiException.unprocessableEntity(
-                    "These questions have no correct option marked: question "
+                    "These questions have options but no correct option marked: question "
                         + unanswered.stream().map(String::valueOf).collect(Collectors.joining(", "))));
             });
     }

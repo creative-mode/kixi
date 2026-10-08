@@ -517,7 +517,7 @@ givenTheStatementIsReadable();
      */
     private void givenTheStatementIsReadyToApprove() {
         givenTheStatementIsReadable();
-        when(questions.findMultipleChoiceWithoutCorrectOption(1L)).thenReturn(Flux.empty());
+        when(questions.findQuestionsWithoutCorrectOption(1L)).thenReturn(Flux.empty());
         when(questions.calculateTotalMaxScore(1L)).thenReturn(Mono.just(0.0));
     }
 

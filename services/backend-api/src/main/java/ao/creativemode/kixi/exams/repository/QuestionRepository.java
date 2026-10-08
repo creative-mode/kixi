@@ -231,24 +231,39 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Mono<Double> calculateTotalMaxScore(Long statementId);
 
     /**
-     * The multiple-choice questions of a statement that no active option answers.
+     * The questions of a statement that have alternatives and no answer to them.
      *
-     * <p>One row per unanswered question, so the caller can name them in the error
-     * instead of only counting them. The option has to be active as well as
-     * correct: an answer on a removed option is not an answer.
+     * <p>One row per question, so the caller can name them in the error instead of
+     * only counting them. Both halves of the option condition matter: it has to be
+     * active to count as an answer, and it has to be there at all for the question
+     * to be one that needs one.
+     *
+     * <p>Deliberately not keyed on {@code question_type}. That column is free text
+     * and three vocabularies are in circulation: the OCR paths write
+     * {@code multiple_choice} and {@code development}, the exam builder writes
+     * {@code multiple_choice} when a question has options, and the question CRUD
+     * defaults to {@code open} because a question is created before its options
+     * exist and cannot derive the type from them yet. Asking the column would
+     * leave the gate watching only the writers that happen to spell it the way the
+     * gate expects. Having alternatives is the thing being checked instead, which
+     * is the rule {@code ManualStatementService} already applies when it picks
+     * between {@code open} and {@code multiple_choice}.
      */
     @Query(
             "SELECT q.* FROM questions q "
                     + "WHERE q.statement_id = :statementId "
-                    + "AND q.question_type = 'multiple_choice' "
                     + "AND q.deleted_at IS NULL "
+                    + "AND EXISTS ("
+                    + "  SELECT 1 FROM question_options o "
+                    + "  WHERE o.question_id = q.id AND o.deleted_at IS NULL"
+                    + ") "
                     + "AND NOT EXISTS ("
                     + "  SELECT 1 FROM question_options o "
                     + "  WHERE o.question_id = q.id AND o.deleted_at IS NULL AND o.is_correct = TRUE"
                     + ") "
                     + "ORDER BY q.number ASC"
     )
-    Flux<Question> findMultipleChoiceWithoutCorrectOption(Long statementId);
+    Flux<Question> findQuestionsWithoutCorrectOption(Long statementId);
 
     /**
      * Find the next order index for a statement

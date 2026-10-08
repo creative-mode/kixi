@@ -292,13 +292,13 @@ class StatementServiceTest {
     // ── What has to be true before a statement goes live ────────────────────
 
     @Test
-    void refusesToApproveWhileAMultipleChoiceQuestionHasNoAnswer() {
+    void refusesToApproveWhileAQuestionWithOptionsHasNoAnswer() {
         // An unanswered question cannot be graded, and the teacher who finds
         // that out is the one marking it, long after the paper looked ready.
         Statement existing = statement(1L);
         existing.setNeedsReview(true);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
                 .thenReturn(Flux.just(question(2L, 2), question(5L, 7)));
 
         StepVerifier.create(service.approveReview(1L, 9L, true))
@@ -314,13 +314,54 @@ class StatementServiceTest {
     }
 
     @Test
+    void theQuestionTypeDoesNotDecideWhetherAnAnswerIsNeeded() {
+        // The gate used to look for question_type = 'multiple_choice', which
+        // left it watching only the writers that spell the type that way. The
+        // question CRUD writes "open" by default because a question is created
+        // before its options exist, so a question that got its alternatives
+        // afterwards was never checked at all — with or without an answer.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        Question openWithOptions = question(9L, 4);
+        openWithOptions.setQuestionType("open");
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(openWithOptions));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void theErrorSaysTheQuestionsHaveOptionsRatherThanNamingTheType() {
+        // The message is what the author reads at 11pm. "No correct option"
+        // told them what was missing; saying "multiple choice" would have told
+        // them to look at a column that decided nothing.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(4L, 4)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .contains("have options but no correct option marked")
+                        .contains("4"))
+                .verify();
+    }
+
+    @Test
     void anAnswerOnARemovedOptionDoesNotCount() {
         // is_correct is only read from the active options, so a correct flag
         // left on a removed option is not an answer.
         Statement existing = statement(1L);
         existing.setNeedsReview(true);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
                 .thenReturn(Flux.just(question(3L, 4)));
 
         StepVerifier.create(service.approveReview(1L, 9L, true))
@@ -406,7 +447,7 @@ class StatementServiceTest {
         existing.setNeedsReview(true);
         existing.setTotalMaxScore(20.0);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(questionRepository.findMultipleChoiceWithoutCorrectOption(1L))
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
                 .thenReturn(Flux.just(question(4L, 3)));
 
         StepVerifier.create(service.approveReview(1L, 9L, true))
@@ -584,9 +625,9 @@ class StatementServiceTest {
         return statement;
     }
 
-    /** Every multiple-choice question of the statement has an answer. */
+    /** No question of the statement has alternatives without an answer. */
     private void givenTheAnswerKeyIsComplete() {
-        when(questionRepository.findMultipleChoiceWithoutCorrectOption(anyLong())).thenReturn(Flux.empty());
+        when(questionRepository.findQuestionsWithoutCorrectOption(anyLong())).thenReturn(Flux.empty());
     }
 
     private void givenTheScoresAddUp(double sum) {
