@@ -32,10 +32,10 @@ import reactor.core.publisher.Mono;
  * The signed-in account's profile: identity, roles and current academic
  * context (school, course, class).
  *
- * <p>The school is the account's own institution link when it has one, and
- * otherwise the school of the class it is enrolled in — so a student who
- * enrolled themselves still sees a complete profile. Course and class come
- * from the most recent active enrollment.</p>
+ * <p>The school comes from the most recent active enrollment — through the
+ * class, which carries the school of its course — and falls back to the
+ * account's own institution link when there is no enrollment to read it from.
+ * Course and class come from that same enrollment.</p>
  */
 @Service
 public class MeService {
@@ -155,27 +155,19 @@ public class MeService {
                 .map(course -> new EnrollmentContext(tuple.getT1(), course, schoolYearLabel(tuple.getT2())))));
     }
 
-    /** Explicit administrator link first, then the school implied by the enrollment. */
-    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId) {
-        return linkedSchool(accountId).switchIfEmpty(enrolledSchool(accountId));
-    }
-
     /**
-     * The explicit link an administrator can set, which wins when it exists.
+     * The school of the class the account is enrolled in. This wins over an explicit
+     * administrator link: the enrollment already names a class, the class carries the
+     * school of its course, and showing one school with the course and class of another
+     * reads as a mistake on the screen. The link is what fills the gap when there is no
+     * enrollment to read the school from.
      */
-    private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
-        return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
-            .singleOrEmpty()
-            .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
-            .next()
-            .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
-            .map(MeService::toSchoolInfo);
+    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId) {
+        return enrolledSchool(accountId).switchIfEmpty(linkedSchool(accountId));
     }
 
     /**
-     * Fallback for a student who enrolled themselves: the school of the class they are
-     * in. Without this, an account that has never been touched by an administrator
-     * answered {@code school: null} even with a valid enrollment.
+     * The school of the most recent active enrollment, resolved through the class.
      */
     private Mono<MeResponse.SchoolInfo> enrolledSchool(Long accountId) {
         return enrollmentRepository.findAllByAccountIdAndDeletedAtIsNull(accountId)
@@ -185,6 +177,19 @@ public class MeService {
             .flatMap(clazz -> clazz.getInstitutionId() == null
                 ? Mono.empty()
                 : institutionRepository.findByIdAndDeletedAtIsNull(clazz.getInstitutionId()))
+            .map(MeService::toSchoolInfo);
+    }
+
+    /**
+     * The explicit link an administrator set, used only when the account has no
+     * enrollment to read a school from.
+     */
+    private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
+        return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .singleOrEmpty()
+            .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
+            .next()
+            .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
             .map(MeService::toSchoolInfo);
     }
 

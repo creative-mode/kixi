@@ -16,6 +16,12 @@ import java.time.LocalDateTime;
 @Service
 public class CourseService {
 
+    /** The constraint that fails when the course names a school that does not exist. */
+    private static final String FK_INSTITUTION = "fk_courses_institution";
+
+    /** The composite constraint tying a class to the school of its course. */
+    private static final String FK_CLASSES_COURSE_INSTITUTION = "fk_classes_course_institution";
+
     private final CourseRepository repository;
     private final ClassRepository classRepository;
 
@@ -70,7 +76,7 @@ public class CourseService {
         return repository.save(entity)
                 .map(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
-                        e -> ApiException.conflict("A course with code " + code + " already exists"));
+                        e -> integrityFailure(e, code, "A course with code " + code + " already exists"));
     }
 
     public Mono<CourseResponse> update(Long id, CourseRequest request) {
@@ -103,7 +109,28 @@ public class CourseService {
                 })
                 .map(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
-                        e -> ApiException.conflict("Another course with code " + code + " already exists"));
+                        e -> integrityFailure(e, code,
+                                "Another course with code " + code + " already exists"));
+    }
+
+    /**
+     * A violated foreign key and a duplicated code are both integrity violations, and
+     * telling them apart is what keeps the message honest: `academic` cannot verify the
+     * school exists (it must not depend on the `institutions` module), so the only thing
+     * that separates the two is which constraint the database reported.
+     */
+    private ApiException integrityFailure(DataIntegrityViolationException e, String code, String duplicateCode) {
+        String detail = String.valueOf(e.getMostSpecificCause().getMessage());
+        if (detail.contains(FK_INSTITUTION)) {
+            return ApiException.unprocessableEntity(
+                    "No institution exists with that id");
+        }
+        if (detail.contains(FK_CLASSES_COURSE_INSTITUTION)) {
+            return ApiException.conflict(
+                    "This course already has classes in its current school. "
+                            + "Move the classes to the other school before changing it.");
+        }
+        return ApiException.conflict(duplicateCode);
     }
 
     /**
@@ -111,14 +138,19 @@ public class CourseService {
      * moving a course that already has classes to another school would either fail on
      * that constraint or, worse, be reported as a duplicate code. Say what is actually
      * wrong instead: the classes have to move first.
+     *
+     * <p>Trashed classes count too. Soft delete only stamps {@code deleted_at}, so the
+     * row stays in {@code classes} and stays held by the composite key; a course whose
+     * classes are all in the trash would pass this check and then fail on the save.
      */
     private Mono<Void> requireNoClassesInTheOldSchool(Course course) {
-        return classRepository.findByCourseIdAndDeletedAtIsNull(course.getId())
+        return classRepository.findByCourseId(course.getId())
                 .hasElements()
                 .flatMap(hasClasses -> hasClasses
                         ? Mono.error(ApiException.conflict(
-                                "This course already has classes in its current school. "
-                                        + "Move the classes to the other school before changing it."))
+                                "This course already has classes in its current school, "
+                                        + "including deleted ones. "
+                                        + "Move or purge the classes before changing it."))
                         : Mono.empty());
     }
 

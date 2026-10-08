@@ -12,13 +12,15 @@ ALTER TABLE classes ADD COLUMN IF NOT EXISTS institution_id BIGINT;
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS institution_id BIGINT;
 
 -- Nothing records which school the existing courses and classes belonged to, so the only
--- defensible backfill is the oldest institution. Fail loudly when there is academic data
--- but no institution to attribute it to, instead of guessing.
+-- defensible backfill is the oldest institution that still exists. A soft-deleted school is
+-- skipped: attributing academic data to a school nobody can reach would leave the rows
+-- pointing at something that is not there. Fail loudly when there is academic data but no
+-- live institution to attribute it to, instead of guessing.
 DO $$
 DECLARE
     fallback BIGINT;
 BEGIN
-    SELECT MIN(id) INTO fallback FROM institutions;
+    SELECT MIN(id) INTO fallback FROM institutions WHERE deleted_at IS NULL;
 
     IF EXISTS (SELECT 1 FROM courses) AND fallback IS NULL THEN
         RAISE EXCEPTION

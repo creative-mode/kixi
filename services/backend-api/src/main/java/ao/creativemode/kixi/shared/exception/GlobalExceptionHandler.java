@@ -1,6 +1,8 @@
 package ao.creativemode.kixi.shared.exception;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -63,32 +65,44 @@ public class GlobalExceptionHandler {
         return Mono.just(response.body(problem));
     }
 
-    /**
-     * Handle validation errors from request body binding.
-     */
-    @ExceptionHandler(WebExchangeBindException.class)
-    public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
-        WebExchangeBindException ex,
-        ServerWebExchange exchange
-    ) {
+/**
+ * Handle validation errors from request body binding.
+ */
+@ExceptionHandler(WebExchangeBindException.class)
+public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
+    WebExchangeBindException ex,
+    ServerWebExchange exchange
+) {
         Map<String, Object> fieldErrors = ex
             .getFieldErrors()
             .stream()
             .collect(
-                Collectors.toMap(
+                // A field can break more than one constraint at once — an empty string
+                // fails both @NotBlank and @Size — and toMap throws on a duplicate key,
+                // turning a validation error into a 500. Keep every message instead of
+                // picking one: which constraint the validator reports first is not
+                // guaranteed, and silently dropping one loses information the caller
+                // would otherwise act on.
+                Collectors.groupingBy(
                     fieldError -> fieldError.getField(),
-                    fieldError -> {
-                        String msg =
-                            fieldError.getDefaultMessage() != null
-                                ? fieldError.getDefaultMessage()
-                                : "Invalid value";
-                        if (fieldError.getRejectedValue() != null) {
-                            return Map.of("message", msg);
-                        }
-                        return msg;
-                    }
+                    LinkedHashMap::new,
+                    Collectors.mapping(this::messageFor, Collectors.toList())
                 )
-            );
+            )
+            .entrySet()
+            .stream()
+            .collect(Collectors.toMap(
+                Map.Entry::getKey,
+                entry -> {
+                    List<Object> messages = entry.getValue();
+                    if (messages.size() == 1) {
+                        return messages.get(0);
+                    }
+                    return Map.of("message", messages.get(0), "messages", messages);
+                },
+                (first, ignored) -> first,
+                LinkedHashMap::new
+            ));
 
         ProblemDetail problem = ProblemDetail.validationError(
             "Validation failed for one or more fields",
@@ -98,6 +112,18 @@ public class GlobalExceptionHandler {
         problem = problem.withInstance(exchange);
 
         return Mono.just(ResponseEntity.badRequest().body(problem));
+    }
+
+/** The message to report for one field error, wrapped when the value was rejected. */
+    private Object messageFor(org.springframework.validation.FieldError fieldError) {
+        String msg =
+            fieldError.getDefaultMessage() != null
+                ? fieldError.getDefaultMessage()
+                : "Invalid value";
+        if (fieldError.getRejectedValue() != null) {
+            return Map.of("message", msg);
+        }
+        return msg;
     }
 
     /**

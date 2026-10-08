@@ -115,7 +115,7 @@ class CourseServiceTest {
     void updateRefusesToMoveACourseThatAlreadyHasClasses() {
         Course existing = course(1L, "TOD", "TODOS");
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L))
+        when(classRepository.findByCourseId(1L))
                 .thenReturn(Flux.just(new ao.creativemode.kixi.academic.model.Class()));
 
         StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
@@ -134,7 +134,7 @@ class CourseServiceTest {
     void updateAllowsMovingACourseWithNoClasses() {
         Course existing = course(1L, "TOD", "TODOS");
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(classRepository.findByCourseId(1L)).thenReturn(Flux.empty());
         when(repository.save(any(Course.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
         StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
@@ -152,7 +152,7 @@ class CourseServiceTest {
                 .assertNext(response -> assertThat(response.code()).isEqualTo("TOD2"))
                 .verifyComplete();
 
-        verify(classRepository, never()).findByCourseIdAndDeletedAtIsNull(any());
+        verify(classRepository, never()).findByCourseId(any());
     }
 
     @Test
@@ -281,6 +281,106 @@ class CourseServiceTest {
         StepVerifier.create(service.create(new CourseRequest("TISM", "Tecnico", null, ITEL)))
                 .assertNext(response -> assertThat(response.institutionId()).isEqualTo(ITEL))
                 .verifyComplete();
+    }
+
+    // ── Telling a duplicated code from a school that does not exist ─────────
+
+    @Test
+    void createSaysTheSchoolIsUnknownWhenTheInstitutionKeyIsTheOneThatFailed() {
+        // `academic` cannot check the school exists without depending on the
+        // `institutions` module, so the constraint the database reported is the
+        // only thing that separates the two cases.
+        when(repository.save(any(Course.class))).thenReturn(Mono.error(
+                new DataIntegrityViolationException(
+                        "could not execute statement [ERROR: insert into courses violates foreign key constraint fk_courses_institution]")));
+
+        StepVerifier.create(service.create(new CourseRequest("TISM", "Tecnico", null, 404L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(422);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("No institution exists with that id");
+                })
+                .verify();
+    }
+
+    @Test
+    void createStillReportsADuplicatedCodeAsAConflict() {
+        when(repository.save(any(Course.class))).thenReturn(Mono.error(
+                new DataIntegrityViolationException(
+                        "could not execute statement [ERROR: insert into courses violates unique constraint uc_courses_code]")));
+
+        StepVerifier.create(service.create(new CourseRequest("TISM", "Tecnico", null, ITEL)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("A course with code TISM already exists");
+                })
+                .verify();
+    }
+
+    @Test
+    void updateSaysTheSchoolIsUnknownWhenTheInstitutionKeyIsTheOneThatFailed() {
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseId(1L)).thenReturn(Flux.empty());
+        when(repository.save(any(Course.class))).thenReturn(Mono.error(
+                new DataIntegrityViolationException(
+                        "could not execute statement [ERROR: update courses violates foreign key constraint fk_courses_institution]")));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 404L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(422);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("No institution exists with that id");
+                })
+                .verify();
+    }
+
+    @Test
+    void updateReportsTheClassesHoldingTheSchoolWhenTheCompositeKeyIsTheOneThatFailed() {
+        // The trashed-class check catches this first in normal operation; this is
+        // the backstop for a class that appeared between the check and the save.
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseId(1L)).thenReturn(Flux.empty());
+        when(repository.save(any(Course.class))).thenReturn(Mono.error(
+                new DataIntegrityViolationException(
+                        "could not execute statement [ERROR: update courses violates foreign key constraint fk_classes_course_institution]")));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("already has classes");
+                })
+                .verify();
+    }
+
+    // ── Trashed classes still hold the course to its school ────────────────
+
+    @Test
+    void updateRefusesToMoveACourseWhoseOnlyClassesAreTrashed() {
+        // Soft delete only stamps deleted_at, so the row is still in `classes` and
+        // still held by the composite key. Checking only the active ones let this
+        // pass the verification and then fail on the save with a duplicate-code
+        // message that was plainly false.
+        Course existing = course(1L, "TOD", "TODOS");
+        ao.creativemode.kixi.academic.model.Class trashed =
+                new ao.creativemode.kixi.academic.model.Class();
+        trashed.markAsDeleted();
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseId(1L)).thenReturn(Flux.just(trashed));
+
+        StepVerifier.create(service.update(1L, new CourseRequest("TOD", "TODOS", null, 99L)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("including deleted ones");
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
     }
 
     private Course course(Long id, String code, String name) {
