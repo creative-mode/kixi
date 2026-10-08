@@ -64,16 +64,16 @@ public class GlobalExceptionHandler {
         return Mono.just(response.body(problem));
     }
 
-/**
- * Handle validation errors from request body binding.
- */
-@ExceptionHandler(WebExchangeBindException.class)
-public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
-    WebExchangeBindException ex,
-    ServerWebExchange exchange
-) {
+    /**
+     * Handle validation errors from request body binding.
+     */
+    @ExceptionHandler(WebExchangeBindException.class)
+    public Mono<ResponseEntity<ProblemDetail>> handleValidationErrors(
+        WebExchangeBindException ex,
+        ServerWebExchange exchange
+    ) {
         // The copy widens Map<String, String> to the Map<String, Object> that ProblemDetail takes.
-Map<String, Object> fieldErrors = new LinkedHashMap<>(ex
+        Map<String, Object> fieldErrors = new LinkedHashMap<>(ex
             .getFieldErrors()
             .stream()
             .collect(
@@ -107,7 +107,7 @@ Map<String, Object> fieldErrors = new LinkedHashMap<>(ex
         return Mono.just(ResponseEntity.badRequest().body(problem));
     }
 
-/** The message for one field error, as plain text so callers never unwrap a shape. */
+    /** The message for one field error, as plain text so callers never unwrap a shape. */
     private String messageFor(org.springframework.validation.FieldError fieldError) {
         return fieldError.getDefaultMessage() != null
             ? fieldError.getDefaultMessage()
