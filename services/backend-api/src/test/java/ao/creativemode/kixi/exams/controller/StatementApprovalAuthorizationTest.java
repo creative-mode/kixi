@@ -19,6 +19,7 @@ import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementLinkValidationService;
+import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
@@ -72,7 +73,7 @@ import reactor.core.publisher.Mono;
 @Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class,
         CurrentAccountService.class, JwtAuthenticationFilter.class, RequestIdWebFilter.class,
         StatementService.class, InstitutionAccessService.class, TeachingAssignmentService.class,
-        StatementLinkValidationService.class})
+        StatementLinkValidationService.class, StatementWriteAccessService.class})
 class StatementApprovalAuthorizationTest {
 
     private static final Long ADMIN_ID = 1L;

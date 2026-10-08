@@ -30,19 +30,22 @@ public class StatementService {
     private final QuestionOptionRepository optionRepository;
     private final InstitutionAccessService accessService;
     private final StatementLinkValidationService validator;
+    private final StatementWriteAccessService writeAccess;
 
     public StatementService(
         StatementRepository statementRepository,
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
         InstitutionAccessService accessService,
-        StatementLinkValidationService validator
+        StatementLinkValidationService validator,
+        StatementWriteAccessService writeAccess
     ) {
         this.statementRepository = statementRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.accessService = accessService;
         this.validator = validator;
+        this.writeAccess = writeAccess;
     }
 
     // =========================================================================
@@ -419,44 +422,8 @@ public class StatementService {
     // Authorization
     // =========================================================================
 
-    /**
-     * Whether the account may change this statement: an administrator may do
-     * anything, a teacher only the statements of the classes and subjects they
-     * were assigned to.
-     */
+    /** The statement-scoped write rule, shared with the question and option services. */
     private Mono<Statement> requireCanEdit(Statement statement, Long accountId, boolean admin) {
-        if (statement.getInstitutionId() == null) {
-            if (statement.getClassId() == null) {
-                // Statements created before the institution model (the OCR flows)
-                // carry no school and no class, so there is nothing to weigh
-                // them against. Backfilling them is a separate concern.
-                return Mono.just(statement);
-            }
-            // No school to check them against, but the class is still on them.
-            // Returning straight away let any teacher edit, delete or approve a
-            // statement sitting in a class they do not teach.
-            return accessService
-                .requireAssignedTo(accountId, admin, statement.getClassId(), statement.getSubjectId())
-                .thenReturn(statement);
-        }
-        if (statement.getClassId() == null && !admin) {
-            // A school statement without a class is not scoped to any class, so
-            // no teaching assignment can be checked against it. Only an
-            // administrator may build one (ManualStatementService), and the
-            // rule has to read the same way on the way back in: otherwise any
-            // teacher affiliated to the school, holding no assignment at all,
-            // could approve or delete a statement the school made on purpose.
-            return Mono.error(ApiException.forbidden(
-                "Only an administrator may change a statement without a class"));
-        }
-        return accessService
-            .requireCanAuthor(
-                accountId,
-                admin,
-                statement.getInstitutionId(),
-                statement.getSubjectId(),
-                statement.getClassId()
-            )
-            .thenReturn(statement);
+        return writeAccess.requireCanWrite(statement, accountId, admin);
     }
 }
