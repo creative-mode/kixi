@@ -6,10 +6,16 @@ import jakarta.validation.constraints.Size;
 /**
  * An option as accepted when creating or editing one.
  *
- * <p>{@code isCorrect} may be set on creation. Marking an answer on an existing
- * option is {@code PUT .../correct-option}, which clears the others in the same
- * question, so setting it here is only honoured for the options this request
- * creates.
+ * <p>{@code isCorrect} is honoured on both create and edit, and goes through the
+ * same rewrite in each, which clears the other options of the question so the
+ * answer stays singular. It used to be honoured on create only, and silently
+ * dropped on edit: the body asked for the option to become the answer, got a
+ * 200, and nothing changed.
+ *
+ * <p>{@code optionLabel} is not editable. It is the option's identity and is
+ * unique per question — a constraint that does not know about removed rows, so a
+ * label stays taken once used. {@code PUT .../correct-option} remains the plain
+ * way to mark an answer, and needs no label at all.
  */
 public record QuestionOptionRequest(
     @NotBlank(message = "The option label is required")

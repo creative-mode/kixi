@@ -46,7 +46,7 @@ class QuestionServiceTest {
         service = new QuestionService(questions, options, statements, writeAccess);
     }
 
-    // â”€â”€ Numbering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Numbering ───────────────────────────────────────────────────────────
 
     @Test
     void createTakesTheNextNumberAndOrderFromWhatTheStatementHolds() {
@@ -75,9 +75,9 @@ class QuestionServiceTest {
         when(questions.findNextOrderIndex(STATEMENT_ID)).thenReturn(Mono.just(0));
         when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        // The vocabulary is not settled between the OCR paths ("development")
-        // and the builder ("open"), so an unspecified type falls back to one of
-        // them rather than being refused.
+        // The vocabulary is not settled between the OCR paths ("development") and
+        // the builder ("open"), so an unspecified type falls back to one of them
+        // rather than being refused.
         StepVerifier.create(service.create(STATEMENT_ID, request(null, "Explique"), ACCOUNT_ID, false))
                 .assertNext(response -> {
                     assertThat(response.questionType()).isEqualTo("open");
@@ -111,7 +111,7 @@ class QuestionServiceTest {
                 .verifyComplete();
     }
 
-    // â”€â”€ Ownership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Ownership ───────────────────────────────────────────────────────────
 
     @Test
     void aQuestionOfAnotherStatementIsNotFoundAndNothingIsWritten() {
@@ -152,10 +152,92 @@ class QuestionServiceTest {
                 .verify();
     }
 
-    // â”€â”€ Reordering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    @Test
+    void aReaderOnlyReachesAPublishedStatement() {
+        // The statement exists but was never published, so for anyone who is not
+        // staff it is the same answer as for an id that does not exist.
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    // ── What a reader does and does not see ─────────────────────────────────
+
+    @Test
+    void aReaderGetsTheQuestionWithoutTheAnswerKey() {
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID))
+                .thenReturn(Mono.just(statement()));
+        Question answered = question(QUESTION_ID, 1);
+        answered.setModelAnswer("x = 1");
+        answered.setNeedsReview(true);
+        answered.setMaxScore(5.0);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID)).thenReturn(Flux.just(answered));
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, false))
+                .assertNext(response -> {
+                    // The content of the question, so the route is useful.
+                    assertThat(response.text()).isEqualTo("texto");
+                    assertThat(response.maxScore()).isEqualTo(5.0);
+                    // And not the two things that give it away.
+                    assertThat(response.modelAnswer()).isNull();
+                    assertThat(response.needsReview()).isNull();
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void staffGetTheSameQuestionWithTheAnswerKey() {
+        // Without this half, the case above would also pass with the fields
+        // permanently blank, which is a different and worse bug.
+        givenTheStatementIsThere();
+        Question answered = question(QUESTION_ID, 1);
+        answered.setModelAnswer("x = 1");
+        answered.setNeedsReview(true);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID)).thenReturn(Flux.just(answered));
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, true))
+                .assertNext(response -> {
+                    assertThat(response.modelAnswer()).isEqualTo("x = 1");
+                    assertThat(response.needsReview()).isTrue();
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void aReaderCannotListTheTrash() {
+        // The trashed questions are for whoever corrects the paper.
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID))
+                .thenReturn(Mono.just(statement()));
+
+        StepVerifier.create(service.findAllDeleted(STATEMENT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verify(questions, never()).findAllByStatementIdAndDeletedAtIsNotNull(anyLong());
+    }
+
+    @Test
+    void theListingFollowsTheDisplayOrder() {
+        // order_index is what reorder writes, so a listing that sorted on
+        // anything else would make every reordering invisible.
+        givenTheStatementIsThere();
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
+                .thenReturn(Flux.empty());
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, true)).verifyComplete();
+
+        verify(questions).findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID);
+    }
+
+    // ── Reordering ──────────────────────────────────────────────────────────
 
     @Test
     void reorderRefusesAListThatMissesAQuestion() {
+        // Not spelled out, so a question would be left on an order nobody chose.
         givenTheStatementIsWritable();
         when(questions.findAllByStatementIdAndDeletedAtIsNull(STATEMENT_ID))
                 .thenReturn(Flux.just(question(1L, 1), question(2L, 2)));
@@ -182,9 +264,9 @@ class QuestionServiceTest {
 
     @Test
     void reorderMovesOnlyTheOrderAndNeverTouchesTheNumber() {
-        // number is the stable ordinal and is what the unique constraint
-        // covers; renumbering on a reorder would hand a number to a question
-        // that may already hold it.
+        // number is the stable ordinal and is what the unique constraint covers;
+        // renumbering on a reorder would hand a number to a question that may
+        // already hold it.
         givenTheStatementIsWritable();
         Question first = question(1L, 1);
         Question second = question(2L, 2);
@@ -202,7 +284,7 @@ class QuestionServiceTest {
         assertThat(second.getNumber()).isEqualTo(2);
     }
 
-    // â”€â”€ Removal, and the options that go with the question â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Removal, and the options that go with the question ──────────────────
 
     @Test
     void softDeleteStampsTheQuestionAndItsOptionsWithTheSameMoment() {
@@ -328,13 +410,16 @@ class QuestionServiceTest {
                 .verifyComplete();
     }
 
-    // â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Fixtures ────────────────────────────────────────────────────────────
+
+    private void givenTheStatementIsThere() {
+        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement()));
+    }
 
     private void givenTheStatementIsWritable() {
         when(writeAccess.requireCanWrite(STATEMENT_ID, ACCOUNT_ID, false))
-                .thenReturn(Mono.just(statement(STATEMENT_ID)));
-        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID))
-                .thenReturn(Mono.just(statement(STATEMENT_ID)));
+                .thenReturn(Mono.just(statement()));
+        givenTheStatementIsThere();
     }
 
     private Question question(Long id, Integer number) {
@@ -344,12 +429,13 @@ class QuestionServiceTest {
         return question;
     }
 
-    private Statement statement(Long id) {
-        Statement statement = new Statement("P1", "Prova de MatemÃ¡tica");
-        statement.setId(id);
+    private Statement statement() {
+        Statement statement = new Statement("P1", "Prova de Matematica");
+        statement.setId(STATEMENT_ID);
         statement.setInstitutionId(1L);
         statement.setClassId(2L);
         statement.setSubjectId(3L);
+        statement.setVisible(true);
         return statement;
     }
 

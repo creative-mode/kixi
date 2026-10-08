@@ -87,7 +87,7 @@ class QuestionOptionControllerTest {
                 .thenReturn(Flux.just(optionResponse()));
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Reads Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Reads ───────────────────────────────────────────────────────────────
 
     @Test
     void listsTheOptionsOfTheQuestionUnderBothParents() {
@@ -104,12 +104,22 @@ class QuestionOptionControllerTest {
     }
 
     @Test
-    void aStudentMayReadTheOptions() {
+    void aStudentIsAskedForTheReaderViewOfTheOptions() {
+        // The absence of isCorrect in the body is the service's doing — it is
+        // covered in QuestionOptionServiceTest — so what this pins is that the
+        // controller asks for the reader's view at all, rather than for the staff
+        // one and dropping the field on the way out.
+        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(false));
+        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, false))
+                .thenReturn(Flux.just(optionResponse()));
+
         client.mutateWith(studentJwt())
                 .get()
                 .uri(OPTIONS)
                 .exchange()
                 .expectStatus().isOk();
+
+        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, false);
     }
 
     @Test
@@ -117,7 +127,7 @@ class QuestionOptionControllerTest {
         when(questionOptionService.findAllDeleted(STATEMENT_ID, QUESTION_ID, true))
                 .thenReturn(Flux.just(optionResponse()));
 
-        client.mutateWith(studentJwt())
+        client.mutateWith(teacherJwt())
                 .get()
                 .uri(OPTIONS + "/trash")
                 .exchange()
@@ -136,7 +146,7 @@ class QuestionOptionControllerTest {
                 .expectStatus().isOk();
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Writes Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Writes ──────────────────────────────────────────────────────────────
 
     @Test
     void createsAnOptionAndPointsAtIt() {
@@ -159,7 +169,7 @@ class QuestionOptionControllerTest {
     @Test
     void anOptionWithoutALabelIsRefusedBeforeTheService() {
         // The label is the option's identity and is unique per question; the
-        // table will not say which of the two texts was meant.
+        // table will not say which of two texts was meant.
         client.mutateWith(teacherJwt())
                 .post()
                 .uri(OPTIONS)
@@ -173,7 +183,9 @@ class QuestionOptionControllerTest {
     }
 
     @Test
-    void createsAnOptionAlreadyMarkedCorrect() {
+    void anOptionCanBeMarkedCorrectAsItIsAdded() {
+        // Creating with isCorrect is the other way in, next to the correct-option
+        // route. It has to end with the same thing: one answer.
         when(questionOptionService.create(eq(STATEMENT_ID), eq(QUESTION_ID), any(), anyLong(), anyBoolean()))
                 .thenReturn(Mono.just(optionResponse()));
 
@@ -190,6 +202,20 @@ class QuestionOptionControllerTest {
     }
 
     @Test
+    void aStudentCannotAddAnOptionAlreadyMarkedCorrect() {
+        client.mutateWith(studentJwt())
+                .post()
+                .uri(OPTIONS)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("optionLabel", "B", "optionText", "x = 1", "isCorrect", true))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verify(questionOptionService, never())
+                .create(anyLong(), anyLong(), any(), anyLong(), anyBoolean());
+    }
+
+    @Test
     void updatesAnOptionText() {
         when(questionOptionService.update(
                 eq(STATEMENT_ID), eq(QUESTION_ID), eq(OPTION_ID), any(), anyLong(), anyBoolean()))
@@ -199,7 +225,7 @@ class QuestionOptionControllerTest {
                 .put()
                 .uri(OPTIONS + "/" + OPTION_ID)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("optionLabel", "B", "optionText", "x = 1, unico"))
+                .bodyValue(Map.of("optionLabel", "B", "optionText", "x = 1, unique"))
                 .exchange()
                 .expectStatus().isOk();
 
@@ -264,40 +290,7 @@ class QuestionOptionControllerTest {
                 .softDelete(anyLong(), anyLong(), anyLong(), anyLong(), anyBoolean());
     }
 
-    @Test
-    void anOptionCanBeMarkedCorrectAsItIsAdded() {
-        // Creating with isCorrect is the other way in, next to the
-        // correct-option route. It has to end with the same thing: one answer.
-        when(questionOptionService.create(eq(STATEMENT_ID), eq(QUESTION_ID), any(), anyLong(), anyBoolean()))
-                .thenReturn(Mono.just(optionResponse()));
-
-        client.mutateWith(teacherJwt())
-                .post()
-                .uri(OPTIONS)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("optionLabel", "B", "optionText", "x = 1", "isCorrect", true))
-                .exchange()
-                .expectStatus().isCreated();
-
-        verify(questionOptionService).create(
-                eq(STATEMENT_ID), eq(QUESTION_ID), any(), eq(TEACHER_ID), eq(false));
-    }
-
-    @Test
-    void aStudentCannotAddAnOptionAlreadyMarkedCorrect() {
-        client.mutateWith(studentJwt())
-                .post()
-                .uri(OPTIONS)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("optionLabel", "B", "optionText", "x = 1", "isCorrect", true))
-                .exchange()
-                .expectStatus().isForbidden();
-
-        verify(questionOptionService, never())
-                .create(anyLong(), anyLong(), any(), anyLong(), anyBoolean());
-    }
-
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Fixtures Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Fixtures ────────────────────────────────────────────────────────────
 
     private QuestionOptionResponse optionResponse() {
         return new QuestionOptionResponse(

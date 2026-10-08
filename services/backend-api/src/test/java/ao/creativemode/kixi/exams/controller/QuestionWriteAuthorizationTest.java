@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.exams.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -421,6 +422,54 @@ class QuestionWriteAuthorizationTest {
                 .uri(QUESTIONS)
                 .exchange()
                 .expectStatus().isNotFound();
+    }
+
+    @Test
+    void theWithheldFieldsAreAbsentFromTheJsonNotMerelyNull() {
+        // doesNotExist() on a JsonPath also accepts an explicit null, so it
+        // cannot tell "withheld" from "empty". The difference matters: a field
+        // that arrives null invites a client to read meaning into it.
+        givenTheStatementIsPublished();
+        Question answered = question();
+        answered.setModelAnswer("x = 1");
+        answered.setNeedsReview(true);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
+                .thenReturn(reactor.core.publisher.Flux.just(answered));
+
+        byte[] body = client.mutateWith(studentJwt())
+                .get()
+                .uri(QUESTIONS)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(byte[].class)
+                .returnResult()
+                .getResponseBody();
+
+        String json = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(json).doesNotContain("modelAnswer").doesNotContain("needsReview");
+        assertThat(json).contains("Resolva x+1=2");
+    }
+
+    @Test
+    void theAnswerFlagIsAbsentFromTheOptionsJsonToo() {
+        givenTheStatementIsPublished();
+        givenTheQuestionIsThere();
+        QuestionOption answered = option();
+        answered.markAsCorrect();
+        when(options.findAllByQuestionIdOrderedByOrderIndex(QUESTION_ID))
+                .thenReturn(reactor.core.publisher.Flux.just(answered));
+
+        byte[] body = client.mutateWith(studentJwt())
+                .get()
+                .uri(OPTIONS)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(byte[].class)
+                .returnResult()
+                .getResponseBody();
+
+        String json = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(json).doesNotContain("isCorrect").contains("x = 1");
     }
 
     @Test

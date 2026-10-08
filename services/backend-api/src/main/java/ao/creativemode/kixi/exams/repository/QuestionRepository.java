@@ -39,8 +39,20 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     /**
      * Find all questions for a statement, ordered by order_index
      */
+    /**
+     * The questions of a statement in the order they are shown.
+     *
+     * <p>{@code COALESCE(order_index, number)} rather than plain
+     * {@code order_index}: questions.order_index has been nullable since V12 and
+     * V18 backfilled page_index and needs_review but not this one, so the rows
+     * written before the question builder existed carry NULL. Postgres sorts
+     * NULLs last, which would have put the newest question at the top of a
+     * statement made entirely of legacy ones and left the rest in no order at
+     * all. Falling back to number keeps those where they were.
+     */
     @Query(
-        "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL ORDER BY order_index ASC"
+            "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL "
+                    + "ORDER BY COALESCE(order_index, number) ASC"
     )
     Flux<Question> findAllByStatementIdOrderedByOrderIndex(Long statementId);
 

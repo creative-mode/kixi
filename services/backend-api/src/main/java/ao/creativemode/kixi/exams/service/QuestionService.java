@@ -47,10 +47,19 @@ public class QuestionService {
     }
 
     /**
-     * Reading is open to any authenticated caller, like the statement routes
-     * themselves, but not to the same extent: an account that may not write the
-     * statement only reaches a published one, and gets its questions without the
-     * answer key. {@code staff} is the caller's side of that.
+     * Reading is open to any authenticated caller, like the statement routes,
+     * but not to the same extent, and the difference is the answer key rather
+     * than the statement.
+     *
+     * <p>An account that is not staff only reaches a published statement. Staff
+     * reach any statement that is not in the trash, which is the same split the
+     * statement routes make — a teacher already lists every active statement,
+     * not only the classes they teach — so the rule is not narrower than
+     * elsewhere in this API and is not narrower here either.
+     *
+     * <p>What a non-staff caller never gets is the answer key: {@code staff}
+     * reaches {@link #toResponse(Question, boolean)}, which is where modelAnswer
+     * and needsReview are withheld.
      */
     private Mono<Void> requireReadableStatement(Long statementId, boolean staff) {
         return Mono.defer(() -> staff

@@ -135,6 +135,16 @@ public class QuestionOptionService {
             .switchIfEmpty(Mono.just(option));
     }
 
+    /**
+     * Changes the text, and marks the option as the answer if the body says so.
+     *
+     * <p>Transactional because the two are two writes: the option, then the
+     * rewrite of {@code is_correct}. {@code isCorrect} used to be accepted and
+     * quietly dropped here, which returned 200 for a body that asked for
+     * something and did nothing about it. It is applied the same way as on
+     * create — through the query, so the question keeps one answer.
+     */
+    @Transactional
     public Mono<QuestionOptionResponse> update(
         Long statementId,
         Long questionId,
@@ -150,6 +160,7 @@ public class QuestionOptionService {
                 apply(option, data);
                 return Mono.defer(() -> options.save(option));
             })
+            .flatMap(option -> markCorrectIfAsked(option, data))
             .map(option -> toResponse(option, true));
     }
 
@@ -310,8 +321,11 @@ public class QuestionOptionService {
 
     /**
      * The question has to be there and belong to the statement. On a read the
-     * statement also has to be readable by this caller: an account that may not
-     * write it only reaches a published one, and gets no answer key.
+     * statement also has to be reachable by this caller: a non-staff caller
+     * only reaches a published one, and the answer key never travels to them.
+     *
+     * <p>Staff reach any statement that is not in the trash, the same as in the
+     * statement routes.
      */
     private Mono<Void> requireReadableQuestion(Long statementId, Long questionId, boolean staff) {
         return Mono.defer(() -> staff
