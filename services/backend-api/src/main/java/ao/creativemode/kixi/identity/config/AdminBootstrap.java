@@ -19,6 +19,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Mono;
 
 /**
@@ -48,6 +49,7 @@ public class AdminBootstrap implements ApplicationRunner {
     private final AdminBootstrapProperties properties;
     private final Environment environment;
     private final PasswordEncoder passwordEncoder;
+    private final TransactionalOperator transactionalOperator;
     private final AccountRepository accountRepository;
     private final RoleRepository roleRepository;
     private final AccountRoleRepository accountRoleRepository;
@@ -57,6 +59,7 @@ public class AdminBootstrap implements ApplicationRunner {
             AdminBootstrapProperties properties,
             Environment environment,
             PasswordEncoder passwordEncoder,
+            TransactionalOperator transactionalOperator,
             AccountRepository accountRepository,
             RoleRepository roleRepository,
             AccountRoleRepository accountRoleRepository,
@@ -64,6 +67,7 @@ public class AdminBootstrap implements ApplicationRunner {
         this.properties = properties;
         this.environment = environment;
         this.passwordEncoder = passwordEncoder;
+        this.transactionalOperator = transactionalOperator;
         this.accountRepository = accountRepository;
         this.roleRepository = roleRepository;
         this.accountRoleRepository = accountRoleRepository;
@@ -114,41 +118,55 @@ public class AdminBootstrap implements ApplicationRunner {
         }
 
         return accountRepository.findByUsernameAndDeletedAtIsNull(username)
-                .flatMap(existing -> Mono.<Account>error(new IllegalStateException(
-                        "ADMIN bootstrap skipped: username '" + username + "' is already taken")))
-                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
-                        .flatMap(existing -> Mono.<Account>error(new IllegalStateException(
-                                "ADMIN bootstrap skipped: email '" + email + "' is already taken")))))
-                .onErrorResume(IllegalStateException.class, e -> {
-                    log.error(e.getMessage());
-                    return Mono.empty();
-                })
-                .then(Mono.defer(() -> roleRepository.findByNameAndDeletedAtIsNull("ADMIN")
-                        .switchIfEmpty(Mono.error(new IllegalStateException(
-                                "ADMIN bootstrap failed: role ADMIN is not seeded")))
-                        .flatMap(role -> {
-                            Account account = new Account();
-                            account.setUsername(username);
-                            account.setEmail(email);
-                            account.setPasswordHash(passwordEncoder.encode(password));
-                            account.setEmailVerified(false);
-                            account.setActive(true);
-                            account.setDeletedAt(null);
+                .hasElement()
+                .flatMap(usernameTaken -> {
+                    if (usernameTaken) {
+                        // Branch, don't swallow: an empty Mono completes, and anything
+                        // chained after it would still run — including the insert.
+                        log.error("ADMIN bootstrap skipped: username '{}' is already taken", username);
+                        return Mono.<Void>empty();
+                    }
+                    return accountRepository.findByEmailAndDeletedAtIsNull(email)
+                            .hasElement()
+                            .flatMap(emailTaken -> {
+                                if (emailTaken) {
+                                    log.error("ADMIN bootstrap skipped: email '{}' is already taken", email);
+                                    return Mono.<Void>empty();
+                                }
+                                return transactionalOperator.transactional(Mono.defer(() -> roleRepository
+                                        .findByNameAndDeletedAtIsNull("ADMIN")
+                                        .switchIfEmpty(Mono.error(new IllegalStateException(
+                                                "ADMIN bootstrap failed: role ADMIN is not seeded")))
+                                        .flatMap(role -> {
+                                            Account account = new Account();
+                                            account.setUsername(username);
+                                            account.setEmail(email);
+                                            account.setPasswordHash(passwordEncoder.encode(password));
+                                            account.setEmailVerified(false);
+                                            account.setActive(true);
+                                            account.setDeletedAt(null);
 
-                            return accountRepository.save(account).flatMap(saved -> {
-                                User user = new User();
-                                user.setAccountId(saved.getId());
-                                user.setFirstName(firstNameOrDefault(username));
-                                user.setLastName(lastNameOrDefault());
-                                user.setDeletedAt(null);
+                                            // Account, role and profile go in one transaction:
+                                            // a partial write would leave an account without
+                                            // ADMIN behind, and the next boot would collide
+                                            // with it instead of finishing the job.
+                                            return accountRepository.save(account).flatMap(saved -> {
+                                                User user = new User();
+                                                user.setAccountId(saved.getId());
+                                                user.setFirstName(firstNameOrDefault(username));
+                                                user.setLastName(lastNameOrDefault());
+                                                user.setDeletedAt(null);
 
-                                return Mono.when(
-                                        accountRoleRepository.save(new AccountRole(saved.getId(), role.getId())),
-                                        userRepository.save(user))
-                                        .then(Mono.fromRunnable(() -> log.info(
-                                                "ADMIN bootstrap: administrator '{}' created", username)));
+                                                return Mono.when(
+                                                                accountRoleRepository.save(
+                                                                        new AccountRole(saved.getId(), role.getId())),
+                                                                userRepository.save(user))
+                                                        .then(Mono.fromRunnable(() -> log.info(
+                                                                "ADMIN bootstrap: administrator '{}' created", username)));
+                                            });
+                                        })));
                             });
-                        })));
+                });
     }
 
     private String firstNameOrDefault(String username) {
@@ -176,7 +194,9 @@ public class AdminBootstrap implements ApplicationRunner {
             return "must contain at least " + PROD_MIN_PASSWORD_LENGTH + " characters in prod";
         }
         String normalized = password.trim().toLowerCase(Locale.ROOT);
-        if (WEAK_PASSWORDS.contains(normalized) || ProdJwtSecretGuard.PLACEHOLDERS.contains(normalized)) {
+        if (WEAK_PASSWORDS.contains(normalized)
+                || ProdJwtSecretGuard.PLACEHOLDERS.contains(normalized)
+                || ProdJwtSecretGuard.isPlaceholder(normalized)) {
             return "uses a weak or example value";
         }
         for (String weak : WEAK_PASSWORDS) {

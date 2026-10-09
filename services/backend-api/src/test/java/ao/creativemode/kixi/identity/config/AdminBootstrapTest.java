@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -29,6 +30,7 @@ class AdminBootstrapTest {
     private AdminBootstrapProperties properties;
     private Environment environment;
     private PasswordEncoder passwordEncoder;
+    private TransactionalOperator transactionalOperator;
     private AccountRepository accountRepository;
     private RoleRepository roleRepository;
     private AccountRoleRepository accountRoleRepository;
@@ -52,14 +54,17 @@ class AdminBootstrapTest {
         properties.setPassword("a-strong-bootstrap-password");
         environment = mock(Environment.class);
         passwordEncoder = mock(PasswordEncoder.class);
+        transactionalOperator = mock(TransactionalOperator.class);
         accountRepository = mock(AccountRepository.class);
         roleRepository = mock(RoleRepository.class);
         accountRoleRepository = mock(AccountRoleRepository.class);
         userRepository = mock(UserRepository.class);
         bootstrap = new AdminBootstrap(properties, environment, passwordEncoder,
+                transactionalOperator,
                 accountRepository, roleRepository, accountRoleRepository, userRepository);
         when(environment.getActiveProfiles()).thenReturn(new String[] { "docker" });
         when(passwordEncoder.encode(any())).thenAnswer(inv -> "hashed:" + inv.getArgument(0));
+        when(transactionalOperator.transactional(any(Mono.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
@@ -107,6 +112,23 @@ class AdminBootstrapTest {
     }
 
     @Test
+    void skipsWhenUsernameIsTakenWithoutCreatingAnything() {
+        when(roleRepository.findByNameAndDeletedAtIsNull("ADMIN")).thenReturn(Mono.just(adminRole));
+        when(accountRoleRepository.findByRoleIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        Account taken = new Account();
+        taken.setId(9L);
+        taken.setUsername("admin");
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin"))
+                .thenReturn(Mono.just(taken));
+
+        StepVerifier.create(bootstrap.bootstrap()).verifyComplete();
+
+        verify(accountRepository, never()).save(any());
+        verify(accountRoleRepository, never()).save(any());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
     void refusesWeakPasswordInProd() {
         when(environment.getActiveProfiles()).thenReturn(new String[] { "prod" });
         properties.setPassword("admin12345678");
@@ -127,6 +149,8 @@ class AdminBootstrapTest {
         assertThat(AdminBootstrap.validatePassword("ten-chars!", true))
                 .contains("12 characters");
         assertThat(AdminBootstrap.validatePassword("admin12345678", true))
+                .contains("weak or example");
+        assertThat(AdminBootstrap.validatePassword("change-me-to-a-strong-password", true))
                 .contains("weak or example");
         assertThat(AdminBootstrap.validatePassword("a-strong-bootstrap-password", true)).isNull();
     }
