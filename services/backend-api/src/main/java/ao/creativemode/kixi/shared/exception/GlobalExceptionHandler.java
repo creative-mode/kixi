@@ -58,8 +58,11 @@ public class GlobalExceptionHandler {
         problem = problem.withInstance(exchange);
 
         ResponseEntity.BodyBuilder response = ResponseEntity.status(statusCode);
-        if (ex instanceof RegistrationRateLimitException rateLimitException) {
-            response.header("Retry-After", String.valueOf(rateLimitException.getRetryAfterSeconds()));
+        // Through the interface: shared must not depend on any domain module's
+        // exception type (ArchitectureTest), so rate limiters opt in by
+        // implementing RetryAfter instead of being named here.
+        if (ex instanceof RetryAfter retryAfter) {
+            response.header("Retry-After", String.valueOf(retryAfter.getRetryAfterSeconds()));
         }
         return Mono.just(response.body(problem));
     }
