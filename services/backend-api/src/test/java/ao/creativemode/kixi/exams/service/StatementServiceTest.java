@@ -44,6 +44,7 @@ class StatementServiceTest {
     private QuestionOptionRepository optionRepository;
     private InstitutionAccessService accessService;
     private StatementLinkValidationService validator;
+    private StatementWriteAccessService writeAccess;
     private StatementService service;
 
     @BeforeEach
@@ -53,19 +54,26 @@ class StatementServiceTest {
         optionRepository = mock(QuestionOptionRepository.class);
         accessService = mock(InstitutionAccessService.class);
         validator = mock(StatementLinkValidationService.class);
-        service = new StatementService(
-                statementRepository, questionRepository, optionRepository, accessService, validator);
+        writeAccess = mock(StatementWriteAccessService.class);
+        service = new StatementService(statementRepository, questionRepository, optionRepository,
+                accessService, validator, writeAccess);
+        givenTheWriteRuleAllows();
     }
 
     /**
-     * Statements built in the exam builder carry an institution, which is what the
-     * rule is checked against; the default mock lets every check pass.
+     * The statement-scoped write rule has its own test, and the real chain is
+     * covered over HTTP, so here it is a mock: these tests are about what
+     * StatementService does once the caller is allowed in. Tests that care about
+     * the rule stub it themselves.
      */
-    private void givenAuthorIsAllowed() {
-        when(accessService.requireCanAuthor(anyLong(), org.mockito.ArgumentMatchers.anyBoolean(),
-                anyLong(), anyLong(), anyLong())).thenReturn(Mono.empty());
-        when(accessService.requireCanAuthor(anyLong(), org.mockito.ArgumentMatchers.anyBoolean(),
-                anyLong(), anyLong(), org.mockito.ArgumentMatchers.isNull())).thenReturn(Mono.empty());
+    private void givenTheWriteRuleAllows() {
+        // The null guard matters: when a test then stubs this method itself,
+        // Mockito runs the call with any() supplying null, and Mono.just(null)
+        // would blow up while the stub is being registered.
+        when(writeAccess.checkCanWrite(any(), anyLong(), anyBoolean())).thenAnswer(invocation -> {
+            Statement statement = invocation.getArgument(0);
+            return statement == null ? Mono.empty() : Mono.just(statement);
+        });
     }
 
     @Test
@@ -273,10 +281,180 @@ class StatementServiceTest {
         existing.setNeedsReview(true);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        givenTheScoresAddUp(0.0);
 
         StepVerifier.create(service.approveReview(1L, 9L, true))
                 .assertNext(result -> assertThat(result.getNeedsReview()).isFalse())
                 .verifyComplete();
+    }
+
+    // ── What has to be true before a statement goes live ────────────────────
+
+    @Test
+    void refusesToApproveWhileAQuestionWithOptionsHasNoAnswer() {
+        // An unanswered question cannot be graded, and the teacher who finds
+        // that out is the one marking it, long after the paper looked ready.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(2L, 2), question(5L, 7)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    // Named, not just counted: the caller has to know which.
+                    assertThat(error.getMessage()).contains("2").contains("7");
+                })
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void theQuestionTypeDoesNotDecideWhetherAnAnswerIsNeeded() {
+        // The gate used to look for question_type = 'multiple_choice', which
+        // left it watching only the writers that spell the type that way. The
+        // question CRUD writes "open" by default because a question is created
+        // before its options exist, so a question that got its alternatives
+        // afterwards was never checked at all — with or without an answer.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        Question openWithOptions = question(9L, 4);
+        openWithOptions.setQuestionType("open");
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(openWithOptions));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void theErrorSaysTheQuestionsHaveOptionsRatherThanNamingTheType() {
+        // The message is what the author reads at 11pm. "No correct option"
+        // told them what was missing; saying "multiple choice" would have told
+        // them to look at a column that decided nothing.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(4L, 4)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .contains("have options but no correct option marked")
+                        .contains("4"))
+                .verify();
+    }
+
+    @Test
+    void anAnswerOnARemovedOptionDoesNotCount() {
+        // is_correct is only read from the active options, so a correct flag
+        // left on a removed option is not an answer.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(3L, 4)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectError(ApiException.class)
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void refusesToApproveWhenTheScoresDoNotAddUpToTheDeclaredTotal() {
+        // A paper whose parts do not add to its total announces a value it is
+        // not worth.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(20.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.just(18.5));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    // Both sides of the comparison, so it is clear which is wrong.
+                    assertThat(error.getMessage()).contains("18.50").contains("20.00");
+                })
+                .verify();
+
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
+    @Test
+    void theScoreCheckToleratesTheFloatingPointSumOfDecimals() {
+        // 0.1 + 0.2 is not 0.3 in binary floating point. The columns are
+        // DECIMAL(10, 2) and the sum comes back as a double, so comparing
+        // without scaling would reject a paper nobody could fix.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(0.3);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.just(0.30000000000000004));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void aStatementWithNoDeclaredTotalIsNotAskedToAddUp() {
+        // The column is nullable and the OCR statements predate it, so there is
+        // no value to compare against and nothing to correct.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(null);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+
+        verify(questionRepository, never()).calculateTotalMaxScore(anyLong());
+    }
+
+    @Test
+    void aStatementWithoutQuestionsHasNothingToAnswer() {
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(0.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        when(questionRepository.calculateTotalMaxScore(eq(1L))).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void theAnswerKeyIsCheckedBeforeTheScores() {
+        // Both are needed, but the one that names its questions is the one worth
+        // acting on first: it says exactly what to do.
+        Statement existing = statement(1L);
+        existing.setNeedsReview(true);
+        existing.setTotalMaxScore(20.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L))
+                .thenReturn(Flux.just(question(4L, 3)));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage()).contains("no correct option"))
+                .verify();
+
+        verify(questionRepository, never()).calculateTotalMaxScore(anyLong());
     }
 
     @Test
@@ -297,7 +475,7 @@ class StatementServiceTest {
     void approveReviewIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -313,7 +491,7 @@ class StatementServiceTest {
     void setVisibilityIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -329,7 +507,7 @@ class StatementServiceTest {
     void softDeleteIsForbiddenForATeacherOutsideTheirClassAndSubject() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -347,7 +525,7 @@ class StatementServiceTest {
         Statement trashed = statementOfSchool(1L, 4L, 3L);
         trashed.markAsDeleted();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -365,7 +543,7 @@ class StatementServiceTest {
         Statement trashed = statementOfSchool(1L, 4L, 3L);
         trashed.markAsDeleted();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L))
+        when(writeAccess.checkCanWrite(any(), eq(9L), eq(false)))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
 
@@ -380,88 +558,43 @@ class StatementServiceTest {
     }
 
     @Test
-    void approveReviewChecksTheClassScopeOfTheStatement() {
+    void approveReviewAsksTheWriteRuleAboutTheStatementItStands() {
         Statement existing = statementOfSchool(1L, 4L, 3L);
         existing.setNeedsReview(true);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
-        givenAuthorIsAllowed();
+        givenTheWriteRuleAllows();
+        givenTheAnswerKeyIsComplete();
+        givenTheScoresAddUp(0.0);
 
         StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
 
-        verify(accessService).requireCanAuthor(9L, false, 4L, 5L, 3L);
+        verify(writeAccess).checkCanWrite(existing, 9L, false);
     }
+
+    // ── The rule itself ─────────────────────────────────────────────────────
+    // Which statements a caller may write, and on what grounds, is
+    // StatementWriteAccessService's own test; the real chain over HTTP is in
+    // StatementApprovalAuthorizationTest. What matters here is that every
+    // mutating operation goes through the rule, and the five
+    // "...IsForbiddenForATeacherOutsideTheirClassAndSubject" cases above are
+    // exactly that.
 
     @Test
-    void aStatementFromBeforeTheInstitutionModelIsNotChecked() {
-        Statement legacy = statement(1L);
-        legacy.setNeedsReview(true);
-        assertThat(legacy.getInstitutionId()).isNull();
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(legacy));
-        when(statementRepository.save(legacy)).thenReturn(Mono.just(legacy));
-
-        StepVerifier.create(service.approveReview(1L, 9L, false)).expectNextCount(1).verifyComplete();
-
-        verifyNoInteractions(accessService);
-    }
-
-    // ── A school statement with no class is the administrator's alone ───────
-
-    /** A statement of the school but of no class: nothing to match an assignment against. */
-    private Statement statementOfSchoolWithoutClass() {
-        Statement statement = statement(1L);
-        statement.setInstitutionId(4L);
-        statement.setSubjectId(5L);
-        statement.setClassId(null);
-        statement.setNeedsReview(true);
-        return statement;
-    }
-
-    @Test
-    void aTeacherMayNotApproveASchoolStatementThatNamesNoClass() {
-        // Only an administrator may build one (ManualStatementService), so only an
-        // administrator may change it. Letting the rule lapse here would hand any
-        // teacher affiliated to the school — holding no assignment at all — the
-        // right to approve or delete a statement the school made on purpose.
-        Statement existing = statementOfSchoolWithoutClass();
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-
-        StepVerifier.create(service.approveReview(1L, 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.FORBIDDEN))
-                .verify();
-
-        verify(statementRepository, never()).save(any());
-        verifyNoInteractions(accessService);
-    }
-
-    @Test
-    void anAdministratorMayApproveASchoolStatementThatNamesNoClass() {
-        Statement existing = statementOfSchoolWithoutClass();
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
-        // The rule itself imposes nothing on the administrator; the institution
-        // and subject checks still run.
-        when(accessService.requireCanAuthor(9L, true, 4L, 5L, null)).thenReturn(Mono.empty());
-
-        StepVerifier.create(service.approveReview(1L, 9L, true)).expectNextCount(1).verifyComplete();
-
-        verify(statementRepository).save(existing);
-    }
-
-    @Test
-    void aTeacherMayNotPurgeASchoolStatementThatNamesNoClass() {
-        Statement trashed = statementOfSchoolWithoutClass();
+    void everyMutationGoesThroughTheWriteRule() {
+        // approveReview, setVisible, softDelete and update are each covered by
+        // their own case above; this one pins that the rule is consulted for a
+        // purge, where the statement is being destroyed outright.
+        Statement trashed = statementOfSchool(1L, 4L, 3L);
         trashed.markAsDeleted();
         when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
+        givenTheWriteRuleAllows();
+        when(questionRepository.deleteAllByStatementId(1L)).thenReturn(Mono.empty());
+        when(statementRepository.delete(trashed)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.hardDelete(1L, 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.FORBIDDEN))
-                .verify();
+        StepVerifier.create(service.hardDelete(1L, 9L, false)).verifyComplete();
 
-        assertThat(trashed.getDeletedAt()).isNotNull();
-        verify(statementRepository, never()).delete(any());
+        verify(writeAccess).checkCanWrite(trashed, 9L, false);
     }
 
     @Test
@@ -490,6 +623,21 @@ class StatementServiceTest {
         statement.setId(id);
         statement.setTitle("Prova Teste");
         return statement;
+    }
+
+    /** No question of the statement has alternatives without an answer. */
+    private void givenTheAnswerKeyIsComplete() {
+        when(questionRepository.findQuestionsWithoutCorrectOption(anyLong())).thenReturn(Flux.empty());
+    }
+
+    private void givenTheScoresAddUp(double sum) {
+        when(questionRepository.calculateTotalMaxScore(anyLong())).thenReturn(Mono.just(sum));
+    }
+
+    private Question question(Long id, Integer number) {
+        Question question = new Question(1L, number, "texto", "multiple_choice");
+        question.setId(id);
+        return question;
     }
 
     // ── Editing the metadata, never the questions ──────────────────────────
@@ -536,10 +684,10 @@ class StatementServiceTest {
 
         StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
 
-        // Once against the class the statement is in now (4L), once against the
-        // class it is being moved to (1L). Dropping either half lets a teacher
-        // steal another teacher's paper, or hand one to a class they do not teach.
-        verify(accessService).requireCanAuthor(9L, false, 4L, 5L, 3L);
+        // Once the statement as it stands, which the write rule weighs, and once the
+        // metadata being written. Dropping either half lets a teacher steal
+        // another teacher's paper, or hand one to a class they do not teach.
+        verify(writeAccess).checkCanWrite(any(), eq(9L), eq(false));
         verify(accessService).requireCanAuthor(9L, false, 1L, 2L, CLASS_ID);
     }
 
@@ -547,7 +695,7 @@ class StatementServiceTest {
     void updateIsForbiddenWhenTheTeacherCannotMoveTheStatementToTheNewClass() {
         when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
         givenAStatementToEdit();
-        when(accessService.requireCanAuthor(9L, false, 4L, 5L, 3L)).thenReturn(Mono.empty());
+        givenTheWriteRuleAllows();
         when(accessService.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID))
                 .thenReturn(Mono.error(ApiException.forbidden(
                         "Teacher is not assigned to this class and subject")));
@@ -560,19 +708,6 @@ class StatementServiceTest {
         verify(statementRepository, never()).save(any());
     }
 
-    @Test
-    void aTeacherMayNotEditAStatementWithoutAClass() {
-        Statement existing = statementOfSchool(1L, 4L, null);
-        when(validator.requireAClassForTeachers(CLASS_ID, false)).thenReturn(Mono.empty());
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-
-        StepVerifier.create(service.update(1L, request(), 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.FORBIDDEN))
-                .verify();
-
-        verify(statementRepository, never()).save(any());
-    }
 
     @Test
     void updateRefusesAMetadataWithoutAClassFromATeacher() {
@@ -670,75 +805,9 @@ class StatementServiceTest {
 
     private static final Long SOMEONE_ELSES_CLASS_ID = 3L;
 
-    @Test
-    void aTeacherMayNotTakeOverAStatementFromTheOcrInSomebodyElsesClass() {
-        // The OCR leaves institution_id empty, and requireCanEdit returned
-        // straight away in that case. Nothing was left to check, so a teacher
-        // could take a statement sitting in a class they do not teach and move
-        // it into their own: the check on the metadata being written passed,
-        // because that class *is* theirs. The class the statement is in is still
-        // there to be weighed, so it has to be.
-        Statement fromTheOcr = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
-        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
-        when(accessService.requireAssignedTo(9L, false, SOMEONE_ELSES_CLASS_ID, 5L))
-                .thenReturn(Mono.error(ApiException.forbidden(
-                        "Teacher is not assigned to this class and subject")));
 
-        StepVerifier.create(service.update(1L, request(), 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.FORBIDDEN))
-                .verify();
 
-        verify(statementRepository, never()).save(any());
-    }
 
-    @Test
-    void aTeacherMayNotPurgeAStatementFromTheOcrInSomebodyElsesClass() {
-        // The worst of the family: the same missing check on softDelete,
-        // restore and hardDelete, where the statement is destroyed outright.
-        Statement trashed = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
-        trashed.markAsDeleted();
-        when(statementRepository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(trashed));
-        when(accessService.requireAssignedTo(9L, false, SOMEONE_ELSES_CLASS_ID, 5L))
-                .thenReturn(Mono.error(ApiException.forbidden(
-                        "Teacher is not assigned to this class and subject")));
-
-        StepVerifier.create(service.hardDelete(1L, 9L, false))
-                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
-                        .isEqualTo(HttpStatus.FORBIDDEN))
-                .verify();
-
-        verify(questionRepository, never()).deleteAllByStatementId(any());
-        verify(statementRepository, never()).delete(any());
-    }
-
-    @Test
-    void aTeacherAssignedToTheClassMayEditAStatementFromTheOcr() {
-        Statement fromTheOcr = statementOfSchool(1L, null, CLASS_ID);
-        givenTheEditIsAllowed();
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
-        when(accessService.requireAssignedTo(9L, false, CLASS_ID, 5L)).thenReturn(Mono.empty());
-        when(statementRepository.save(fromTheOcr)).thenReturn(Mono.just(fromTheOcr));
-
-        StepVerifier.create(service.update(1L, request(), 9L, false)).expectNextCount(1).verifyComplete();
-
-        assertThat(fromTheOcr.getInstitutionId()).isEqualTo(1L);
-    }
-
-    @Test
-    void anAdministratorReachesAnOcrStatementWithoutAnAssignment() {
-        Statement fromTheOcr = statementOfSchool(1L, null, SOMEONE_ELSES_CLASS_ID);
-        when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
-        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(fromTheOcr));
-        when(accessService.requireAssignedTo(9L, true, SOMEONE_ELSES_CLASS_ID, 5L))
-                .thenReturn(Mono.empty());
-        when(accessService.requireCanAuthor(9L, true, 1L, 2L, CLASS_ID)).thenReturn(Mono.empty());
-        when(validator.validate(any(), any(), any(), any(), any())).thenReturn(Mono.empty());
-        when(statementRepository.save(fromTheOcr)).thenReturn(Mono.just(fromTheOcr));
-
-        StepVerifier.create(service.update(1L, request(), 9L, true)).expectNextCount(1).verifyComplete();
-    }
 
     private static final Long CLASS_ID = 6L;
 

@@ -26,6 +26,8 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
      */
     Flux<Question> findAllByStatementIdAndDeletedAtIsNull(Long statementId);
 
+    Flux<Question> findAllByStatementIdAndDeletedAtIsNotNull(Long statementId);
+
     /**
      * Find all questions for a statement, ordered by question number
      */
@@ -37,8 +39,20 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     /**
      * Find all questions for a statement, ordered by order_index
      */
+    /**
+     * The questions of a statement in the order they are shown.
+     *
+     * <p>{@code COALESCE(order_index, number)} rather than plain
+     * {@code order_index}: questions.order_index has been nullable since V12 and
+     * V18 backfilled page_index and needs_review but not this one, so the rows
+     * written before the question builder existed carry NULL. Postgres sorts
+     * NULLs last, which would have put the newest question at the top of a
+     * statement made entirely of legacy ones and left the rest in no order at
+     * all. Falling back to number keeps those where they were.
+     */
     @Query(
-        "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL ORDER BY order_index ASC"
+            "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL "
+                    + "ORDER BY COALESCE(order_index, number) ASC"
     )
     Flux<Question> findAllByStatementIdOrderedByOrderIndex(Long statementId);
 
@@ -212,23 +226,74 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
      * Calculate total max score for a statement
      */
     @Query(
-        "SELECT COALESCE(SUM(max_score), 0) FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+            "SELECT COALESCE(SUM(max_score), 0) FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
     )
     Mono<Double> calculateTotalMaxScore(Long statementId);
 
     /**
-     * Find the next order index for a statement
+     * The questions of a statement that have alternatives and no answer to them.
+     *
+     * <p>One row per question, so the caller can name them in the error instead of
+     * only counting them. Both halves of the option condition matter: it has to be
+     * active to count as an answer, and it has to be there at all for the question
+     * to be one that needs one.
+     *
+     * <p>Deliberately not keyed on {@code question_type}. That column is free text
+     * and three vocabularies are in circulation: the OCR paths write
+     * {@code multiple_choice} and {@code development}, the exam builder writes
+     * {@code multiple_choice} when a question has options, and the question CRUD
+     * defaults to {@code open} because a question is created before its options
+     * exist and cannot derive the type from them yet. Asking the column would
+     * leave the gate watching only the writers that happen to spell it the way the
+     * gate expects. Having alternatives is the thing being checked instead, which
+     * is the rule {@code ManualStatementService} already applies when it picks
+     * between {@code open} and {@code multiple_choice}.
      */
     @Query(
-        "SELECT COALESCE(MAX(order_index), 0) + 1 FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+            "SELECT q.* FROM questions q "
+                    + "WHERE q.statement_id = :statementId "
+                    + "AND q.deleted_at IS NULL "
+                    + "AND EXISTS ("
+                    + "  SELECT 1 FROM question_options o "
+                    + "  WHERE o.question_id = q.id AND o.deleted_at IS NULL"
+                    + ") "
+                    + "AND NOT EXISTS ("
+                    + "  SELECT 1 FROM question_options o "
+                    + "  WHERE o.question_id = q.id AND o.deleted_at IS NULL AND o.is_correct = TRUE"
+                    + ") "
+                    + "ORDER BY q.number ASC"
+    )
+    Flux<Question> findQuestionsWithoutCorrectOption(Long statementId);
+
+    /**
+     * Find the next order index for a statement
+     */
+    /**
+     * The next display position for a statement.
+     *
+     * <p>Counts the soft-deleted rows too, like the option equivalent, so a
+     * position is never handed out a second time and the order stays
+     * deterministic across a removal. There is no unique constraint over
+     * order_index — it would not even hold, since reordering renumbers only the
+     * active rows — so this is tidiness rather than correctness. It is {@code
+     * number} that must never come back, and that is what the constraint covers.
+     */
+    @Query(
+        "SELECT COALESCE(MAX(order_index), 0) + 1 FROM questions WHERE statement_id = :statementId"
     )
     Mono<Integer> findNextOrderIndex(Long statementId);
 
     /**
-     * Find the next question number for a statement
-     */
+     * Find the next question number for a statement.
+     *
+     * <p>Counts the soft-deleted rows too. uk_questions_statement_number covers
+     * (statement_id, number) without deleted_at, so a deleted question keeps its
+     * number for good; taking MAX over the active rows only would hand out a
+     * number that is already taken and fail the insert. Numbers therefore move
+     * forward and are never reused.
+ */
     @Query(
-        "SELECT COALESCE(MAX(number), 0) + 1 FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL"
+        "SELECT COALESCE(MAX(number), 0) + 1 FROM questions WHERE statement_id = :statementId"
     )
     Mono<Integer> findNextQuestionNumber(Long statementId);
 

@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.repository;
 
 import ao.creativemode.kixi.exams.model.QuestionOption;
 
+import java.util.Collection;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;
@@ -27,6 +28,17 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
      * Find all options for a specific question
      */
     Flux<QuestionOption> findAllByQuestionIdAndDeletedAtIsNull(Long questionId);
+
+    /**
+     * The options of several questions at once, in display order.
+     *
+     * <p>For rendering a whole paper at once. One query per question would be
+     * twenty round-trips on a paper of twenty, and the caller is holding the
+     * questions already, so the ids are known.
+     */
+    @Query("SELECT * FROM question_options WHERE question_id IN (:questionIds) "
+        + "AND deleted_at IS NULL ORDER BY order_index ASC")
+    Flux<QuestionOption> findAllByQuestionIdInAndDeletedAtIsNull(Collection<Long> questionIds);
 
     /**
      * Find all options for a question, ordered by label
@@ -115,10 +127,39 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
     Mono<Integer> softDeleteAllByQuestionId(Long questionId);
 
     /**
-     * Find the next order index for a question
+     * Find the next order index for a question.
+     *
+     * <p>Counts the soft-deleted rows too, so an index is never handed out twice
+     * and the ordering stays deterministic after a removal.
      */
-    @Query("SELECT COALESCE(MAX(order_index), 0) + 1 FROM question_options WHERE question_id = :questionId AND deleted_at IS NULL")
+    @Query("SELECT COALESCE(MAX(order_index), 0) + 1 FROM question_options WHERE question_id = :questionId")
     Mono<Integer> findNextOrderIndex(Long questionId);
+
+    /**
+     * Soft delete all options of a question, stamped with the same
+     * {@code deletedAt} as the question so a restore can tell which options its
+     * own cascade touched, rather than reviving options removed beforehand.
+     *
+     * <p>{@code updated_at} moves with it: this row changed, and
+     * {@link QuestionOptionResponse#getUpdatedAt()} is what the client reads to
+     * know. The two rewrites of {@code is_correct} in this interface set it too,
+     * so leaving it out here would be the odd one out.
+     */
+    @Query("UPDATE question_options SET deleted_at = :deletedAt, updated_at = CURRENT_TIMESTAMP "
+        + "WHERE question_id = :questionId AND deleted_at IS NULL")
+    Mono<Integer> softDeleteAllByQuestionIdAndDeletedAt(Long questionId,
+        java.time.LocalDateTime deletedAt);
+
+    /** The other half of the cascade above. */
+    @Query("UPDATE question_options SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP "
+        + "WHERE question_id = :questionId AND deleted_at = :deletedAt")
+    Mono<Integer> restoreAllDeletedByQuestionIdAndDeletedAt(Long questionId,
+        java.time.LocalDateTime deletedAt);
+
+    /** Any state (active or trashed), so a removed label is restored instead of colliding. */
+    Mono<QuestionOption> findByQuestionIdAndOptionLabel(Long questionId, String optionLabel);
+
+    Flux<QuestionOption> findAllByQuestionIdAndDeletedAtIsNotNull(Long questionId);
 
     /**
      * Mark all options as incorrect for a question

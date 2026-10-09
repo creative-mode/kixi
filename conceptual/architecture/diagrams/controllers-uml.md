@@ -124,26 +124,34 @@ classDiagram
     }
 
     class QuestionController {
-    +listAllActive() : Mono<ResponseEntity<List<QuestionResponse>>>
-    +listTrashed() : Mono<ResponseEntity<List<QuestionResponse>>>
-    +getById(id: Long) : Mono<ResponseEntity<QuestionResponse>>
-    +create(request: QuestionRequest) : Mono<ResponseEntity<QuestionResponse>>
-    +update(id: Long, request: QuestionRequest) : Mono<ResponseEntity<QuestionResponse>>
-    +softDelete(id: Long) : Mono<ResponseEntity<Void>>
-    +restore(id: Long) : Mono<ResponseEntity<Void>>
-    +hardDelete(id: Long) : Mono<ResponseEntity<Void>>
+    +listAll(statementId: Long) : Mono<ResponseEntity<List<QuestionResponse>>>
+    +listDeleted(statementId: Long) : Mono<ResponseEntity<List<QuestionResponse>>>
+    +findById(statementId: Long, questionId: Long) : Mono<ResponseEntity<QuestionResponse>>
+    +create(statementId: Long, request: QuestionRequest) : Mono<ResponseEntity<QuestionResponse>>
+    +update(statementId: Long, questionId: Long, request: QuestionRequest) : Mono<ResponseEntity<QuestionResponse>>
+    +reorder(statementId: Long, request: QuestionReorderRequest) : Mono<ResponseEntity<List<QuestionResponse>>>
+    +setCorrectOption(statementId: Long, questionId: Long, request: CorrectOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
+    +softDelete(statementId: Long, questionId: Long) : Mono<ResponseEntity<Void>>
+    +restore(statementId: Long, questionId: Long) : Mono<ResponseEntity<Void>>
+    +hardDelete(statementId: Long, questionId: Long) : Mono<ResponseEntity<Void>>
 
     }
 
     class QuestionOptionController {
-    +listAllActive() : Mono<ResponseEntity<List<QuestionOptionResponse>>>
-    +listTrashed() : Mono<ResponseEntity<List<QuestionOptionResponse>>>
-    +getById(id: Long) : Mono<ResponseEntity<QuestionOptionResponse>>
-    +create(request: QuestionOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
-    +update(id: Long, request: QuestionOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
-    +softDelete(id: Long) : Mono<ResponseEntity<Void>>
-    +restore(id: Long) : Mono<ResponseEntity<Void>>
-    +hardDelete(id: Long) : Mono<ResponseEntity<Void>>
+    +listAll(statementId: Long, questionId: Long) : Mono<ResponseEntity<List<QuestionOptionResponse>>>
+    +listDeleted(statementId: Long, questionId: Long) : Mono<ResponseEntity<List<QuestionOptionResponse>>>
+    +findById(statementId: Long, questionId: Long, optionId: Long) : Mono<ResponseEntity<QuestionOptionResponse>>
+    +create(statementId: Long, questionId: Long, request: QuestionOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
+    +update(statementId: Long, questionId: Long, optionId: Long, request: QuestionOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
+    +reorder(statementId: Long, questionId: Long, request: QuestionOptionReorderRequest) : Mono<ResponseEntity<List<QuestionOptionResponse>>>
+    +softDelete(statementId: Long, questionId: Long, optionId: Long) : Mono<ResponseEntity<Void>>
+    +restore(statementId: Long, questionId: Long, optionId: Long) : Mono<ResponseEntity<Void>>
+    +hardDelete(statementId: Long, questionId: Long, optionId: Long) : Mono<ResponseEntity<Void>>
+
+    }
+
+    class QuestionAnswerKeyController {
+    +setCorrectOption(questionId: Long, request: CorrectOptionRequest) : Mono<ResponseEntity<QuestionOptionResponse>>
 
     }
 
