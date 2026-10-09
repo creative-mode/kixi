@@ -4,6 +4,8 @@ import static org.springframework.http.HttpStatus.NO_CONTENT;
 
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerGradeRequest;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
@@ -20,13 +22,16 @@ public class SimulationAnswerController {
 
     private final SimulationAnswerService service;
     private final CurrentAccountService currentAccountService;
+    private final SimulationSubmissionService submissionService;
 
     public SimulationAnswerController(
         SimulationAnswerService service,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        SimulationSubmissionService submissionService
     ) {
         this.service = service;
         this.currentAccountService = currentAccountService;
+        this.submissionService = submissionService;
     }
 
     /**
@@ -105,6 +110,14 @@ public class SimulationAnswerController {
                 ? service.update(id, request)
                 : service.updateForAccount(id, request, tuple.getT1()))
             .map(ResponseEntity::ok);
+    }
+
+    @PatchMapping("/{id}/grade")
+    public Mono<ResponseEntity<SimulationAnswerResponse>> grade(
+        @PathVariable Long id,
+        @Valid @RequestBody SimulationAnswerGradeRequest request
+    ) {
+        return submissionService.grade(id, request.scoreObtained()).map(ResponseEntity::ok);
     }
 
     /**

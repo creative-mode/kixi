@@ -92,6 +92,12 @@ public class SimulationAnswerService {
     private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId) {
         return simulationRepository.findByIdAndDeletedAtIsNull(simulationId)
             .switchIfEmpty(Mono.error(ApiException.badRequest("Simulation not found: " + simulationId)))
+            .flatMap(simulation -> {
+                if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
+                    return Mono.error(ApiException.conflict("Simulation no longer accepts answers"));
+                }
+                return Mono.just(simulation);
+            })
             .then(questionRepository.findById(questionId)
                 .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId))))
             .then();
@@ -114,7 +120,8 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
-            .flatMap(answer -> requireSimulationAndQuestion(request.simulationId(), request.questionId())
+            .flatMap(answer -> requireEditableSimulation(answer.getSimulationId())
+                .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
                 .then(Mono.defer(() -> {
                     answer.setSimulationId(request.simulationId());
                     answer.setQuestionId(request.questionId());
@@ -202,6 +209,7 @@ public class SimulationAnswerService {
             entity.getAnswerText(),
             entity.getScoreObtained(),
             entity.getIsCorrect(),
+            entity.getReviewStatus(),
             entity.getAnsweredAt(),
             entity.getCreatedAt(),
             entity.getUpdatedAt(),
@@ -221,8 +229,8 @@ public class SimulationAnswerService {
         SimulationAnswer answer,
         SimulationAnswerRequest request
     ) {
-        return questionRepository.findById(request.questionId())
-            .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + request.questionId())))
+        return requireEditableSimulation(answer.getSimulationId())
+            .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
             .then(Mono.defer(() -> {
                 answer.setSimulationId(request.simulationId());
                 answer.setQuestionId(request.questionId());
@@ -232,5 +240,14 @@ public class SimulationAnswerService {
                 answer.setUpdatedAt(LocalDateTime.now());
                 return repository.save(answer);
             }));
+    }
+
+    private Mono<Void> requireEditableSimulation(Long simulationId) {
+        return simulationRepository.findByIdAndDeletedAtIsNull(simulationId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+            .flatMap(simulation -> simulation.getStatus()
+                    == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
+                ? Mono.empty()
+                : Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
     }
 }

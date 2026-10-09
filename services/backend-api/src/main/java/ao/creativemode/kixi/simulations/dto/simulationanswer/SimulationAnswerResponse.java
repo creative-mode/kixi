@@ -10,6 +10,7 @@ public record SimulationAnswerResponse(
     String answerText,
     Float scoreObtained,
     Boolean isCorrect,
+    ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
     LocalDateTime answeredAt,
     LocalDateTime createdAt,
     LocalDateTime updatedAt,

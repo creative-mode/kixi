@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
@@ -23,15 +24,18 @@ public class SimulationController {
     private final SimulationService service;
     private final SimulationResultService resultService;
     private final CurrentAccountService currentAccountService;
+    private final SimulationSubmissionService submissionService;
 
     public SimulationController(
             SimulationService service,
             SimulationResultService resultService,
-            CurrentAccountService currentAccountService
+            CurrentAccountService currentAccountService,
+            SimulationSubmissionService submissionService
     ) {
         this.service = service;
         this.resultService = resultService;
         this.currentAccountService = currentAccountService;
+        this.submissionService = submissionService;
     }
 
     @GetMapping
@@ -79,6 +83,15 @@ public class SimulationController {
         return currentAccountService.requiredAccountId()
                 .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
                 .flatMap(tuple -> resultService.findResult(id, tuple.getT1(), tuple.getT2()))
+                .map(ResponseEntity::ok);
+    }
+
+    @PostMapping("/{id}/submit")
+    public Mono<ResponseEntity<SimulationResultResponse>> submit(@PathVariable Long id) {
+        return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+                .flatMap(tuple -> submissionService.submit(id, tuple.getT1(), tuple.getT2())
+                        .then(resultService.findResult(id, tuple.getT1(), tuple.getT2())))
                 .map(ResponseEntity::ok);
     }
 

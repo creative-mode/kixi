@@ -88,7 +88,8 @@ public class SimulationService {
                     simulation.setAccountId(dto.accountId());
                     simulation.setSchoolYearId(dto.schoolYearId());
                     simulation.setStatementId(dto.statementId());
-                    simulation.setStartedAt(dto.startedAt() != null ? dto.startedAt() : LocalDateTime.now());
+                    // The clock starts on the server; a client must not choose its own elapsed time.
+                    simulation.setStartedAt(LocalDateTime.now());
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     return repository.save(simulation);
                 }))
@@ -124,14 +125,8 @@ public class SimulationService {
                     }
 
                     if (dto.status() == SimulationStatus.FINISHED) {
-                        if (dto.finishedAt() == null || dto.timeSpentSeconds() == null) {
-                            return Mono.error(ApiException.badRequest(
-                                    "finishedAt and timeSpentSeconds are required"
-                            ));
-                        }
-                        simulation.setFinishedAt(dto.finishedAt());
-                        simulation.setTimeSpentSeconds(dto.timeSpentSeconds());
-                        simulation.setFinalScore(dto.finalScore());
+                        return Mono.error(ApiException.badRequest(
+                                "Use POST /simulations/{id}/submit to finish a simulation"));
                     }
 
                     if (dto.status() != null) {
