@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.repository;
 
 import ao.creativemode.kixi.exams.model.QuestionOption;
 
+import java.util.Collection;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;
@@ -27,6 +28,17 @@ public interface QuestionOptionRepository extends R2dbcRepository<QuestionOption
      * Find all options for a specific question
      */
     Flux<QuestionOption> findAllByQuestionIdAndDeletedAtIsNull(Long questionId);
+
+    /**
+     * The options of several questions at once, in display order.
+     *
+     * <p>For rendering a whole paper at once. One query per question would be
+     * twenty round-trips on a paper of twenty, and the caller is holding the
+     * questions already, so the ids are known.
+     */
+    @Query("SELECT * FROM question_options WHERE question_id IN (:questionIds) "
+        + "AND deleted_at IS NULL ORDER BY order_index ASC")
+    Flux<QuestionOption> findAllByQuestionIdInAndDeletedAtIsNull(Collection<Long> questionIds);
 
     /**
      * Find all options for a question, ordered by label

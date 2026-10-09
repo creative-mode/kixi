@@ -101,6 +101,31 @@ class StatementFullResponseTest {
     }
 
     @Test
+    void aStudentAlsoGetsNoOcrConfidence() {
+        // #106. How sure the OCR was about a line is how a teacher decides to
+        // re-read it; a student reading the number learns which questions the
+        // machine may have mangled, and that is worth keeping to whoever will
+        // act on it. It costs a student nothing to be without it.
+        givenAFullStatement();
+        statement.setOcrConfidence(0.42);
+        Question question = new Question(STATEMENT_ID, 1, "Resolva x+1=2", "multiple_choice");
+        question.setId(QUESTION_ID);
+        question.setOcrConfidence(0.31);
+        QuestionOption option = new QuestionOption(QUESTION_ID, "B", "x = 1", true);
+        option.setId(OPTION_ID);
+        option.setOcrConfidence(0.87);
+        when(statementService.findByIdWithQuestionsVisible(anyLong()))
+                .thenReturn(Mono.just(new StatementWithQuestions(
+                        statement, List.of(question), List.of(option))));
+
+        String json = bodyAsJson(studentJwt());
+
+        assertThat(json).doesNotContain("ocrConfidence");
+        // Even with the numbers on the rows behind it.
+        assertThat(json).doesNotContain("0.42").doesNotContain("0.31").doesNotContain("0.87");
+    }
+
+    @Test
     void staffGetTheAnswerAndTheReviewState() {
         givenAFullStatement();
 
