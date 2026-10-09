@@ -53,6 +53,13 @@ public record StatementOcrResponse(
      * {@code StatementController.readableStatementWithQuestions}: an
      * administrator and a teacher reach the full paper, anyone else only reaches
      * a published one.
+     *
+     * <p>{@code ocrConfidence} travels with the rest of it, and it is worth
+     * saying why, because it is not answer-key leakage. How sure the OCR was about
+     * a given line is how a teacher decides whether to re-read that line; a
+     * student reading the same number learns which questions the machine may have
+     * mangled, and that is worth keeping to the people who will act on it. It
+     * costs a student nothing to be without it.
      */
     public static StatementOcrResponse from(StatementWithQuestions result, boolean staff) {
         Statement s = result.statement();
@@ -82,7 +89,7 @@ public record StatementOcrResponse(
             s.getVisible(),
             staff ? s.getNeedsReview() : null,
             s.getSource(),
-            s.getOcrConfidence(),
+            staff ? s.getOcrConfidence() : null,
             s.getOcrRequestId(),
             s.getSchoolYearId(),
             s.getTermId(),
@@ -132,7 +139,7 @@ public record QuestionResponse(
                 q.getQuestionType(),
                 q.getMaxScore(),
                 q.getOrderIndex(),
-                q.getOcrConfidence(),
+                staff ? q.getOcrConfidence() : null,
                 q.getPageIndex(),
                 staff ? q.getNeedsReview() : null,
                 options
@@ -163,7 +170,7 @@ public record QuestionResponse(
                 o.getOptionText(),
                 staff ? o.getIsCorrect() : null,
                 o.getOrderIndex(),
-                o.getOcrConfidence()
+                staff ? o.getOcrConfidence() : null
             );
         }
     }

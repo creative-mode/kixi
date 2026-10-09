@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.*;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import jakarta.validation.Valid;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
+import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
+import ao.creativemode.kixi.simulations.service.SimulationResultService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
@@ -19,13 +21,16 @@ import java.util.List;
 public class SimulationController {
 
     private final SimulationService service;
+    private final SimulationResultService resultService;
     private final CurrentAccountService currentAccountService;
 
     public SimulationController(
             SimulationService service,
+            SimulationResultService resultService,
             CurrentAccountService currentAccountService
     ) {
         this.service = service;
+        this.resultService = resultService;
         this.currentAccountService = currentAccountService;
     }
 
@@ -55,6 +60,26 @@ public class SimulationController {
                 .next()
                 .map(ResponseEntity::ok)
                 .defaultIfEmpty(ResponseEntity.<SimulationResponse>notFound().build());
+    }
+
+    /**
+     * The result of a simulation, with the answer key.
+     *
+     * <p>The only route that shows a student which option was right. The key used
+     * to reach them through {@code GET /statements/{id}/full}; #106 closed that
+     * and this is where it went instead.
+     *
+     * <p>Before the simulation is {@code FINISHED} this answers 409. The student
+     * is allowed to have a result, they have not finished earning it, and the
+     * status says so in words rather than leaving them to guess whether the 409
+     * meant that or that the simulation is gone.
+     */
+    @GetMapping("/{id}/result")
+    public Mono<ResponseEntity<SimulationResultResponse>> findResult(@PathVariable Long id) {
+        return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+                .flatMap(tuple -> resultService.findResult(id, tuple.getT1(), tuple.getT2()))
+                .map(ResponseEntity::ok);
     }
 
     @PostMapping
