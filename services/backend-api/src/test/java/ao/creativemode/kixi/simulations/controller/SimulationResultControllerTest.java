@@ -24,6 +24,7 @@ import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -74,6 +75,9 @@ class SimulationResultControllerTest {
 
     @MockBean
     private SimulationResultService simulationResultService;
+
+    @MockBean
+    private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
     private SimulationRepository simulations;
@@ -177,11 +181,14 @@ class SimulationResultControllerTest {
                 SIMULATION_ID,
                 SimulationStatus.FINISHED,
                 5.0,
+                1,
+                1,
+                0,
                 1800,
                 LocalDateTime.now(),
                 List.of(new SimulationResultResponse.QuestionResult(
                         20L, 1, "Qual?", "multiple_choice", 5.0, "because B is right",
-                        31L, 30L, null, 0.0f,
+                        31L, 30L, null, 0.0f, false, null,
                         List.of(
                             new SimulationResultResponse.OptionResult(30L, "A", "A text", false),
                             new SimulationResultResponse.OptionResult(31L, "B", "B text", true)))));

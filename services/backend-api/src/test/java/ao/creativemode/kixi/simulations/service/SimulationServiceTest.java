@@ -188,7 +188,7 @@ class SimulationServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getMessage())
-                            .isEqualTo("finishedAt and timeSpentSeconds are required");
+                            .contains("/submit");
                 })
                 .verify();
 
@@ -196,19 +196,18 @@ class SimulationServiceTest {
     }
 
     @Test
-    void updateFinishesSimulationWhenAllRequiredFieldsProvided() {
+    void updateCannotUseClientPayloadToFinishSimulation() {
         Simulation inProgress = simulation(1L, SimulationStatus.IN_PROGRESS);
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgress));
-        when(repository.save(any(Simulation.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-
-        LocalDateTime finishedAt = LocalDateTime.now();
         StepVerifier.create(service.update(1L,
-                        new SimulationRequest(1L, 1L, 1L, null, finishedAt, 600, 8.5, SimulationStatus.FINISHED)))
-                .assertNext(response -> {
-                    assertThat(response.status()).isEqualTo(SimulationStatus.FINISHED);
-                    assertThat(response.finalScore()).isEqualTo(8.5);
+                        new SimulationRequest(1L, 1L, 1L, null, LocalDateTime.now(), 600, 8.5, SimulationStatus.FINISHED)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getMessage())
+                            .contains("/submit");
                 })
-                .verifyComplete();
+                .verify();
+        verify(repository, never()).save(any());
     }
 
     @Test
