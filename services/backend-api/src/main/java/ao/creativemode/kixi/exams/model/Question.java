@@ -80,6 +80,14 @@ public class Question {
     @Column("needs_review")
     private Boolean needsReview;
 
+    /**
+     * The answer a free-response question expects, for automatic correction.
+     * Empty on a multiple choice question, whose answer lives on the option
+     * flagged {@code is_correct}.
+     */
+    @Column("model_answer")
+    private String modelAnswer;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -186,6 +194,14 @@ public class Question {
 
     public void setNeedsReview(Boolean needsReview) {
         this.needsReview = needsReview;
+    }
+
+    public String getModelAnswer() {
+        return modelAnswer;
+    }
+
+    public void setModelAnswer(String modelAnswer) {
+        this.modelAnswer = modelAnswer;
     }
 
     public LocalDateTime getCreatedAt() {
