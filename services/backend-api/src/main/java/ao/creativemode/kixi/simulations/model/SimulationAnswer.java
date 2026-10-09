@@ -33,6 +33,9 @@ public class SimulationAnswer {
     @Column("is_correct")
     private Boolean isCorrect;
 
+    @Column("review_status")
+    private SimulationAnswerStatus reviewStatus;
+
     @Column("answered_at")
     private LocalDateTime answeredAt;
 
