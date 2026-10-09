@@ -19,6 +19,7 @@ import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementLinkValidationService;
+import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
@@ -50,6 +51,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.test.web.reactive.server.WebTestClientConfigurer;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -72,7 +74,7 @@ import reactor.core.publisher.Mono;
 @Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class,
         CurrentAccountService.class, JwtAuthenticationFilter.class, RequestIdWebFilter.class,
         StatementService.class, InstitutionAccessService.class, TeachingAssignmentService.class,
-        StatementLinkValidationService.class})
+        StatementLinkValidationService.class, StatementWriteAccessService.class})
 class StatementApprovalAuthorizationTest {
 
     private static final Long ADMIN_ID = 1L;
@@ -151,7 +153,7 @@ class StatementApprovalAuthorizationTest {
         givenTheInstitutionTeachesTheSubject();
         // No teacher profile for the administrator at all.
         when(teachers.findByAccountIdAndDeletedAtIsNull(ADMIN_ID)).thenReturn(Mono.empty());
-        givenTheStatementIsReadable();
+        givenTheStatementIsReadyToApprove();
 
         client.mutateWith(adminJwt())
                 .post()
@@ -170,7 +172,7 @@ class StatementApprovalAuthorizationTest {
         givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
-        givenTheStatementIsReadable();
+        givenTheStatementIsReadyToApprove();
 
         client.mutateWith(adminJwt())
                 .post()
@@ -186,7 +188,7 @@ class StatementApprovalAuthorizationTest {
         givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(true));
-        givenTheStatementIsReadable();
+        givenTheStatementIsReadyToApprove();
 
         client.mutateWith(teacherJwt())
                 .post()
@@ -502,6 +504,21 @@ givenTheStatementIsReadable();
     private void givenTheStatementIsReadable() {
         when(statements.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(statement));
         when(statements.save(statement)).thenReturn(Mono.just(statement));
+    }
+
+    /**
+     * Nothing stands in the way of approving this statement.
+     *
+     * <p>Kept apart from {@link #givenTheStatementIsReadable()} because approving
+     * also asks whether the answer key is complete and whether the scores add
+     * up. These cases are about who may approve, not about what has to be true
+     * first, so folding the two queries in here would put the gate in the way of
+     * every authorization case. The gate itself is in StatementServiceTest.
+     */
+    private void givenTheStatementIsReadyToApprove() {
+        givenTheStatementIsReadable();
+        when(questions.findQuestionsWithoutCorrectOption(1L)).thenReturn(Flux.empty());
+        when(questions.calculateTotalMaxScore(1L)).thenReturn(Mono.just(0.0));
     }
 
     private Teacher teacher(Long id) {

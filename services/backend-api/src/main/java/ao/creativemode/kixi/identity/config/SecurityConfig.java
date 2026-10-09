@@ -73,6 +73,14 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
                                 "/api/v1/me", "/api/v1/me/**")
                         .authenticated()
+                        // The AI tutor (issue #114). Every signed-in account may
+                        // chat; the service scopes each turn to the caller's own
+                        // session and to that session's visible statement. An
+                        // explicit rule keeps this path out of anyExchange() —
+                        // the fall-through that twice let a student reach
+                        // material it should not (teaching-assignments, gabarito).
+                        .pathMatchers("/api/v1/chat/**")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
@@ -82,6 +90,16 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.GET, "/api/v1/statements/**")
                         .authenticated()
                         .pathMatchers("/api/v1/statements/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        // The answer key also answers to the path the issue
+                        // spells out, /api/v1/questions/{id}/correct-option,
+                        // which is outside the statements tree. Without a rule
+                        // of its own it fell through to anyExchange(), and any
+                        // authenticated account — a student included — could
+                        // mark an answer. Nothing in the service would have
+                        // stopped it: the write rule weighs the statement the
+                        // caller never named.
+                        .pathMatchers("/api/v1/questions/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET, "/api/v1/ocr/**")
                         .authenticated()

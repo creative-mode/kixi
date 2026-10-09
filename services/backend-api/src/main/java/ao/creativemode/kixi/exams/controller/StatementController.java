@@ -118,15 +118,22 @@ public class StatementController {
 
     /**
      * Get a statement with all its questions and options.
+     *
+     * <p>The answer key rides along only for staff. Until #104 this route was
+     * harmless to read: the OCR wrote {@code is_correct = false} on every option
+     * and nothing could set otherwise, so the flag it returned was the same on
+     * every paper. That PR gave teachers a way to mark the real one, which turned
+     * an empty field into the answer.
      */
     @GetMapping("/{id}/full")
     public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(
         @PathVariable Long id
     ) {
-        return readableStatementWithQuestions(
-                () -> statementService.findByIdWithQuestions(id),
-                () -> statementService.findByIdWithQuestionsVisible(id))
-            .map(StatementOcrResponse::from)
+        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
+            .flatMap(staff -> readableStatementWithQuestions(
+                    () -> statementService.findByIdWithQuestions(id),
+                    () -> statementService.findByIdWithQuestionsVisible(id))
+                .map(result -> StatementOcrResponse.from(result, staff)))
             .map(ResponseEntity::ok);
     }
 

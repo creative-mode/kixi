@@ -247,12 +247,12 @@ class MeServiceTest {
     }
 
     /**
- * The enrollment decides the school. A profile showing the school of one institution
- * next to the course and class of another reads as a mistake, so when both exist and
- * disagree, the school of the class the student is actually in is the one shown.
- */
-@Test
-void getMePrefersTheEnrolledClassSchoolOverTheAdministratorLink() {
+     * The enrollment decides the school. A profile showing the school of one institution
+     * next to the course and class of another reads as a mistake, so when both exist and
+     * disagree, the school of the class the student is actually in is the one shown.
+     */
+    @Test
+    void getMePrefersTheEnrolledClassSchoolOverTheAdministratorLink() {
         stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", null, "STUDENT");
         when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L))

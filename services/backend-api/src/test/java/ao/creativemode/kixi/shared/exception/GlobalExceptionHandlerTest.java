@@ -153,14 +153,44 @@ class GlobalExceptionHandlerTest {
         org.springframework.validation.FieldError blank =
                 new org.springframework.validation.FieldError(
                         "request", "code", "Code is required");
+        org.springframework.validation.FieldError tooShort =
+                new org.springframework.validation.FieldError(
+                        "request", "code", "Code must be between 2 and 50 characters");
 
         WebExchangeBindException ex = org.mockito.Mockito.mock(WebExchangeBindException.class);
-        org.mockito.Mockito.when(ex.getFieldErrors()).thenReturn(java.util.List.of(blank, blank));
+        org.mockito.Mockito.when(ex.getFieldErrors())
+                .thenReturn(java.util.List.of(blank, tooShort));
 
         ResponseEntity<ProblemDetail> response = handler.handleValidationErrors(ex, exchange()).block();
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody().status()).isEqualTo(400);
+    }
+
+    /**
+     * Every field error is a plain string. The clients read them with
+     * {@code Object.values(properties).filter(v => typeof v === 'string')}, so a
+     * nested object is dropped without a sound and the field reads as valid.
+     */
+    @Test
+    void fieldErrorsArePlainStringsTheClientsCanRead() {
+        org.springframework.validation.FieldError blank =
+                new org.springframework.validation.FieldError(
+                        "request", "code", "Code is required");
+        org.springframework.validation.FieldError tooShort =
+                new org.springframework.validation.FieldError(
+                        "request", "code", "Code must be between 2 and 50 characters");
+
+        WebExchangeBindException ex = org.mockito.Mockito.mock(WebExchangeBindException.class);
+        org.mockito.Mockito.when(ex.getFieldErrors())
+                .thenReturn(java.util.List.of(blank, tooShort));
+
+        ProblemDetail body = handler.handleValidationErrors(ex, exchange()).block().getBody();
+
+        java.util.Map<String, Object> properties = (java.util.Map<String, Object>) body.properties();
+        assertThat(properties.get("code")).isInstanceOf(String.class)
+                .as("a nested object here is discarded by every client")
+                .isEqualTo("Code is required · Code must be between 2 and 50 characters");
     }
 }

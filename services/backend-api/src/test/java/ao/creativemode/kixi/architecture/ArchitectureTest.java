@@ -19,7 +19,8 @@ import org.junit.jupiter.api.Test;
  *  |- institutions (schools, subject/teacher/student affiliations) -&gt; shared, identity, academic
  *  |- exams      (statements, questions, options, question images) -&gt; shared, institutions
  *  |- simulations (simulations, simulation answers) -&gt; shared, identity, academic, exams
- *  '- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
+ *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
+ *  '- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -92,6 +93,20 @@ class ArchitectureTest {
     void ocrDoesNotDependOnIdentityOrSimulations() {
         noClasses().that().resideInAPackage("..ocr..")
                 .should().dependOnClassesThat().resideInAnyPackage("..identity..", "..simulations..")
+                .check(classes);
+    }
+
+    /**
+     * The tutor reads statements/questions (exams) and resolves the caller
+     * through shared, and nothing else: no reaching into identity for roles
+     * (the security chain already decided who is calling) or into academic
+     * for names that are not part of the prompt.
+     */
+    @Test
+    void chatOnlyDependsOnSharedAndExams() {
+        noClasses().that().resideInAPackage("..chat..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..identity..", "..academic..", "..institutions..", "..simulations..", "..ocr..")
                 .check(classes);
     }
 
