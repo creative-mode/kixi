@@ -89,6 +89,11 @@ services:
       # JWT Configuration (required; never use a repository default)
       APP_JWT_SECRET: ${APP_JWT_SECRET:?Set APP_JWT_SECRET to a random value of at least 32 characters}
       APP_JWT_EXPIRATION_MS: ${APP_JWT_EXPIRATION_MS:-86400000}
+      # First ADMIN bootstrap (optional, see .env.example): creates the first
+      # administrator on startup when none exists; without them nothing happens.
+      APP_BOOTSTRAP_ADMIN_USERNAME: ${APP_BOOTSTRAP_ADMIN_USERNAME:-}
+      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
+      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       APP_AUTH_GOOGLE_STATE_COOKIE_SECURE: ${GOOGLE_OAUTH_STATE_COOKIE_SECURE:-true}
       OCR_SERVICE_API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
       # AI tutor (Groq). Optional by design: the compose file must start without
