@@ -2,6 +2,42 @@
 
 **Status:** Proposed for Review and Acceptance via ADR
 
+## Delivered today (issue #114 · Fase 1)
+
+The first slice of this layer ships **inside the backend**, not as a separate
+service: a tutor bound to one statement, with Groq as the provider. It is the
+smallest thing that satisfies ADR-0010 (validated domain data, separated from
+OCR) while the microservice described below stays the future state.
+
+| Endpoint | Body | Answer |
+|---|---|---|
+| `POST /api/v1/chat/sessions` | `{ "statementId": … }` | `201` + session (`id`, `statementId`, `createdAt`) |
+| `POST /api/v1/chat/sessions/{id}/messages` | `{ "content": … }` | `text/event-stream` |
+
+SSE contract (fetch + `ReadableStream` on the client — `EventSource` cannot
+POST): events `delta { content }` in order, then `final { messageId, model }`;
+if the provider fails after the stream started, a single `error { code, message }`.
+Failures **before** the first byte are regular HTTP statuses: `404` unknown or
+foreign session, `429` + `Retry-After` when the per-account window is spent,
+`503` while `APP_GROQ_API_KEY` is unset.
+
+Behaviour worth knowing:
+
+* The prompt contains the session's statement, its questions and options —
+  and **never the answer key** (`isCorrect` is not read); questions still
+  awaiting review are excluded (validated data only).
+* Security rule: explicit `/api/v1/chat/** → authenticated` in
+  `SecurityConfig`; sessions resolve by `(id, account)`, so someone else's
+  session is a `404`.
+* Configuration: `app.groq.*` and `app.chat.rate-limit.*` (see
+  `services/backend-api/.env.example`).
+* Tests never call the real provider: `GroqClientTest` answers through a
+  `MockWebServer`, `ChatServiceTest` through a mocked client.
+
+Everything below this section describes the **future** RAG-based design.
+
+---
+
 The AI and chatbot layer of the Enuncia Platform operates exclusively on structured data already persisted in the relational database, never on raw OCR outputs or unvalidated information. Its purpose is to provide intelligent study support, content explanations, generation of similar exercises, and complementary recommendations, always keeping the database as the single source of truth.
 
 The layer is implemented as an independent microservice (`ai-service`) in Python using FastAPI and LangChain, ensuring full decoupling from the ingestion pipeline (OCR + backend) and allowing independent evolution.

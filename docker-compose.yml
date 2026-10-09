@@ -91,6 +91,10 @@ services:
       APP_JWT_EXPIRATION_MS: ${APP_JWT_EXPIRATION_MS:-86400000}
       APP_AUTH_GOOGLE_STATE_COOKIE_SECURE: ${GOOGLE_OAUTH_STATE_COOKIE_SECURE:-true}
       OCR_SERVICE_API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
+      # AI tutor (Groq). Optional by design: the compose file must start without
+      # it, and /api/v1/chat answers 503 until a key is provided.
+      APP_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      APP_GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       # Object storage. Keep local for the default development profile;
       # use STORAGE_PROVIDER=s3 with --profile storage for MinIO.
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
