@@ -95,6 +95,9 @@ public class StatementCatalogRepository {
             binds.put("classId", criteria.classId());
         }
         if (criteria.grade() != null) {
+            // The "classe" only exists on the class: statements have no grade column. So a
+            // statement linked to a course but to no class has no grade to match and is
+            // left out when filtering by grade. Intentional until statements carry one.
             where.add("cl.grade = :grade");
             binds.put("grade", criteria.grade());
         }
