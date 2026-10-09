@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.social.enums;
+package ao.creativemode.kixi.feed.enums;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;

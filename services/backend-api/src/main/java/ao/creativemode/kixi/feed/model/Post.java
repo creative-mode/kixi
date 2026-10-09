@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.social.model;
+package ao.creativemode.kixi.feed.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
