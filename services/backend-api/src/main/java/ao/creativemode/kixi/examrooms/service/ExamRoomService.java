@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.examrooms.service;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
 import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -48,12 +49,21 @@ public class ExamRoomService implements ExamRoomAccess {
     private final AccountRoleRepository accountRoles;
     private final RoleRepository roles;
     private final QuestionRepository questions;
+    private final Clock clock;
+
+    public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
+            SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
+            ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions) {
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
+                accountRoles, roles, questions, Clock.systemDefaultZone());
+    }
 
     @Autowired
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
-            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions) {
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions, Clock clock) {
         this.rooms = rooms;
         this.participants = participants;
         this.simulations = simulations;
@@ -65,6 +75,7 @@ public class ExamRoomService implements ExamRoomAccess {
         this.accountRoles = accountRoles;
         this.roles = roles;
         this.questions = questions;
+        this.clock = clock;
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
@@ -182,7 +193,7 @@ public class ExamRoomService implements ExamRoomAccess {
                 .flatMap(room -> participants.findByExamRoomIdAndAccountId(roomId, accountId)
                         .switchIfEmpty(Mono.error(ApiException.forbidden("The student is not invited to this room")))
                         .flatMap(participant -> {
-                            LocalDateTime now = LocalDateTime.now();
+                            LocalDateTime now = LocalDateTime.now(clock);
                             if (room.getStatus() != ExamRoomStatus.OPEN && room.getStatus() != ExamRoomStatus.RUNNING) {
                                 return Mono.error(ApiException.conflict("The exam room is not open"));
                             }
@@ -193,7 +204,13 @@ public class ExamRoomService implements ExamRoomAccess {
                                 return Mono.error(ApiException.conflict("The exam room has ended"));
                             }
                             if (participant.getSimulationId() != null) {
-                                return Mono.just(participant);
+                                Mono<Simulation> existingSimulation = simulations.findById(participant.getSimulationId());
+                                if (existingSimulation == null) return Mono.just(participant);
+                                return existingSimulation
+                                        .filter(simulation -> simulation.getDeletedAt() == null)
+                                        .switchIfEmpty(Mono.error(ApiException.conflict(
+                                                "The room invitation points to a deleted simulation")))
+                                        .thenReturn(participant);
                             }
                             Simulation simulation = new Simulation();
                             simulation.setAccountId(accountId);
@@ -222,6 +239,7 @@ public class ExamRoomService implements ExamRoomAccess {
         Mono<Simulation> inserted = simulations.insertExamRoomSimulation(accountId, simulation.getStatementId(), roomId,
                 simulation.getExamRoomDurationMinutes());
         if (inserted == null) inserted = simulations.save(simulation);
+        if (inserted == null) inserted = Mono.empty();
         Mono<Simulation> afterConflict = simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(roomId, accountId);
         if (afterConflict == null) afterConflict = Mono.empty();
         return existing.switchIfEmpty(inserted.switchIfEmpty(afterConflict));
@@ -270,7 +288,7 @@ public class ExamRoomService implements ExamRoomAccess {
                     || (next == ExamRoomStatus.CLOSED && (room.getStatus() == ExamRoomStatus.OPEN
                             || room.getStatus() == ExamRoomStatus.RUNNING));
             if (!valid) return Mono.error(ApiException.conflict("Invalid exam room state transition"));
-            if (next == ExamRoomStatus.RUNNING && LocalDateTime.now().isBefore(room.getStartsAt())) {
+            if (next == ExamRoomStatus.RUNNING && LocalDateTime.now(clock).isBefore(room.getStartsAt())) {
                 return Mono.error(ApiException.conflict("The exam room has not reached its start time"));
             }
             return rooms.transition(id, room.getStatus(), next)

@@ -17,6 +17,7 @@ import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.Clock;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,17 +33,38 @@ public class SimulationSubmissionService {
     private final QuestionOptionRepository options;
     private final StatementRepository statements;
     private final TeachingAssignmentAuthorizer teachingAuthorizer;
+    private final SimulationDeadlineService deadlineService;
+    private final Clock clock;
 
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, null);
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer,
+            SimulationDeadlineService deadlineService) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService,
+                Clock.systemDefaultZone());
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer,
+            SimulationDeadlineService deadlineService, Clock clock) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
         this.options = options;
         this.statements = statements;
         this.teachingAuthorizer = teachingAuthorizer;
+        this.deadlineService = deadlineService;
+        this.clock = clock;
     }
 
     @Transactional
@@ -55,9 +77,16 @@ public class SimulationSubmissionService {
                     if (simulation.getStatus() != SimulationStatus.IN_PROGRESS) {
                         return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                     }
-                    // The conditional update serializes simultaneous submissions; the transaction
-                    // holds the row lock until answer scores and the final score are saved.
-                    return simulations.claimSubmission(id).flatMap(claimed -> {
+                    // Lock and evaluate the same temporal state used by answer writes before claiming.
+                    Mono<Integer> claim = deadlineService == null ? simulations.claimSubmission(id)
+                        : simulations.lockForAnswerWrite(id)
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
+                        .flatMap(locked -> deadlineService.acceptsAnswers(locked, LocalDateTime.now(clock))
+                            .filter(Boolean::booleanValue)
+                            .switchIfEmpty(Mono.error(ApiException.conflict(
+                                "The simulation is outside its answering window")))
+                            .then(simulations.claimSubmission(id)));
+                    return claim.flatMap(claimed -> {
                         if (claimed != 1) {
                             return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                         }

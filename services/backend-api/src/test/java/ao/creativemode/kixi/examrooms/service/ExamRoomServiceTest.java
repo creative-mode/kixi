@@ -120,11 +120,12 @@ class ExamRoomServiceTest {
         participant.setSimulationId(80L);
         when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.OPEN)));
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
 
         StepVerifier.create(service.join(20L, 42L))
                 .expectNextMatches(response -> response.simulationId().equals(80L))
                 .verifyComplete();
-        verifyNoInteractions(simulations);
+        verify(simulations).findById(80L);
     }
 
     @Test
@@ -203,5 +204,12 @@ class ExamRoomServiceTest {
         participant.setExamRoomId(roomId);
         participant.setAccountId(accountId);
         return participant;
+    }
+
+    private static Simulation simulation(Long id) {
+        Simulation simulation = new Simulation();
+        simulation.setId(id);
+        simulation.setDeletedAt(null);
+        return simulation;
     }
 }

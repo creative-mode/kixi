@@ -7,6 +7,7 @@ import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
 
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,17 +37,28 @@ public class SimulationDeadlineService {
     private final AccountRepository accounts;
     private final SimulationTimeLimitProperties properties;
     private final ExamRoomAccess examRoomAccess;
+    private final Clock clock;
+
+    public SimulationDeadlineService(
+            StatementRepository statements,
+            AccountRepository accounts,
+            SimulationTimeLimitProperties properties,
+            ExamRoomAccess examRoomAccess) {
+        this(statements, accounts, properties, examRoomAccess, Clock.systemDefaultZone());
+    }
 
     @Autowired
     public SimulationDeadlineService(
             StatementRepository statements,
             AccountRepository accounts,
             SimulationTimeLimitProperties properties,
-            ExamRoomAccess examRoomAccess) {
+            ExamRoomAccess examRoomAccess,
+            Clock clock) {
         this.statements = statements;
         this.accounts = accounts;
         this.properties = properties;
         this.examRoomAccess = examRoomAccess;
+        this.clock = clock;
     }
 
     public SimulationDeadlineService(StatementRepository statements, AccountRepository accounts,
@@ -92,7 +104,14 @@ public class SimulationDeadlineService {
      * Whether the simulation still accepts answers at the given instant.
      */
     public Mono<Boolean> acceptsAnswers(Simulation simulation, LocalDateTime now) {
+        if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
+            return Mono.just(false);
+        }
         return expired(simulation, now).map(expired -> !expired);
+    }
+
+    public LocalDateTime now() {
+        return LocalDateTime.now(clock);
     }
 
     private Mono<LocalDateTime> withRoomEnd(Simulation simulation, LocalDateTime deadline) {
