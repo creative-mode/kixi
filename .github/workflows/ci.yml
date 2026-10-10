@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - prod
+      - qua
       - dev
   pull_request:
     branches:

@@ -1,0 +1,62 @@
+name: Promotor qua → prod
+
+# Mantém aberto o PR "Promoção qua → prod" e faz o merge quando o gate passa:
+# checks verdes + aprovação de quem tem escrita (ver .github/scripts/promote.js e o handbook).
+# `prod` é o release (publish.yml), por isso nunca promove sem aprovação humana.
+#
+# Requisitos (PM): Settings → Actions → General → "Allow GitHub Actions to create and approve
+# pull requests" activo, OU o secret PROMOTE_TOKEN (PAT com scope "repo"; com ele os workflows
+# normais correm no PR e o push a prod dispara o publish.yml sozinho).
+# Nota: "workflow_run" só corre a partir da versão em prod — o bot fica completo depois da 1.ª promoção.
+
+on:
+  push:
+    branches: [qua]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [qua]
+  pull_request_review:
+    types: [submitted, dismissed]
+  workflow_dispatch:
+    inputs:
+      merge:
+        description: 'Fazer merge se o gate passar (false = só preparar o PR)'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+concurrency:
+  group: promover-qua-prod
+  cancel-in-progress: false
+
+jobs:
+  promover:
+    name: Promover qua → prod
+    # pull_request_review dispara para qualquer PR; só interessa o de qua → prod
+    if: >-
+      github.event_name != 'pull_request_review' ||
+      (github.event.pull_request.head.ref == 'qua' && github.event.pull_request.base.ref == 'prod')
+    runs-on: ubuntu-latest
+    env:
+      QUA_BRANCH: qua
+      PROD_BRANCH: prod
+      REQUIRED_CHECKS: 'Backend tests,OCR tests'
+      PUBLISH_WORKFLOW: publish.yml
+      MERGE: ${{ github.event_name == 'workflow_dispatch' && inputs.merge || 'true' }}
+      PROMOTE_TOKEN_SET: ${{ secrets.PROMOTE_TOKEN != '' && 'true' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROMOTE_TOKEN || github.token }}
+          script: |
+            await require('./.github/scripts/promote.js')({ github, context, core });
