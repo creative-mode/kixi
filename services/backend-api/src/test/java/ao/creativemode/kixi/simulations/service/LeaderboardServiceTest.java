@@ -26,6 +26,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -558,6 +561,184 @@ class LeaderboardServiceTest {
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
+    }
+
+    // ── The boundary between protected and not ─────────────────────────────
+
+    @Test
+    void nineStudentsIsStillASmallGroupAndGetsNoPodium() {
+        enrolled(CLASS_ID);
+        cohortOf(descending(9), 9);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.smallGroup()).isTrue();
+        // Unranked caller, so the only source of entries would be the podium.
+        assertThat(response.entries()).isEmpty();
+    }
+
+    @Test
+    void nineStudentsStillProtectsTheBottomForACallerNearIt() {
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(9), 6), 9); // seventh of nine
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(7);
+        assertThat(positions(response)).containsExactly(5, 6, 7);
+        assertThat(positions(response)).doesNotContain(8, 9);
+    }
+
+    @Test
+    void exactlyTenStudentsGetsThePodium() {
+        // The limit itself: ten is not a small group, so the top is published.
+        enrolled(CLASS_ID);
+        cohortOf(descending(10), 10);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.smallGroup()).isFalse();
+        assertThat(positions(response)).containsExactly(1, 2, 3, 4, 5);
+    }
+
+    @Test
+    void tenStudentsIsBigEnoughThatTheBottomIsNotProtected() {
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(10), 8), 10); // ninth of ten
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(9);
+        assertThat(positions(response)).contains(8, 9, 10);
+    }
+
+    // ── Nothing else in the payload identifies a colleague ─────────────────
+
+    @Test
+    void theResponseCarriesNoOtherTraceOfAColleague() throws Exception {
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(12), 4), 12);
+
+        ObjectMapper mapper = new ObjectMapper();
+        String json = mapper.writeValueAsString(
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all")));
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object row : mapper.readTree(json).path("entries")) {
+            rows.add(mapper.convertValue(row, Map.class));
+        }
+        assertThat(rows).isNotEmpty();
+        // Colleagues appear as a position, a masked label and an average. Nothing else:
+        // no account id, no email, no username, no photo, no institution of their own.
+        assertThat(rows).allSatisfy(row ->
+                assertThat(row.keySet())
+                        .containsExactlyInAnyOrder("position", "accountId", "displayName", "average", "me"));
+        // The only account id in the payload is the caller's own, on their own row.
+        assertThat(rows).filteredOn(row -> row.get("accountId") != null)
+                .singleElement()
+                .satisfies(row -> assertThat(row.get("me")).isEqualTo(true));
+    }
+
+    // ── The ranking does not depend on how the rows arrived ────────────────
+
+    @Test
+    void theSameAveragesRankTheSameWayWhicheverOrderTheyArrive() {
+        // 90, 90 tie for first; the caller on 80 is third either way round.
+        List<GroupScore> forwards = List.of(
+                score(101L, 70.0), score(102L, 90.0), score(ACCOUNT_ID, 80.0), score(104L, 90.0));
+
+        enrolled(CLASS_ID);
+        cohortOf(forwards, 12);
+        LeaderboardResponse first = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        service = new LeaderboardService(meService, enrollments, repository);
+        cohortOf(List.of(score(104L, 90.0), score(ACCOUNT_ID, 80.0), score(101L, 70.0), score(102L, 90.0)), 12);
+        LeaderboardResponse second = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(first.myPosition()).isEqualTo(3);
+        assertThat(second.myPosition()).isEqualTo(first.myPosition());
+        // And the two tied students hold first in both, never swapping places.
+        assertThat(positions(first)).isEqualTo(positions(second));
+        assertThat(first.entries())
+                .filteredOn(entry -> !entry.me())
+                .extracting(LeaderboardResponse.Entry::position)
+                .contains(1, 1);
+    }
+
+    @Test
+    void tiedAccountsAlwaysGetTheSameOrderFromTheSameAverages() {
+        // Two students on exactly 90.0 and a caller behind them: the tie must not flip
+        // between the two tied rows, or the caller's own position would wobble.
+        List<GroupScore> scores = List.of(
+                score(102L, 90.0), score(101L, 90.0), score(ACCOUNT_ID, 50.0));
+
+        enrolled(CLASS_ID);
+        cohortOf(scores, 12);
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(3);
+        assertThat(response.entries())
+                .filteredOn(entry -> !entry.me())
+                .extracting(LeaderboardResponse.Entry::position)
+                .containsExactly(1, 1);
+    }
+
+    // ── The cache never crosses a boundary ─────────────────────────────────
+
+    @Test
+    void theCacheKeepsClassAndSchoolApartEvenWithTheSameNumber() {
+        // A class id and an institution id are separate sequences and CAN hold the same
+        // number. Seated in class 1 of school 1, the scope is the only thing telling the
+        // two rankings apart, so a cache keyed on the number alone would serve one for the
+        // other — the class ranking handed to someone asking for the school.
+        Long sharedNumber = SCHOOL_ID;
+        enrolled(sharedNumber);
+        // The seat really is in class 1 of school 1, so both scopes rank group 1.
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(enrollment(ACCOUNT_ID, sharedNumber, sharedNumber, false)));
+        when(meService.classInstitutionId(sharedNumber)).thenReturn(Mono.just(sharedNumber));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        verify(repository).countMembers(Scope.CLASS, sharedNumber);
+        verify(repository).countMembers(Scope.SCHOOL, sharedNumber);
+        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void theCacheKeepsPeriodsAndStatementsApart() {
+        enrolled(CLASS_ID);
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "month"));
+        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month"));
+
+        // Four different questions, four different rankings: none of them is an answer
+        // to a question that was not asked.
+        verify(repository, times(4)).findAverages(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void theCacheServesAWindowButNeverTheOtherCallersAnswer() {
+        // Two callers, same cohort, same cached ranking — two different neighbourhoods,
+        // and neither window carries the other's rows.
+        enrolled(CLASS_ID);
+        List<GroupScore> scores = withCaller(descending(30), 14);
+        scores.set(29, score(30L, 70.0));
+        cohortOf(scores, 30);
+
+        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse theirs = one(service.leaderboard(30L, "class", null, "all"));
+
+        assertThat(positions(mine)).contains(13, 14, 15, 16, 17).doesNotContain(30);
+        assertThat(positions(theirs)).contains(28, 29, 30).doesNotContain(15);
+        // Only one read of the cohort behind both.
+        verify(repository, times(1)).findAverages(any(), anyLong(), nullable(Long.class),
+                nullable(LocalDateTime.class), nullable(LocalDateTime.class));
     }
 
     @Test
