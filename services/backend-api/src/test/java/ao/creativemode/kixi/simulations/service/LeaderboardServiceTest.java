@@ -142,7 +142,7 @@ class LeaderboardServiceTest {
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
                 .expectErrorSatisfies(error -> {
                     assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-                    assertThat(error).hasMessageContaining("No active enrollment");
+                    assertThat(error).hasMessageContaining("active enrollment");
                 })
                 .verify();
 
@@ -165,6 +165,67 @@ class LeaderboardServiceTest {
                 .verify();
 
         verify(repository, never()).findAverages(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void aCancelledSeatInAnotherClassDoesNotRefuseTheValidOne() {
+        // The same trap as the school scope, one level down: /me points at the cancelled
+        // seat's class, and looking for an active seat in THAT class finds nothing.
+        when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(OTHER_CLASS_ID, OTHER_SCHOOL_ID)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(
+                        enrollment(ACCOUNT_ID, OTHER_CLASS_ID, OTHER_SCHOOL_ID, true),
+                        enrollment(ACCOUNT_ID, CLASS_ID, SCHOOL_ID, false)));
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        // The class of the ACTIVE seat, never the one the cancelled row pointed at.
+        assertThat(response.myPosition()).isEqualTo(1);
+        verify(repository).countMembers(Scope.CLASS, CLASS_ID);
+        verify(repository, never()).countMembers(Scope.CLASS, OTHER_CLASS_ID);
+    }
+
+    @Test
+    void aSmallClassNeverShowsItsLastPlacesToSomebodyNearTheBottom() {
+        // Eight students, the caller sixth. A symmetric window would hand them seventh and
+        // eighth, which is the exposure the issue asks to avoid.
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(8), 5), 8);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(6);
+        assertThat(positions(response)).containsExactly(4, 5, 6);
+        assertThat(positions(response)).doesNotContain(7, 8);
+    }
+
+    @Test
+    void theCallerStillSeesTheirOwnPlaceAtTheBottomOfASmallClass() {
+        // Being last is not something to hide from the student it belongs to.
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(8), 7), 8);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(8);
+        assertThat(positions(response)).contains(8);
+        assertThat(response.entries())
+                .filteredOn(entry -> entry.me())
+                .singleElement()
+                .satisfies(entry -> assertThat(entry.position()).isEqualTo(8));
+    }
+
+    @Test
+    void aLargeClassIsNotCutOffAtTheBottom() {
+        // The protection is for small classes only; thirty students are not a privacy risk.
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(30), 28), 30);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(29);
+        assertThat(positions(response)).contains(28, 29, 30);
     }
 
     @Test
@@ -297,7 +358,10 @@ class LeaderboardServiceTest {
 
     @Test
     void refusesAClassRankingForAnAccountWithNoEnrollment() {
+        // The profile has no class because there is no seat to read one from, and a link
+        // without a seat cannot stand in for it.
         when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(null, SCHOOL_ID)));
+        noEnrollment();
 
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
                 .expectErrorSatisfies(error -> {

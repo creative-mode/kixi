@@ -13,6 +13,7 @@ import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.Scope;
 
 import org.springframework.stereotype.Service;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -139,16 +140,20 @@ public class LeaderboardService {
         });
     }
 
+    /**
+     * The class comes from the caller's ACTIVE seat too, and never from
+     * {@code me.currentClass()}.
+     *
+     * <p>{@code /me} picks its enrollment by id and not by state, so a cancelled one can
+     * point the profile at a class the caller has already left. Looking for an active
+     * seat in *that* class then finds nothing and refuses a student who does hold one.
+     * Reading the class off the active seat removes the guesswork.</p>
+     */
     private Mono<Cohort> classCohort(Long accountId, MeResponse me) {
-        if (me.currentClass() == null) {
-            return Mono.error(ApiException.forbidden(
-                    "A class ranking needs an enrollment; this account has none"));
-        }
-        Long classId = me.currentClass().id();
-        return activeEnrollmentIn(accountId, classId)
+        return newestActiveSeat(accountId)
                 .switchIfEmpty(Mono.error(ApiException.forbidden(
-                        "No active enrollment in that class")))
-                .map(enrollment -> new Cohort(classId, enrollment.getSchoolYearId()));
+                        "A class ranking needs an active enrollment in a class")))
+                .map(seat -> new Cohort(seat.enrollment().getClassId(), seat.enrollment().getSchoolYearId()));
     }
 
     /**
@@ -182,17 +187,32 @@ public class LeaderboardService {
      * so there is nothing to rank with.</p>
      */
     private Mono<ActiveSeat> firstActiveEnrollmentWithASchool(Long accountId) {
-        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
-                .filter(Enrollment::isActive)
-                .filter(enrollment -> enrollment.getClassId() != null)
-                // Newest first, so the seat the student joined most recently wins. Sorting
-                // here rather than in SQL keeps the rule where it is read.
-                .sort(SEAT_ORDER)
+        return activeSeats(accountId)
                 // concatMap, not filter: deciding whether an enrollment sits in a school is
                 // a query, and blocking here would park a thread on the database.
                 .concatMap(enrollment -> meService.classInstitutionId(enrollment.getClassId())
                         .map(schoolId -> new ActiveSeat(schoolId, enrollment)))
                 .next();
+    }
+
+    /** The caller's ACTIVE seat, whether or not its class belongs to a school. */
+    private Mono<ActiveSeat> newestActiveSeat(Long accountId) {
+        return activeSeats(accountId)
+                .map(enrollment -> new ActiveSeat(null, enrollment))
+                .next();
+    }
+
+    /**
+     * The caller's ACTIVE seats, newest first.
+     *
+     * <p>Newest first, so the seat joined most recently wins. Sorting here rather than in
+     * SQL keeps the rule where it is read, and lets both cohort scopes share it.</p>
+     */
+    private Flux<Enrollment> activeSeats(Long accountId) {
+        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
+                .filter(Enrollment::isActive)
+                .filter(enrollment -> enrollment.getClassId() != null)
+                .sort(SEAT_ORDER);
     }
 
     /** The caller's ACTIVE enrollment in the class they are asking about. */
@@ -298,6 +318,17 @@ public class LeaderboardService {
             for (int i = Math.max(0, mine - NEIGHBOURS); i <= last; i++) {
                 indexes.add(i);
             }
+            // In a small group the bottom of the table is the exposure the issue is about,
+            // and a symmetric window walks straight into it: sixth of eight would show
+            // seventh and eighth. Those places are withheld from everybody, the caller's
+            // own included — they already know where they stand, and hearing it from
+            // someone else's ranking is the part that hurts.
+            if (smallGroup) {
+                int floor = ranking.totalStudents() - NEIGHBOURS;
+                int myPosition = mine;
+                indexes.removeIf(index ->
+                        ranked.get(index).position() > floor && index != myPosition);
+            }
         }
         if (!smallGroup) {
             for (int i = 0; i < Math.min(PODIUM_SIZE, ranked.size()); i++) {
@@ -374,7 +405,12 @@ public class LeaderboardService {
     /** The group being ranked and the year the caller's seat in it belongs to. */
     record Cohort(Long id, Long schoolYearId) { }
 
-    /** An ACTIVE enrollment together with the school it sits in. */
+    /**
+     * An ACTIVE enrollment, and the school it sits in when that was resolved.
+     *
+     * @param schoolId null where no school was looked up, which is what the class scope
+     *                 needs: a seat in a class with no institution is still a seat.
+     */
     record ActiveSeat(Long schoolId, Enrollment enrollment) { }
 
     /** The time window a ranking covers. */
