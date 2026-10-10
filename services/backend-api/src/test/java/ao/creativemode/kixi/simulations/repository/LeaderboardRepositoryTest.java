@@ -20,8 +20,12 @@ class LeaderboardRepositoryTest {
     void ranksPercentagesSoPapersOfDifferentLengthsStayComparable() {
         String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
 
+        // DECIMAL(10,2) on both sides, so this division and the AVG over it are exact
+        // numeric arithmetic. No ROUND: rounding here would average each paper first and
+        // turn averages that genuinely differ into a tie.
         assertThat(sql)
-                .contains("s.final_score * 100.0 / st.total_max_score")
+                .contains("AVG(s.final_score * 100.0 / st.total_max_score)")
+                .doesNotContain("ROUND(")
                 .contains("GROUP BY s.account_id");
     }
 
@@ -42,15 +46,6 @@ class LeaderboardRepositoryTest {
         String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
 
         assertThat(sql).contains("st.deleted_at IS NULL");
-    }
-
-    @Test
-    void roundsBeforeAveragingSoTwoIdenticalPapersProduceIdenticalAverages() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
-
-        // Without ROUND, 2/3 can come back as 66.66666666666667 to one student and
-        // 66.66666666666666 to another, and the tie rule would never see a tie.
-        assertThat(sql).contains("AVG(ROUND(s.final_score * 100.0 / st.total_max_score, 2))");
     }
 
     @Test

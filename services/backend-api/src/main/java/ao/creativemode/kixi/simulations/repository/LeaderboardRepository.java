@@ -21,6 +21,11 @@ import java.util.Map;
  * average is taken over percentages, and statements without a maximum score are left
  * out rather than compared against a scale they do not share.</p>
  *
+ * <p>Both columns are {@code DECIMAL(10,2)}, so the division and the average are exact
+ * {@code numeric} arithmetic, not floating point. Rounding it was tried and removed: it
+ * put averages that genuinely differed into the same place, and it changed the number
+ * the client sees.</p>
+ *
  * <p>Group membership is resolved with {@code EXISTS} rather than a join on purpose:
  * an enrollment is unique per school year, but joining would still multiply a
  * student's simulations by every enrollment that matched, and their average would
@@ -124,7 +129,7 @@ public class LeaderboardRepository {
 
         String statement = """
                 SELECT s.account_id AS account_id,
-                       AVG(ROUND(s.final_score * 100.0 / st.total_max_score, 2)) AS average
+                       AVG(s.final_score * 100.0 / st.total_max_score) AS average
                   FROM simulations s
                   JOIN statements st ON st.id = s.statement_id
                 WHERE """
