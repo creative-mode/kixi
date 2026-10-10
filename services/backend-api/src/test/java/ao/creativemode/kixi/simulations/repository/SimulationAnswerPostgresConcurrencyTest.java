@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.fail;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
@@ -16,7 +14,8 @@ import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
-import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Connection;
+import io.r2dbc.spi.ConnectionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -26,8 +25,8 @@ import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 import reactor.core.publisher.Signal;
+import reactor.core.scheduler.Schedulers;
 
 /** Runs the public services against a database migrated by Flyway V1 through V37. */
 @SpringBootTest(properties = {
@@ -54,6 +53,7 @@ class SimulationAnswerPostgresConcurrencyTest {
     @Autowired SimulationAnswerService answerService;
     @Autowired SimulationSubmissionService submissionService;
     @Autowired SimulationService simulationService;
+    @Autowired ConnectionFactory connectionFactory;
 
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
@@ -91,24 +91,24 @@ class SimulationAnswerPostgresConcurrencyTest {
 
     @Test
     void closeAndAnswerMutationSerializeThroughThePublicServices() {
-        Pair<Outcome<Object>, Outcome<Object>> closeFirst = race(
+        Pair<Outcome<Object>, Outcome<Object>> closeFirst = raceWithLockFixture("simulations", SIMULATION,
                 close(), answer());
         assertCloseRace(closeFirst, true);
 
         data();
-        Pair<Outcome<Object>, Outcome<Object>> answerFirst = race(
+        Pair<Outcome<Object>, Outcome<Object>> answerFirst = raceWithLockFixture("simulations", SIMULATION,
                 answer(), close());
         assertCloseRace(answerFirst, false);
     }
 
     @Test
     void submitAndAnswerWriteSerializeThroughThePublicServices() {
-        Pair<Outcome<Object>, Outcome<Object>> submitFirst = race(
+        Pair<Outcome<Object>, Outcome<Object>> submitFirst = raceWithLockFixture("simulations", SIMULATION,
                 submit().cast(Object.class), answer());
         assertSubmitRace(submitFirst, true);
 
         data();
-        Pair<Outcome<Object>, Outcome<Object>> answerFirst = race(
+        Pair<Outcome<Object>, Outcome<Object>> answerFirst = raceWithLockFixture("simulations", SIMULATION,
                 answer(), submit().cast(Object.class));
         assertSubmitRace(answerFirst, false);
     }
@@ -121,7 +121,7 @@ class SimulationAnswerPostgresConcurrencyTest {
         sql("UPDATE exam_rooms SET status = 'DRAFT' WHERE id = " + ROOM).block(Duration.ofSeconds(10));
 
         SimulationRequest request = new SimulationRequest(ACCOUNT, STATEMENT, null, null, null, null, null, null);
-        Pair<Outcome<SimulationResponse>, Outcome<Object>> createFirst = race(
+        Pair<Outcome<SimulationResponse>, Outcome<Object>> createFirst = raceWithLockFixture("statements", STATEMENT,
                 simulationService.createForAccount(request, ACCOUNT),
                 open());
 
@@ -131,7 +131,7 @@ class SimulationAnswerPostgresConcurrencyTest {
                 .block(Duration.ofSeconds(10));
         sql("UPDATE exam_rooms SET status = 'DRAFT' WHERE id = " + ROOM).block(Duration.ofSeconds(10));
 
-        Pair<Outcome<Object>, Outcome<SimulationResponse>> openFirst = race(
+        Pair<Outcome<Object>, Outcome<SimulationResponse>> openFirst = raceWithLockFixture("statements", STATEMENT,
                 open(),
                 simulationService.createForAccount(request, ACCOUNT));
 
@@ -156,23 +156,23 @@ class SimulationAnswerPostgresConcurrencyTest {
         return submissionService.submit(SIMULATION, ACCOUNT, false).cast(Object.class);
     }
 
-    private <F, S> Pair<Outcome<F>, Outcome<S>> race(Mono<F> first, Mono<S> second) {
-        CountDownLatch firstSubscribed = new CountDownLatch(1);
-        Mono<Outcome<F>> firstOutcome = first
-                .doOnSubscribe(ignored -> firstSubscribed.countDown())
-                .materialize().map(Outcome::new).subscribeOn(Schedulers.boundedElastic());
-        Mono<Outcome<S>> secondOutcome = Mono.defer(() -> {
-            try {
-                assertThat(firstSubscribed.await(10, TimeUnit.SECONDS)).isTrue();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return Mono.error(interrupted);
-            }
-            return second;
-        }).materialize().map(Outcome::new).subscribeOn(Schedulers.boundedElastic());
-        reactor.util.function.Tuple2<Outcome<F>, Outcome<S>> result = Mono.zip(firstOutcome, secondOutcome)
-                .block(Duration.ofSeconds(20));
-        return new Pair<>(result.getT1(), result.getT2());
+    private <F, S> Pair<Outcome<F>, Outcome<S>> raceWithLockFixture(
+            String table, long lockedId, Mono<F> first, Mono<S> second) {
+        try (LockFixture fixture = LockFixture.lock(connectionFactory, database, table, lockedId)) {
+            Mono<Outcome<F>> firstOutcome = outcome(first);
+            firstOutcome.subscribe();
+            fixture.awaitWaiting(table);
+
+            Mono<Outcome<S>> secondOutcome = outcome(second);
+            secondOutcome.subscribe();
+            fixture.release();
+            return new Pair<>(firstOutcome.block(Duration.ofSeconds(20)),
+                    secondOutcome.block(Duration.ofSeconds(20)));
+        }
+    }
+
+    private <T> Mono<Outcome<T>> outcome(Mono<T> operation) {
+        return operation.materialize().map(Outcome::new).subscribeOn(Schedulers.boundedElastic()).cache();
     }
 
     private void assertCloseRace(Pair<?, ?> result, boolean closeIsFirst) {
@@ -181,7 +181,11 @@ class SimulationAnswerPostgresConcurrencyTest {
         Outcome<?> close = closeIsFirst ? first : second;
         Outcome<?> answer = closeIsFirst ? second : first;
         assertThat(close.error()).isNull();
-        assertOptionalAnswerConflict(answer);
+        if (closeIsFirst) {
+            assertConflict(answer);
+        } else {
+            assertThat(answer.error()).isNull();
+        }
         assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("CLOSED");
         assertAnswerResult(answer);
     }
@@ -192,7 +196,11 @@ class SimulationAnswerPostgresConcurrencyTest {
         Outcome<?> submit = submitIsFirst ? first : second;
         Outcome<?> answer = submitIsFirst ? second : first;
         assertThat(submit.error()).isNull();
-        assertOptionalAnswerConflict(answer);
+        if (submitIsFirst) {
+            assertConflict(answer);
+        } else {
+            assertThat(answer.error()).isNull();
+        }
         assertThat(value("SELECT status FROM simulations WHERE id = " + SIMULATION)).isEqualTo("FINISHED");
         assertAnswerResult(answer);
     }
@@ -206,17 +214,13 @@ class SimulationAnswerPostgresConcurrencyTest {
         assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("OPEN");
         long simulations = count("SELECT COUNT(*) FROM simulations WHERE statement_id = " + STATEMENT
                 + " AND exam_room_id IS NULL AND account_id = " + ACCOUNT + " AND status = 'IN_PROGRESS'");
-        assertThat(simulations).isIn(0L, 1L);
-        if (create.error() != null) {
+        if (openIsFirst) {
             assertConflict(create);
             assertThat(simulations).isZero();
         } else {
+            assertThat(create.error()).isNull();
             assertThat(simulations).isEqualTo(1L);
         }
-    }
-
-    private void assertOptionalAnswerConflict(Outcome<?> answer) {
-        if (answer.error() != null) assertConflict(answer);
     }
 
     private void assertAnswerResult(Outcome<?> answerOutcome) {
@@ -254,6 +258,56 @@ class SimulationAnswerPostgresConcurrencyTest {
     private record Outcome<T>(Signal<T> signal) {
         Throwable error() {
             return signal.isOnError() ? signal.getThrowable() : null;
+        }
+    }
+
+    private static final class LockFixture implements AutoCloseable {
+        private final Connection connection;
+        private final DatabaseClient database;
+        private boolean released;
+
+        private LockFixture(Connection connection, DatabaseClient database) {
+            this.connection = connection;
+            this.database = database;
+        }
+
+        static LockFixture lock(ConnectionFactory factory, DatabaseClient database, String table, long id) {
+            Connection connection = Mono.from(factory.create()).block(Duration.ofSeconds(10));
+            assertThat(connection).as("PostgreSQL lock fixture connection").isNotNull();
+            Mono.from(connection.beginTransaction()).block(Duration.ofSeconds(10));
+            Mono.from(connection.createStatement("SELECT id FROM " + table + " WHERE id = " + id + " FOR UPDATE")
+                    .execute())
+                    .flatMapMany(result -> result.map((row, metadata) -> row.get(0, Long.class)))
+                    .then()
+                    .block(Duration.ofSeconds(10));
+            return new LockFixture(connection, database);
+        }
+
+        void awaitWaiting(String table) {
+            Mono.defer(() -> database.sql(
+                    "SELECT COUNT(*) FROM pg_stat_activity "
+                            + "WHERE wait_event_type = 'Lock' AND state = 'active' "
+                            + "AND pid <> pg_backend_pid() AND query LIKE '%" + table + "%'")
+                    .map((row, metadata) -> row.get(0, Long.class))
+                    .one()
+                    .filter(waiters -> waiters > 0))
+                    .repeatWhenEmpty(repeats -> repeats.delayElements(Duration.ofMillis(25)).take(400))
+                    .switchIfEmpty(Mono.error(new AssertionError(
+                            "The first service operation never waited for the " + table + " lock")))
+                    .block(Duration.ofSeconds(15));
+        }
+
+        void release() {
+            Mono.from(connection.commitTransaction()).block(Duration.ofSeconds(10));
+            released = true;
+        }
+
+        @Override
+        public void close() {
+            if (!released) {
+                Mono.from(connection.rollbackTransaction()).block(Duration.ofSeconds(10));
+            }
+            Mono.from(connection.close()).block(Duration.ofSeconds(10));
         }
     }
 
