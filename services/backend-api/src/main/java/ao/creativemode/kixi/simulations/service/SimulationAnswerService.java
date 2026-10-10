@@ -233,12 +233,13 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
-            .flatMap(answer -> requireEditableSimulation(answer.getSimulationId())
-                .then(requireSimulationAndQuestion(request.simulationId(), request.questionId(), request.selectedOptionId()))
-                 .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
-                     .then(Mono.defer(() -> {
-                     return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
-                            request.simulationId(), request.questionId(), request.selectedOptionId(),
+                 .flatMap(answer -> requireSameSimulation(answer, request)
+                     .then(Mono.defer(() -> requireEditableSimulation(answer.getSimulationId())))
+                     .then(Mono.defer(() -> requireSimulationAndQuestion(answer.getSimulationId(), request.questionId(), request.selectedOptionId())))
+                  .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId())
+                      .then(Mono.defer(() -> {
+                      return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
+                             request.questionId(), request.selectedOptionId(),
                             request.answerText(), request.answeredAt())
                         .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
                      })))))
@@ -275,10 +276,10 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
-            .flatMap(entity -> {
+            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(Mono.defer(() -> {
                 entity.markAsDeleted();
                 return repository.save(entity);
-            })
+            })))
             .then();
     }
 
@@ -290,10 +291,10 @@ public class SimulationAnswerService {
                     ApiException.badRequest("Simulation answer is not deleted")
                 )
             )
-            .flatMap(entity -> {
+            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(Mono.defer(() -> {
                 entity.restore();
                 return repository.save(entity);
-            })
+            })))
             .then();
     }
 
@@ -307,7 +308,7 @@ public class SimulationAnswerService {
                     )
                 )
             )
-            .flatMap(repository::delete)
+            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(repository.delete(entity)))
             .then();
     }
 
@@ -340,12 +341,13 @@ public class SimulationAnswerService {
         SimulationAnswer answer,
         SimulationAnswerRequest request
     ) {
-        return requireEditableSimulation(answer.getSimulationId())
-            .then(requireSimulationAndQuestion(request.simulationId(), request.questionId(), request.selectedOptionId()))
-            .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
+        return requireSameSimulation(answer, request)
+            .then(Mono.defer(() -> requireEditableSimulation(answer.getSimulationId())))
+            .then(Mono.defer(() -> requireSimulationAndQuestion(answer.getSimulationId(), request.questionId(), request.selectedOptionId())))
+            .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId())
                 .then(Mono.defer(() -> {
                 return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
-                        request.simulationId(), request.questionId(), request.selectedOptionId(),
+                        request.questionId(), request.selectedOptionId(),
                         request.answerText(), request.answeredAt())
                     .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
                 }))));
@@ -371,5 +373,21 @@ public class SimulationAnswerService {
                     == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
                 ? requireNotExpired(simulation).then()
                 : Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
+    }
+
+    private Mono<Void> requireSameSimulation(SimulationAnswer answer, SimulationAnswerRequest request) {
+        return answer.getSimulationId().equals(request.simulationId())
+            ? Mono.empty()
+            : Mono.error(ApiException.forbidden("A simulation answer cannot be moved to another simulation"));
+    }
+
+    private Mono<Void> requireLifecycleWindow(Long simulationId) {
+        return simulationRepository.findById(simulationId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+            .flatMap(simulation -> simulation.getStatus()
+                == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
+                    ? requireNotExpired(simulation).then()
+                    : Mono.error(ApiException.conflict(
+                        "Simulation answers cannot be changed after the simulation is finished")));
     }
 }

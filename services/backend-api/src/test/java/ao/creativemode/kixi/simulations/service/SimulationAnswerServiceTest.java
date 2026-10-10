@@ -225,15 +225,40 @@ class SimulationAnswerServiceTest {
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
-        when(repository.updateIfInProgress(any(), any(), any(), any(), any(), any(), any()))
+        when(repository.updateIfInProgress(any(), any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    existing.setSelectedOptionId(invocation.getArgument(4));
+                    existing.setSelectedOptionId(invocation.getArgument(3));
                     return Mono.just(existing);
                 });
 
         StepVerifier.create(service.update(1L, new SimulationAnswerRequest(1L, 1L, 2L, "resposta", null)))
                 .assertNext(response -> assertThat(response.selectedOptionId()).isEqualTo(2L))
                 .verifyComplete();
+    }
+
+    @Test
+    void updateCannotMoveAnAnswerToAnotherSimulation() {
+        SimulationAnswer existing = answer(1L);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.update(1L, new SimulationAnswerRequest(2L, 1L, null, null, null)))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 403)
+                .verify();
+        verify(repository, never()).updateIfInProgress(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void lifecycleRejectsFinishedSimulation() {
+        SimulationAnswer existing = answer(1L);
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(finished));
+
+        StepVerifier.create(service.softDelete(1L))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 409)
+                .verify();
+        verify(repository, never()).save(any());
     }
 
     @Test
@@ -248,7 +273,7 @@ class SimulationAnswerServiceTest {
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
                 .verify();
 
-        verify(repository, never()).updateIfInProgress(any(), any(), any(), any(), any(), any(), any());
+        verify(repository, never()).updateIfInProgress(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -265,6 +290,7 @@ class SimulationAnswerServiceTest {
     @Test
     void softDeleteMarksEntityAsDeleted() {
         SimulationAnswer existing = answer(1L);
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(repository.save(existing)).thenReturn(Mono.just(existing));
 
@@ -288,6 +314,7 @@ class SimulationAnswerServiceTest {
     void restoreClearsDeletedAt() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.save(deleted)).thenReturn(Mono.just(deleted));
 
@@ -311,6 +338,7 @@ class SimulationAnswerServiceTest {
     void hardDeleteRemovesTrashedAnswer() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.delete(deleted)).thenReturn(Mono.empty());
 

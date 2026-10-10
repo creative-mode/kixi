@@ -44,8 +44,7 @@ public interface SimulationAnswerRepository
 
     @Query("""
         UPDATE simulation_answers AS answer
-        SET simulation_id = :simulationId,
-            question_id = :questionId,
+        SET question_id = :questionId,
             selected_option_id = :selectedOptionId,
             answer_text = :answerText,
             answered_at = :answeredAt,
@@ -57,12 +56,8 @@ public interface SimulationAnswerRepository
               SELECT 1 FROM simulations
               WHERE id = :oldSimulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
           )
-           AND EXISTS (
-               SELECT 1 FROM simulations
-               WHERE id = :simulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
-           )
            AND EXISTS (SELECT 1 FROM questions q
-                       JOIN simulations target ON target.id = :simulationId
+                       JOIN simulations target ON target.id = :oldSimulationId
                        WHERE q.id = :questionId AND q.statement_id = target.statement_id
                          AND q.deleted_at IS NULL)
            AND (:selectedOptionId IS NULL OR EXISTS (
@@ -74,7 +69,6 @@ public interface SimulationAnswerRepository
     Mono<SimulationAnswer> updateIfInProgress(
             @Param("id") Long id,
             @Param("oldSimulationId") Long oldSimulationId,
-            @Param("simulationId") Long simulationId,
             @Param("questionId") Long questionId,
             @Param("selectedOptionId") Long selectedOptionId,
             @Param("answerText") String answerText,

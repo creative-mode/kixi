@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.Clock;
 import java.util.List;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -40,7 +41,8 @@ public class SimulationSubmissionService {
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer) {
-        this(simulations, answers, questions, options, statements, teachingAuthorizer, null);
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, null,
+                Clock.systemDefaultZone());
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -52,6 +54,7 @@ public class SimulationSubmissionService {
                 Clock.systemDefaultZone());
     }
 
+    @Autowired
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
@@ -77,16 +80,9 @@ public class SimulationSubmissionService {
                     if (simulation.getStatus() != SimulationStatus.IN_PROGRESS) {
                         return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                     }
-                    // Lock and evaluate the same temporal state used by answer writes before claiming.
-                    Mono<Integer> claim = deadlineService == null ? simulations.claimSubmission(id)
-                        : simulations.lockForAnswerWrite(id)
-                        .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
-                        .flatMap(locked -> deadlineService.acceptsAnswers(locked, LocalDateTime.now(clock))
-                            .filter(Boolean::booleanValue)
-                            .switchIfEmpty(Mono.error(ApiException.conflict(
-                                "The simulation is outside its answering window")))
-                            .then(simulations.claimSubmission(id)));
-                    return claim.flatMap(claimed -> {
+                    // Submission is a finalization gate, not an answer-write gate.
+                    // An explicit submit and the expiry job must also finish expired papers.
+                    return simulations.claimSubmission(id).flatMap(claimed -> {
                         if (claimed != 1) {
                             return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                         }
@@ -149,7 +145,7 @@ public class SimulationSubmissionService {
     private Mono<Simulation> finish(Simulation simulation, List<SimulationAnswer> corrected) {
         double score = corrected.stream().filter(answer -> answer.getScoreObtained() != null)
                 .mapToDouble(SimulationAnswer::getScoreObtained).sum();
-        LocalDateTime finishedAt = LocalDateTime.now();
+        LocalDateTime finishedAt = LocalDateTime.now(clock);
         simulation.setFinalScore(score);
         simulation.setFinishedAt(finishedAt);
         simulation.setTimeSpentSeconds((int) Math.max(0,

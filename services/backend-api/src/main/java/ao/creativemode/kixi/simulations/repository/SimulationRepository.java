@@ -21,7 +21,6 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> findByIdAndAccountId(Long id, Long accountId);
     Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
 
-    @Modifying
     @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
             + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, CURRENT_TIMESTAMP, 'IN_PROGRESS') "
             + "ON CONFLICT (exam_room_id, account_id) WHERE exam_room_id IS NOT NULL DO NOTHING RETURNING *")
