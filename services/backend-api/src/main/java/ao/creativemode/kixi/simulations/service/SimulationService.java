@@ -190,8 +190,7 @@ public class SimulationService {
                 .map(tuple -> {
                     Account account = tuple.getT1();
                     Statement statement = tuple.getT2();
-                    // The account and the statement are already loaded above, so the
-                    // The relationships are already loaded, so deadline arithmetic
+                    // The account and statement are already loaded above, so deadline arithmetic
                     // does not issue another query per simulation.
                     boolean extraTime = Boolean.TRUE.equals(account.getAccessibilityExtraTime());
                     return new SimulationResponse(
