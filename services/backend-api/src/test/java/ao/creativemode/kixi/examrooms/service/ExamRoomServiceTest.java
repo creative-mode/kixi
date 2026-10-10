@@ -36,7 +36,7 @@ class ExamRoomServiceTest {
     private ClassRepository classes;
     private EnrollmentRepository enrollments;
     private ExamRoomService service;
-    private final LocalDateTime start = LocalDateTime.of(2026, 10, 10, 10, 0);
+    private final LocalDateTime start = LocalDateTime.now().minusMinutes(30);
 
     @BeforeEach
     void setUp() {
@@ -111,7 +111,7 @@ class ExamRoomServiceTest {
                 .verifyComplete();
         verify(simulations).save(argThat(simulation -> simulation.getExamRoomId().equals(20L)
                 && simulation.getExamRoomDurationMinutes().equals(90)
-                && simulation.getStartedAt().equals(start)));
+                && !simulation.getStartedAt().isBefore(start)));
     }
 
     @Test
@@ -124,6 +124,30 @@ class ExamRoomServiceTest {
         StepVerifier.create(service.join(20L, 42L))
                 .expectNextMatches(response -> response.simulationId().equals(80L))
                 .verifyComplete();
+        verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void rejectsJoiningBeforeTheRoomWindow() {
+        ExamRoom room = room(20L, ExamRoomStatus.OPEN);
+        room.setStartsAt(LocalDateTime.now().plusMinutes(5));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
+
+        StepVerifier.create(service.join(20L, 42L))
+                .expectError(ApiException.class).verify();
+        verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void rejectsJoiningAtOrAfterTheRoomEnd() {
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        room.setEndsAt(LocalDateTime.now().minusSeconds(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
+
+        StepVerifier.create(service.join(20L, 42L))
+                .expectError(ApiException.class).verify();
         verifyNoInteractions(simulations);
     }
 
@@ -168,7 +192,7 @@ class ExamRoomServiceTest {
         room.setStatementId(5L);
         room.setTeacherAccountId(7L);
         room.setStartsAt(LocalDateTime.of(2026, 10, 10, 10, 0));
-        room.setEndsAt(LocalDateTime.of(2026, 10, 10, 12, 0));
+        room.setEndsAt(LocalDateTime.now().plusMinutes(90));
         room.setDurationMinutes(90);
         room.setStatus(status);
         return room;

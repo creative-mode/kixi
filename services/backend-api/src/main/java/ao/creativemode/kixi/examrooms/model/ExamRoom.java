@@ -10,6 +10,7 @@ import org.springframework.data.relational.core.mapping.Table;
 public class ExamRoom {
     @Id private Long id;
     @Column("statement_id") private Long statementId;
+    @Column("class_id") private Long classId;
     @Column("teacher_account_id") private Long teacherAccountId;
     @Column("starts_at") private LocalDateTime startsAt;
     @Column("ends_at") private LocalDateTime endsAt;
@@ -22,6 +23,8 @@ public class ExamRoom {
     public void setId(Long id) { this.id = id; }
     public Long getStatementId() { return statementId; }
     public void setStatementId(Long value) { statementId = value; }
+    public Long getClassId() { return classId; }
+    public void setClassId(Long value) { classId = value; }
     public Long getTeacherAccountId() { return teacherAccountId; }
     public void setTeacherAccountId(Long value) { teacherAccountId = value; }
     public LocalDateTime getStartsAt() { return startsAt; }

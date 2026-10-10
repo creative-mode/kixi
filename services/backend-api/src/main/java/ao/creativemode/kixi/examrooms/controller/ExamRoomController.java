@@ -31,7 +31,7 @@ public class ExamRoomController {
     public Mono<ResponseEntity<ExamRoomResponse>> create(@Valid @RequestBody ExamRoomRequest request) {
         return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN", "TEACHER"))
                 .flatMap(tuple -> tuple.getT2()
-                        ? service.create(request, tuple.getT1())
+                        ? service.create(request, tuple.getT1(), true)
                         : Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden(
                                 "Only teachers or ADMIN can create exam rooms")))
                 .map(result -> ResponseEntity.status(HttpStatus.CREATED).body(result));
@@ -80,6 +80,13 @@ public class ExamRoomController {
     @PostMapping("/{id}/join")
     public Mono<ResponseEntity<ExamRoomParticipantResponse>> join(@PathVariable Long id) {
         return current.requiredAccountId().flatMap(accountId -> service.join(id, accountId))
+                .map(ResponseEntity::ok);
+    }
+
+    @GetMapping("/{id}/student")
+    public Mono<ResponseEntity<ao.creativemode.kixi.examrooms.dto.ExamRoomStudentResponse>> studentView(
+            @PathVariable Long id) {
+        return current.requiredAccountId().flatMap(accountId -> service.studentView(id, accountId))
                 .map(ResponseEntity::ok);
     }
 
