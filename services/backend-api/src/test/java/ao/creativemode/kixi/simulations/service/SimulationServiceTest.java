@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.academic.model.SchoolYear;
@@ -48,7 +49,9 @@ class SimulationServiceTest {
 
         when(accountRepository.findById(1L)).thenReturn(Mono.just(account(1L)));
         when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
-        when(statementRepository.findById(1L)).thenReturn(Mono.just(new Statement()));
+        Statement statement = new Statement();
+        statement.setId(1L);
+        when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
     }
 
     @Test
@@ -207,6 +210,38 @@ class SimulationServiceTest {
                 .verify();
 
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void participantCannotCreateNormalSimulationForAnOpenOrRunningRoomStatement() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasOpenOrRunningRoom(1L)).thenReturn(Mono.just(true));
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
+    void participantCanStillCreateAStatementWithoutAnActiveRoom() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasOpenOrRunningRoom(1L)).thenReturn(Mono.just(false));
+        when(repository.save(any(Simulation.class))).thenAnswer(invocation -> {
+            Simulation entity = invocation.getArgument(0);
+            entity.setId(11L);
+            return Mono.just(entity);
+        });
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectNextCount(1).verifyComplete();
+        verify(repository).save(any(Simulation.class));
     }
 
     @Test

@@ -170,10 +170,15 @@ class SimulationResultServiceTest {
                 .assertNext(response -> {
                     SimulationResultResponse.QuestionResult question = response.questions().get(0);
                     assertThat(question.modelAnswer()).isNull();
-                    assertThat(question.correctOptionId()).isNull();
-                    assertThat(question.isCorrect()).isNull();
-                    assertThat(question.options()).allSatisfy(option -> assertThat(option.isCorrect()).isNull());
-                })
+                     assertThat(question.correctOptionId()).isNull();
+                     assertThat(question.isCorrect()).isNull();
+                     assertThat(question.options()).allSatisfy(option -> assertThat(option.isCorrect()).isNull());
+                     assertThat(response.finalScore()).isNull();
+                     assertThat(response.correctAnswers()).isNull();
+                     assertThat(response.pendingReviewCount()).isNull();
+                     assertThat(question.scoreObtained()).isNull();
+                     assertThat(question.reviewStatus()).isNull();
+                 })
                 .verifyComplete();
     }
 

@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -253,6 +255,38 @@ class ExamRoomServiceTest {
         StepVerifier.create(service.join(20L, 42L))
                 .expectError(ApiException.class).verify();
         verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void usesInclusiveStartAndExclusiveEndForBothRoomPhases() {
+        LocalDateTime starts = LocalDateTime.of(2026, 10, 10, 12, 0);
+        LocalDateTime ends = starts.plusHours(1);
+        Clock atStart = Clock.fixed(starts.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        ExamRoomService boundaryService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, atStart);
+        ExamRoom running = room(20L, ExamRoomStatus.RUNNING);
+        running.setStartsAt(starts);
+        running.setEndsAt(ends);
+        when(rooms.findById(20L)).thenReturn(Mono.just(running));
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
+        when(simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(20L, 42L)).thenReturn(Mono.empty());
+        when(simulations.insertExamRoomSimulation(any(), any(), any(), any())).thenReturn(Mono.just(simulation(80L)));
+        when(participants.save(any())).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(boundaryService.join(20L, 42L)).expectNextCount(1).verifyComplete();
+
+        Clock atEnd = Clock.fixed(ends.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        ExamRoomService endedService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, atEnd);
+        StepVerifier.create(endedService.join(20L, 42L)).expectError(ApiException.class).verify();
+
+        ExamRoom open = room(20L, ExamRoomStatus.OPEN);
+        open.setStartsAt(starts);
+        open.setEndsAt(ends);
+        when(rooms.findById(20L)).thenReturn(Mono.just(open));
+        ExamRoomService openService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, atEnd);
+        StepVerifier.create(openService.join(20L, 42L)).expectError(ApiException.class).verify();
     }
 
     @Test
