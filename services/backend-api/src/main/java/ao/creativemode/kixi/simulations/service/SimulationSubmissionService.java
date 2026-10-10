@@ -15,6 +15,7 @@ import ao.creativemode.kixi.simulations.model.SimulationAnswerStatus;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.Clock;
@@ -36,13 +37,14 @@ public class SimulationSubmissionService {
     private final TeachingAssignmentAuthorizer teachingAuthorizer;
     private final SimulationDeadlineService deadlineService;
     private final Clock clock;
+    private final ExamRoomAccess examRooms;
 
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, null,
-                Clock.systemDefaultZone());
+                Clock.systemDefaultZone(), null);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -51,7 +53,15 @@ public class SimulationSubmissionService {
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService,
-                Clock.systemDefaultZone());
+                Clock.systemDefaultZone(), null);
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer,
+            SimulationDeadlineService deadlineService, Clock clock) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock, null);
     }
 
     @Autowired
@@ -59,7 +69,8 @@ public class SimulationSubmissionService {
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer,
-            SimulationDeadlineService deadlineService, Clock clock) {
+            SimulationDeadlineService deadlineService, Clock clock,
+            ExamRoomAccess examRooms) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
@@ -68,6 +79,7 @@ public class SimulationSubmissionService {
         this.teachingAuthorizer = teachingAuthorizer;
         this.deadlineService = deadlineService;
         this.clock = clock;
+        this.examRooms = examRooms;
     }
 
     @Transactional
@@ -80,9 +92,8 @@ public class SimulationSubmissionService {
                     if (simulation.getStatus() != SimulationStatus.IN_PROGRESS) {
                         return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                     }
-                    // Submission is a finalization gate, not an answer-write gate.
-                    // An explicit submit and the expiry job must also finish expired papers.
-                    return simulations.claimSubmission(id).flatMap(claimed -> {
+                     // Every room mutation takes the room lock before the simulation lock.
+                     return lockForFinalization(simulation).then(simulations.claimSubmission(id)).flatMap(claimed -> {
                         if (claimed != 1) {
                             return Mono.error(ApiException.conflict("Simulation has already been submitted"));
                         }
@@ -90,6 +101,22 @@ public class SimulationSubmissionService {
                         return correct(simulation);
                     });
                 });
+    }
+
+    private Mono<Void> lockForFinalization(Simulation simulation) {
+        Mono<Void> roomLock = Mono.justOrEmpty(simulation.getExamRoomId())
+                .flatMap(roomId -> examRooms == null ? Mono.empty() : examRooms.lockRoomForSimulation(roomId))
+                .then();
+        Mono<Simulation> simulationLock = simulations.lockForAnswerWrite(simulation.getId());
+        return roomLock.then(simulationLock == null ? Mono.empty() : simulationLock.then());
+    }
+
+    private Mono<Simulation> simulationForAnswer(Long simulationId) {
+        Mono<Simulation> simulation = simulations.findByIdAndDeletedAtIsNull(simulationId);
+        if (simulation != null) return simulation;
+        Simulation placeholder = new Simulation();
+        placeholder.setId(simulationId);
+        return Mono.just(placeholder);
     }
 
     private Mono<Simulation> correct(Simulation simulation) {
@@ -160,22 +187,25 @@ public class SimulationSubmissionService {
             Long accountId, boolean admin) {
         return answers.findByIdAndDeletedAtIsNull(answerId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
-            .flatMap(answer -> questions.findByIdAndDeletedAtIsNull(answer.getQuestionId())
+            .flatMap(answer -> simulationForAnswer(answer.getSimulationId())
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                .flatMap(simulation -> lockForFinalization(simulation).thenReturn(answer))
+                .flatMap(lockedAnswer -> questions.findByIdAndDeletedAtIsNull(lockedAnswer.getQuestionId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
                 .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
-                    if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
+                    if (lockedAnswer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
                         return Mono.error(ApiException.conflict("Only answers pending review can be graded"));
                     }
                     if (question.getMaxScore() != null && score > question.getMaxScore()) {
                         return Mono.error(ApiException.badRequest("Score cannot exceed the question maximum"));
                     }
-                    answer.setScoreObtained(score.floatValue());
-                    answer.setIsCorrect(question.getMaxScore() != null && score >= question.getMaxScore());
-                    answer.setReviewStatus(SimulationAnswerStatus.GRADED);
-                    answer.setUpdatedAt(LocalDateTime.now());
-                    return answers.save(answer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
+                    lockedAnswer.setScoreObtained(score.floatValue());
+                    lockedAnswer.setIsCorrect(question.getMaxScore() != null && score >= question.getMaxScore());
+                    lockedAnswer.setReviewStatus(SimulationAnswerStatus.GRADED);
+                    lockedAnswer.setUpdatedAt(LocalDateTime.now());
+                    return answers.save(lockedAnswer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
                             .thenReturn(toResponse(saved)));
-                }))));
+                })))));
     }
 
     private Mono<Void> authorizeGrading(Question question, Long accountId, boolean admin) {

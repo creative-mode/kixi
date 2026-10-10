@@ -18,8 +18,8 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 /**
- * PostgreSQL-only proof that finalization and answer lifecycle writes serialize
- * on the simulation row. Run with KIXI_POSTGRES_TESTS=true.
+ * PostgreSQL-only proof that room closure and answer lifecycle writes serialize
+ * in the room-then-simulation order. Run with KIXI_POSTGRES_TESTS=true.
  */
 @EnabledIfEnvironmentVariable(named = "KIXI_POSTGRES_TESTS", matches = "true")
 class SimulationAnswerPostgresConcurrencyTest {
@@ -43,9 +43,11 @@ class SimulationAnswerPostgresConcurrencyTest {
         execute(first, "CREATE SCHEMA " + SCHEMA);
         execute(first, "SET search_path TO " + SCHEMA);
         execute(second, "SET search_path TO " + SCHEMA);
-        execute(first, "CREATE TABLE simulations (id BIGINT PRIMARY KEY, status VARCHAR(20) NOT NULL)");
+        execute(first, "CREATE TABLE exam_rooms (id BIGINT PRIMARY KEY, status VARCHAR(20) NOT NULL)");
+        execute(first, "CREATE TABLE simulations (id BIGINT PRIMARY KEY, exam_room_id BIGINT NOT NULL, status VARCHAR(20) NOT NULL)");
         execute(first, "CREATE TABLE simulation_answers (id BIGINT PRIMARY KEY, simulation_id BIGINT NOT NULL, deleted_at TIMESTAMP NULL)");
-        execute(first, "INSERT INTO simulations VALUES (1, 'IN_PROGRESS')");
+        execute(first, "INSERT INTO exam_rooms VALUES (1, 'RUNNING')");
+        execute(first, "INSERT INTO simulations VALUES (1, 1, 'IN_PROGRESS')");
         execute(first, "INSERT INTO simulation_answers VALUES (1, 1, NULL)");
     }
 
@@ -57,34 +59,70 @@ class SimulationAnswerPostgresConcurrencyTest {
     }
 
     @Test
-    void finalizationWaitsForAnswerWriteAndCannotAllowAStaleMutation() {
+    void closeWaitsForAnAnswerWriteThatStartedFirst() {
         execute(first, "BEGIN");
-        execute(first, "SELECT s.* FROM simulations s JOIN simulation_answers a ON a.simulation_id = s.id "
-                + "WHERE a.id = 1 FOR UPDATE");
+        execute(first, "SELECT * FROM exam_rooms WHERE id = 1 FOR UPDATE");
+        execute(first, "SELECT * FROM simulations WHERE id = 1 FOR UPDATE");
 
         execute(second, "BEGIN");
-        Mono<Void> finalize = Mono.from(second.createStatement(
-                "UPDATE simulations SET status = 'FINISHED' WHERE id = 1 AND status = 'IN_PROGRESS'").execute())
+        Mono<Void> close = Mono.from(second.createStatement(
+                "UPDATE exam_rooms SET status = 'CLOSED' WHERE id = 1 AND status = 'RUNNING'").execute())
+                .then(Mono.from(second.createStatement("SELECT * FROM simulations WHERE exam_room_id = 1 FOR UPDATE").execute()))
                 .then().timeout(Duration.ofSeconds(2)).subscribeOn(Schedulers.boundedElastic()).cache();
 
-        AtomicBoolean finalized = new AtomicBoolean();
-        finalize.subscribe(ignored -> { }, error -> { }, () -> finalized.set(true));
+        AtomicBoolean closed = new AtomicBoolean();
+        close.subscribe(ignored -> { }, error -> { }, () -> closed.set(true));
         try {
             Thread.sleep(200);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new AssertionError(interrupted);
         }
-        assertThat(finalized).isFalse();
+        assertThat(closed).isFalse();
 
         execute(first, "UPDATE simulation_answers SET deleted_at = CURRENT_TIMESTAMP WHERE id = 1");
         execute(first, "COMMIT");
-        StepVerifier.create(finalize).verifyComplete();
+        StepVerifier.create(close).verifyComplete();
         execute(second, "COMMIT");
 
-        assertThat(query(first, "SELECT status FROM simulations WHERE id = 1")).isEqualTo("FINISHED");
+        assertThat(query(first, "SELECT status FROM exam_rooms WHERE id = 1")).isEqualTo("CLOSED");
         assertThat(query(first, "SELECT deleted_at IS NOT NULL FROM simulation_answers WHERE id = 1"))
                 .isEqualTo("true");
+    }
+
+    @Test
+    void answerWaitsWhenCloseStartedFirstAndCannotWriteAfterClose() {
+        execute(first, "BEGIN");
+        execute(first, "UPDATE exam_rooms SET status = 'CLOSED' WHERE id = 1 AND status = 'RUNNING'");
+        execute(first, "SELECT * FROM simulations WHERE id = 1 FOR UPDATE");
+
+        execute(second, "BEGIN");
+        Mono<Void> answer = Mono.from(second.createStatement(
+                "SELECT * FROM exam_rooms WHERE id = 1 FOR UPDATE").execute())
+                .then(Mono.from(second.createStatement("SELECT * FROM simulations WHERE id = 1 FOR UPDATE").execute()))
+                .then(Mono.from(second.createStatement(
+                        "UPDATE simulation_answers SET deleted_at = CURRENT_TIMESTAMP WHERE id = 1 "
+                                + "AND EXISTS (SELECT 1 FROM simulations WHERE id = 1 AND status = 'IN_PROGRESS') "
+                                + "AND EXISTS (SELECT 1 FROM exam_rooms WHERE id = 1 AND status = 'RUNNING')").execute()))
+                .then().timeout(Duration.ofSeconds(2)).subscribeOn(Schedulers.boundedElastic()).cache();
+
+        AtomicBoolean answered = new AtomicBoolean();
+        answer.subscribe(ignored -> { }, error -> { }, () -> answered.set(true));
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+        assertThat(answered).isFalse();
+
+        execute(first, "COMMIT");
+        StepVerifier.create(answer).verifyComplete();
+        execute(second, "COMMIT");
+
+        assertThat(query(first, "SELECT status FROM exam_rooms WHERE id = 1")).isEqualTo("CLOSED");
+        assertThat(query(first, "SELECT deleted_at IS NOT NULL FROM simulation_answers WHERE id = 1"))
+                .isEqualTo("false");
     }
 
     private static void execute(Connection connection, String sql) {

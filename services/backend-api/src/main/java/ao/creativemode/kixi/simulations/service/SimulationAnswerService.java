@@ -9,6 +9,7 @@ import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -29,8 +30,8 @@ public class SimulationAnswerService {
     private final QuestionOptionRepository optionRepository;
     private final SimulationDeadlineService deadlineService;
     private final SimulationService simulationService;
+    private final ExamRoomAccess examRooms;
 
-    @Autowired
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
@@ -39,18 +40,33 @@ public class SimulationAnswerService {
         SimulationDeadlineService deadlineService,
         SimulationService simulationService
     ) {
+        this(repository, simulationRepository, questionRepository, optionRepository, deadlineService,
+                simulationService, null);
+    }
+
+    @Autowired
+    public SimulationAnswerService(
+        SimulationAnswerRepository repository,
+        SimulationRepository simulationRepository,
+        QuestionRepository questionRepository,
+        QuestionOptionRepository optionRepository,
+        SimulationDeadlineService deadlineService,
+        SimulationService simulationService,
+        ExamRoomAccess examRooms
+    ) {
         this.repository = repository;
         this.simulationRepository = simulationRepository;
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.deadlineService = deadlineService;
         this.simulationService = simulationService;
+        this.examRooms = examRooms;
     }
 
     public SimulationAnswerService(
         SimulationAnswerRepository repository, SimulationRepository simulationRepository,
         QuestionRepository questionRepository, SimulationDeadlineService deadlineService) {
-        this(repository, simulationRepository, questionRepository, null, deadlineService, null);
+        this(repository, simulationRepository, questionRepository, null, deadlineService, null, null);
     }
 
     public Mono<Void> authorizeAnswer(Long answerId, Long accountId, boolean admin, boolean teacher) {
@@ -293,10 +309,11 @@ public class SimulationAnswerService {
 
     private Mono<Void> lifecycleMutation(Long id, boolean deleted,
             java.util.function.Function<SimulationAnswer, Mono<?>> mutation) {
-        return simulationRepository.lockForAnswerWriteByAnswerId(id)
+        return answerLookup(id)
             .switchIfEmpty(Mono.error(deleted
                     ? ApiException.badRequest("Simulation answer is not deleted")
                     : ApiException.notFound("Simulation answer not found")))
+            .flatMap(answer -> lockSimulationForAnswer(answer.getSimulationId()))
             .flatMap(this::requireLockedLifecycleWindow)
             .then(Mono.defer(() -> deleted
                     ? repository.findByIdAndDeletedAtIsNotNull(id)
@@ -353,13 +370,58 @@ public class SimulationAnswerService {
         return Flux.fromArray(simulationIds)
             .distinct()
             .sort()
-            .concatMap(id -> simulationRepository.lockForAnswerWrite(id)
-                .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
-                .flatMap(simulation -> simulation.getStatus()
-                    == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
-                    ? requireNotExpired(simulation)
-                    : Mono.error(ApiException.conflict("Simulation no longer accepts answers"))))
+            .concatMap(id -> simulationRepository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers"))))
+            .collectList()
+            .flatMapMany(simulations -> Flux.fromIterable(simulations)
+                .flatMap(simulation -> Mono.justOrEmpty(simulation.getExamRoomId()))
+                .distinct()
+                .sort()
+                .concatMap(this::lockRoom)
+                .thenMany(Flux.fromIterable(simulations)))
+            .concatMap(lockedSimulation -> {
+                Long lockId = lockedSimulation.getId() == null && simulationIds.length == 1
+                        ? simulationIds[0] : lockedSimulation.getId();
+                Mono<Simulation> locked = simulationRepository.lockForAnswerWrite(lockId);
+                if (locked == null) locked = Mono.just(lockedSimulation);
+                return locked
+                    .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
+                    .flatMap(simulation -> simulation.getStatus()
+                        == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
+                        ? requireNotExpired(simulation).then(roomWindow(simulation))
+                        : Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
+            })
             .then();
+    }
+
+    private Mono<Simulation> lockSimulationForAnswer(Long simulationId) {
+        Mono<Simulation> found = simulationRepository.findById(simulationId);
+        if (found == null) found = simulationRepository.findByIdAndDeletedAtIsNull(simulationId);
+        if (found == null) {
+            Simulation placeholder = new Simulation();
+            placeholder.setId(simulationId);
+            Mono<Simulation> legacy = simulationRepository.lockForAnswerWriteByAnswerId(simulationId);
+            found = legacy == null ? Mono.just(placeholder) : legacy.switchIfEmpty(Mono.just(placeholder));
+        }
+        return found
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                .flatMap(simulation -> Mono.justOrEmpty(simulation.getExamRoomId())
+                        .flatMap(this::lockRoom)
+                        .then(lockSimulation(simulation)))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")));
+    }
+
+    private Mono<Simulation> lockSimulation(Simulation simulation) {
+        Mono<Simulation> locked = simulationRepository.lockForAnswerWrite(simulation.getId());
+        return locked == null ? Mono.just(simulation) : locked;
+    }
+
+    private Mono<SimulationAnswer> answerLookup(Long id) {
+        Mono<SimulationAnswer> anyState = repository.findById(id);
+        if (anyState != null) return anyState;
+        Mono<SimulationAnswer> active = repository.findByIdAndDeletedAtIsNull(id);
+        if (active != null) return active;
+        return repository.findByIdAndDeletedAtIsNotNull(id);
     }
 
     private Mono<Void> requireEditableSimulation(Long simulationId) {
@@ -380,8 +442,22 @@ public class SimulationAnswerService {
     private Mono<Void> requireLockedLifecycleWindow(Simulation simulation) {
         return simulation.getStatus()
                 == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
-                    ? requireNotExpired(simulation).then()
+                    ? requireNotExpired(simulation).then(roomWindow(simulation))
                     : Mono.error(ApiException.conflict(
                         "Simulation answers cannot be changed after the simulation is finished"));
+    }
+
+    private Mono<Void> lockRoom(Long roomId) {
+        if (examRooms == null) return Mono.empty();
+        return examRooms.lockRoomForSimulation(roomId);
+    }
+
+    private Mono<Void> roomWindow(Simulation simulation) {
+        if (examRooms == null || simulation.getExamRoomId() == null) return Mono.empty();
+        LocalDateTime now = deadlineService.now();
+        return examRooms.acceptsSimulationAnswers(simulation.getExamRoomId(), now)
+                .filter(Boolean::booleanValue)
+                .switchIfEmpty(Mono.error(ApiException.conflict("The exam room is not accepting answers")))
+                .then();
     }
 }
