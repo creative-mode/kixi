@@ -11,6 +11,9 @@ import reactor.core.publisher.Mono;
 public interface ExamRoomRepository extends ReactiveCrudRepository<ExamRoom, Long> {
     Flux<ExamRoom> findByTeacherAccountIdOrderByCreatedAtDesc(Long teacherAccountId);
     Mono<ExamRoom> findByIdAndTeacherAccountId(Long id, Long teacherAccountId);
+    @Query("SELECT EXISTS (SELECT 1 FROM exam_rooms WHERE statement_id = :statementId "
+            + "AND status IN ('OPEN', 'RUNNING'))")
+    Mono<Boolean> existsOpenOrRunningByStatementId(Long statementId);
     @Query("SELECT * FROM exam_rooms WHERE id = :id FOR UPDATE")
     Mono<ExamRoom> lockForUpdate(Long id);
     @Modifying

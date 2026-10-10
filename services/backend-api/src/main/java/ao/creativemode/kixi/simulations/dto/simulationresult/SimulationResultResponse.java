@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * client renders the corrected paper from one response instead of walking back to
  * {@code /statements/{id}/full} and joining by hand.
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record SimulationResultResponse(
         Long simulationId,
         SimulationStatus status,

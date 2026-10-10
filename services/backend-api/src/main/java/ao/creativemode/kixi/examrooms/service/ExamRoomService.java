@@ -210,7 +210,10 @@ public class ExamRoomService implements ExamRoomAccess {
                              // OPEN is only an attendance phase. The teacher controls when
                              // access to the paper begins by transitioning the room to RUNNING.
                              if (room.getStatus() == ExamRoomStatus.OPEN) {
-                                 participant.setJoinedAt(LocalDateTime.now(clock));
+                                  if (!now.isBefore(room.getEndsAt())) {
+                                      return Mono.error(ApiException.conflict("The exam room has ended"));
+                                  }
+                                  participant.setJoinedAt(LocalDateTime.now(clock));
                                  return saveParticipant(participant);
                              }
                              if (now.isBefore(room.getStartsAt())) {

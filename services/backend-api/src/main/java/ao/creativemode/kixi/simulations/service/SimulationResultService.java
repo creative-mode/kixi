@@ -163,11 +163,11 @@ public class SimulationResultService {
         return new SimulationResultResponse(
             simulation.getId(),
             simulation.getStatus(),
-            simulation.getFinalScore(),
-            (int) rendered.stream().filter(question -> Boolean.TRUE.equals(question.isCorrect())).count(),
+            answerKeyVisible ? simulation.getFinalScore() : null,
+            answerKeyVisible ? (int) rendered.stream().filter(question -> Boolean.TRUE.equals(question.isCorrect())).count() : null,
             rendered.size(),
-            (int) rendered.stream().filter(question -> question.reviewStatus()
-                    == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count(),
+            answerKeyVisible ? (int) rendered.stream().filter(question -> question.reviewStatus()
+                    == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count() : null,
             simulation.getTimeSpentSeconds(),
             simulation.getFinishedAt(),
             rendered
@@ -207,9 +207,9 @@ public class SimulationResultService {
             answerKeyVisible ? correctOptionId : null,
             answer == null ? null : answer.getSelectedOptionId(),
             answer == null ? null : answer.getAnswerText(),
-            answer == null ? null : answer.getScoreObtained(),
+            answerKeyVisible && answer != null ? answer.getScoreObtained() : null,
             answerKeyVisible && answer != null ? answer.getIsCorrect() : null,
-            answer == null ? null : answer.getReviewStatus(),
+            answerKeyVisible && answer != null ? answer.getReviewStatus() : null,
             optionResults
         );
     }

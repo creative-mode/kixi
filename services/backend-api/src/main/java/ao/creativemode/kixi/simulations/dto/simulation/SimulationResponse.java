@@ -4,9 +4,11 @@ import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.exams.dto.statement.StatementBasicResponse;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.LocalDateTime;
 
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record SimulationResponse(
         Long id,
         AccountBasicResponse account,

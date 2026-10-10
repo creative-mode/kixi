@@ -13,4 +13,8 @@ public interface ExamRoomAccess {
     default Mono<Boolean> answerKeyVisible(Long roomId) {
         return Mono.just(true);
     }
+
+    default Mono<Boolean> hasOpenOrRunningRoom(Long statementId) {
+        return Mono.just(false);
+    }
 }

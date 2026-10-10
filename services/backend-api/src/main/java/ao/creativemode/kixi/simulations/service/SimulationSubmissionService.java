@@ -204,7 +204,7 @@ public class SimulationSubmissionService {
                     lockedAnswer.setReviewStatus(SimulationAnswerStatus.GRADED);
                     lockedAnswer.setUpdatedAt(LocalDateTime.now());
                     return answers.save(lockedAnswer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
-                            .thenReturn(toResponse(saved)));
+                            .then(toResponse(saved)));
                 })))));
     }
 
@@ -243,10 +243,17 @@ public class SimulationSubmissionService {
             });
     }
 
-    private SimulationAnswerResponse toResponse(SimulationAnswer answer) {
-        return new SimulationAnswerResponse(answer.getId(), answer.getSimulationId(), answer.getQuestionId(),
-                answer.getSelectedOptionId(), answer.getAnswerText(), answer.getScoreObtained(), answer.getIsCorrect(),
-                answer.getReviewStatus(), answer.getAnsweredAt(), answer.getCreatedAt(), answer.getUpdatedAt(),
-                answer.getDeletedAt());
+    private Mono<SimulationAnswerResponse> toResponse(SimulationAnswer answer) {
+        return simulationForAnswer(answer.getSimulationId()).flatMap(simulation -> {
+            Mono<Boolean> visible = simulation.getExamRoomId() == null || examRooms == null
+                    ? Mono.just(true)
+                    : examRooms.answerKeyVisible(simulation.getExamRoomId()).defaultIfEmpty(false);
+            return visible.map(answerKeyVisible -> new SimulationAnswerResponse(answer.getId(), answer.getSimulationId(),
+                    answer.getQuestionId(), answer.getSelectedOptionId(), answer.getAnswerText(),
+                    answerKeyVisible ? answer.getScoreObtained() : null,
+                    answerKeyVisible ? answer.getIsCorrect() : null,
+                    answerKeyVisible ? answer.getReviewStatus() : null, answer.getAnsweredAt(), answer.getCreatedAt(),
+                    answer.getUpdatedAt(), answer.getDeletedAt()));
+        });
     }
 }

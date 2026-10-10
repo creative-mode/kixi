@@ -151,6 +151,18 @@ public class SimulationService {
                                 ? admin ? Mono.just(statement) : Mono.error(ApiException.forbidden(
                                         "Statement authorization is unavailable"))
                                 : statementWriteAccess.requireCanWrite(statement.getId(), callerAccountId, admin))
+                        .flatMap(statement -> {
+                            if (!authorizeStatement && dto.accountId().equals(callerAccountId) && examRoomAccess != null) {
+                                Mono<Boolean> activeRoom = examRoomAccess.hasOpenOrRunningRoom(statement.getId());
+                                return (activeRoom == null ? Mono.just(false) : activeRoom)
+                                        .defaultIfEmpty(false)
+                                        .flatMap(active -> active
+                                                ? Mono.error(ApiException.conflict(
+                                                        "The statement is currently assigned to an exam room"))
+                                                : Mono.just(statement));
+                            }
+                            return Mono.just(statement);
+                        })
                         .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
@@ -275,20 +287,24 @@ public class SimulationService {
         Mono<LocalDateTime> deadlineLookup = deadlineService.deadline(simulation);
         if (deadlineLookup == null) deadlineLookup = Mono.empty();
         Mono<LocalDateTime> finalDeadlineLookup = deadlineLookup;
-        return Mono.zip(accountMono, statementMono, schoolYearMono)
+        Mono<Boolean> visibility = simulation.getExamRoomId() == null || examRoomAccess == null
+                ? Mono.just(true)
+                : Mono.justOrEmpty(examRoomAccess.answerKeyVisible(simulation.getExamRoomId()))
+                        .flatMap(value -> value).defaultIfEmpty(false);
+        return Mono.zip(accountMono, statementMono, schoolYearMono, visibility)
                 .flatMap(tuple -> finalDeadlineLookup
                     .switchIfEmpty(Mono.justOrEmpty(deadlineService.effectiveDeadlineFor(
                         simulation.getStartedAt(),
                         simulation.getExamRoomDurationMinutes() != null
                                 ? simulation.getExamRoomDurationMinutes() : tuple.getT2().getDurationMinutes(),
                         Boolean.TRUE.equals(tuple.getT1().getAccessibilityExtraTime()))))
-                    .map(deadline -> toResponse(simulation, tuple, deadline))
-                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null))));
+                    .map(deadline -> toResponse(simulation, tuple, deadline, tuple.getT4()))
+                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null, tuple.getT4()))));
     }
 
     private SimulationResponse toResponse(Simulation simulation,
-            reactor.util.function.Tuple3<Account, Statement, SchoolYearResponse> tuple,
-            LocalDateTime deadline) {
+            reactor.util.function.Tuple4<Account, Statement, SchoolYearResponse, Boolean> tuple,
+            LocalDateTime deadline, boolean answerKeyVisible) {
                     Account account = tuple.getT1();
                     Statement statement = tuple.getT2();
                     return new SimulationResponse(
@@ -300,7 +316,7 @@ public class SimulationService {
                         simulation.getFinishedAt(),
                         deadline,
                         simulation.getTimeSpentSeconds(),
-                        simulation.getFinalScore(),
+                        answerKeyVisible ? simulation.getFinalScore() : null,
                         simulation.getStatus(),
                         simulation.getCreatedAt(),
                         simulation.getUpdatedAt(),
