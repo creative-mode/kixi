@@ -75,6 +75,16 @@ public class LeaderboardService {
     /** Bound on the cache, so it cannot grow with whatever the caller varies. */
     private static final int MAX_CACHED_COHORTS = 500;
 
+    /**
+     * Newest enrollment first, then highest id. The id is the tiebreaker so that two rows
+     * created in the same millisecond still produce one answer instead of an arbitrary
+     * one, and so that the order never depends on how the database felt like returning
+     * them.
+     */
+    private static final Comparator<Enrollment> SEAT_ORDER = Comparator
+            .comparing(Enrollment::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+            .thenComparing(Enrollment::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+
     private final MeService meService;
     private final EnrollmentRepository enrollments;
     private final LeaderboardRepository repository;
@@ -158,7 +168,15 @@ public class LeaderboardService {
     }
 
     /**
-     * The caller's first ACTIVE enrollment whose class belongs to a school.
+     * The caller's ACTIVE seat in a school, decided by a rule and not by arrival.
+     *
+     * <p>A student may hold one ACTIVE enrollment per school year, so two of them in
+     * different schools is a legal state, and the repository does not order what it
+     * returns. Taking the first to arrive would pick a school out of the database's
+     * whim, and the cache would then keep whichever it happened to get. The rule here is
+     * the newest enrollment among the active ones — the same one {@code /me} uses for the
+     * current seat, so "the school I am at now" means the same thing in both. Filtering
+     * the inactive out first is what keeps a cancelled row from steering the choice.</p>
      *
      * <p>An institutional link with no enrollment never gets this far: there is no seat,
      * so there is nothing to rank with.</p>
@@ -167,6 +185,9 @@ public class LeaderboardService {
         return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
                 .filter(Enrollment::isActive)
                 .filter(enrollment -> enrollment.getClassId() != null)
+                // Newest first, so the seat the student joined most recently wins. Sorting
+                // here rather than in SQL keeps the rule where it is read.
+                .sort(SEAT_ORDER)
                 // concatMap, not filter: deciding whether an enrollment sits in a school is
                 // a query, and blocking here would park a thread on the database.
                 .concatMap(enrollment -> meService.classInstitutionId(enrollment.getClassId())

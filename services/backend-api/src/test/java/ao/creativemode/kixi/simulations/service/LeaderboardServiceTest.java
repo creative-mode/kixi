@@ -78,6 +78,15 @@ class LeaderboardServiceTest {
         return enrollment;
     }
 
+    /** An ACTIVE seat with the instant it was joined and the id it got. */
+    private static Enrollment enrolledOn(
+            Long classId, Long institutionId, LocalDateTime createdAt, Long id) {
+        Enrollment enrollment = enrollment(ACCOUNT_ID, classId, institutionId, false);
+        enrollment.setId(id);
+        enrollment.setCreatedAt(createdAt);
+        return enrollment;
+    }
+
     /** A cancelled enrollment: the seat is gone, the profile does not know it. */
     private void cancelledEnrollment() {
         cancelledEnrollment(CLASS_ID, SCHOOL_ID);
@@ -179,6 +188,67 @@ class LeaderboardServiceTest {
         assertThat(response.myPosition()).isEqualTo(1);
         verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID);
         verify(repository, never()).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+    }
+
+    @Test
+    void withTwoActiveSeatsInDifferentSchoolsTheNewestOneWins() {
+        // Legal state: one ACTIVE enrollment per school year, so a student who moved can
+        // hold two in two schools. Which one the ranking follows must be a rule, never the
+        // order the database happened to return the rows in.
+        when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(OTHER_CLASS_ID, OTHER_SCHOOL_ID)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(
+                        enrolledOn(CLASS_ID, SCHOOL_ID, LocalDateTime.of(2026, 9, 1, 0, 0), 1L),
+                        enrolledOn(OTHER_CLASS_ID, OTHER_SCHOOL_ID, LocalDateTime.of(2026, 10, 1, 0, 0), 2L)));
+
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+        verify(repository, never()).countMembers(Scope.SCHOOL, SCHOOL_ID);
+    }
+
+    @Test
+    void theSameTwoSeatsGiveTheSameAnswerWhicheverOrderTheyArrive() {
+        // The rule has to survive the row order, not just be documented.
+        when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(OTHER_CLASS_ID, OTHER_SCHOOL_ID)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        Enrollment older = enrolledOn(CLASS_ID, SCHOOL_ID, LocalDateTime.of(2026, 9, 1, 0, 0), 1L);
+        Enrollment newer = enrolledOn(OTHER_CLASS_ID, OTHER_SCHOOL_ID, LocalDateTime.of(2026, 10, 1, 0, 0), 2L);
+
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(older, newer));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+
+        service = new LeaderboardService(meService, enrollments, repository);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(newer, older));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        // Same seat, so the same school — the cache is cold again, hence the fresh service.
+        verify(repository, times(2)).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+        verify(repository, never()).countMembers(Scope.SCHOOL, SCHOOL_ID);
+    }
+
+    @Test
+    void twoSeatsJoinedInTheSameInstantStillPickOneDeterministically() {
+        // created_at has second precision in some setups, so the id is the tiebreaker.
+        when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(OTHER_CLASS_ID, OTHER_SCHOOL_ID)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+        LocalDateTime sameInstant = LocalDateTime.of(2026, 10, 1, 9, 0);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(
+                        enrolledOn(OTHER_CLASS_ID, OTHER_SCHOOL_ID, sameInstant, 2L),
+                        enrolledOn(CLASS_ID, SCHOOL_ID, sameInstant, 1L)));
+
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        // Same instant, highest id: OTHER_SCHOOL_ID, and not whichever arrived first.
+        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+        verify(repository, never()).countMembers(Scope.SCHOOL, SCHOOL_ID);
     }
 
     @Test
@@ -449,10 +519,15 @@ class LeaderboardServiceTest {
                 nullable(LocalDateTime.class), nullable(LocalDateTime.class)))
                 .thenReturn(Flux.fromIterable(scores));
         when(repository.countMembers(any(), anyLong())).thenReturn(Mono.just(totalStudents));
-        when(repository.findDisplayNames(any())).thenAnswer(call ->
-                Flux.fromIterable(call.<Collection<Long>>getArgument(0).stream()
-                        .map(account -> new DisplayName(account, "Rita", "Neto"))
-                        .toList()));
+        when(repository.findDisplayNames(any())).thenAnswer(call -> {
+            Collection<Long> accounts = call.getArgument(0);
+            if (accounts == null) {
+                return Flux.empty();
+            }
+            return Flux.fromIterable(accounts.stream()
+                    .map(account -> new DisplayName(account, "Rita", "Neto"))
+                    .toList());
+        });
     }
 
     /** n students on accounts 101..100+n, highest average first. */
