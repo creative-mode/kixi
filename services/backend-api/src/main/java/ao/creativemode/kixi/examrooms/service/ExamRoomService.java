@@ -139,6 +139,7 @@ public class ExamRoomService implements ExamRoomAccess {
                 .map(ExamRoomService::toParticipantResponse);
     }
 
+    @Transactional
     public Mono<ExamRoomParticipantResponse> addParticipant(Long roomId, ExamRoomParticipantRequest request,
             Long caller, boolean admin) {
         return managedRoom(roomId, caller, admin).flatMap(room -> {
@@ -153,9 +154,12 @@ public class ExamRoomService implements ExamRoomAccess {
                             .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))
                             .then(enrollments.findAllByClassIdAndDeletedAtIsNull(request.classId())
                                     .map(enrollment -> enrollment.getAccountId()).collectList());
-            return targetAccounts.flatMapMany(Flux::fromIterable)
-                    .flatMap(accountId -> validateStudent(room, accountId).then(addOne(room, accountId)))
-                    .last()
+            return targetAccounts.flatMap(accountsToInvite -> Flux.fromIterable(accountsToInvite)
+                    .concatMap(accountId -> validateStudent(room, accountId).thenReturn(accountId))
+                    .collectList()
+                    .flatMapMany(validatedAccounts -> Flux.fromIterable(validatedAccounts)
+                            .concatMap(accountId -> addOne(room, accountId)))
+                    .last())
                     .switchIfEmpty(Mono.error(ApiException.badRequest("The class has no active students")));
         });
     }
@@ -255,7 +259,7 @@ public class ExamRoomService implements ExamRoomAccess {
                         .filter(participant -> participant.getSimulationId() != null)
                         .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
                         .flatMap(participant -> questions.findAllByStatementIdOrderedByOrderIndex(room.getStatementId())
-                                .flatMap(question -> options.findAllByQuestionIdAndDeletedAtIsNull(question.getId())
+                                 .flatMapSequential(question -> options.findAllByQuestionIdOrderedByOrderIndex(question.getId())
                                         .map(option -> new QuestionOptionResponse(option.getId(), option.getQuestionId(),
                                                 option.getOptionLabel(), option.getOptionText(), null,
                                                 option.getOrderIndex(), option.getCreatedAt(), option.getUpdatedAt(), null))

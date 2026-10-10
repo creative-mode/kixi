@@ -23,6 +23,8 @@ import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
+import ao.creativemode.kixi.identity.repository.AccountRoleRepository;
+import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.model.Simulation;
@@ -157,11 +159,54 @@ class ExamRoomServiceTest {
         option.setQuestionId(12L);
         option.setIsCorrect(true);
         option.setOptionText("4");
-        when(options.findAllByQuestionIdAndDeletedAtIsNull(12L)).thenReturn(Flux.just(option));
+        when(options.findAllByQuestionIdOrderedByOrderIndex(12L)).thenReturn(Flux.just(option));
 
         StepVerifier.create(service.studentView(20L, 42L))
                 .assertNext(view -> assertThat(view.questions().get(0).options().get(0).isCorrect()).isNull())
                 .verifyComplete();
+    }
+
+    @Test
+    void studentViewPreservesQuestionAndOptionOrder() {
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
+        ExamRoomParticipant participant = participant(20L, 42L);
+        participant.setSimulationId(80L);
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        Question first = question(12L, 2);
+        Question second = question(11L, 1);
+        when(questions.findAllByStatementIdOrderedByOrderIndex(5L)).thenReturn(Flux.just(second, first));
+        when(options.findAllByQuestionIdOrderedByOrderIndex(12L)).thenReturn(Flux.just(option(101L, 12L, 1), option(102L, 12L, 2)));
+        when(options.findAllByQuestionIdOrderedByOrderIndex(11L)).thenReturn(Flux.just(option(201L, 11L, 1)));
+
+        StepVerifier.create(service.studentView(20L, 42L))
+                .assertNext(view -> {
+                    assertThat(view.questions()).extracting(q -> q.id()).containsExactly(11L, 12L);
+                    assertThat(view.questions().get(1).options()).extracting(o -> o.id()).containsExactly(101L, 102L);
+                }).verifyComplete();
+    }
+
+    @Test
+    void classInvitationValidatesAllStudentsBeforeWritingAnyParticipant() {
+        AccountRoleRepository accountRoles = mock(AccountRoleRepository.class);
+        RoleRepository roles = mock(RoleRepository.class);
+        ExamRoomService scopedService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, accountRoles, roles, questions, options);
+        ExamRoom room = room(20L, ExamRoomStatus.DRAFT);
+        room.setClassId(3L);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(classes.findByIdAndDeletedAtIsNull(3L)).thenReturn(Mono.just(new ao.creativemode.kixi.academic.model.Class()));
+        when(enrollments.findAllByClassIdAndDeletedAtIsNull(3L)).thenReturn(Flux.just(
+                new ao.creativemode.kixi.institutions.model.Enrollment(41L, 3L, 1L),
+                new ao.creativemode.kixi.institutions.model.Enrollment(42L, 3L, 1L)));
+        when(accounts.findById(anyLong())).thenAnswer(invocation -> Mono.just(account(invocation.getArgument(0))));
+        ao.creativemode.kixi.identity.model.Role studentRole = new ao.creativemode.kixi.identity.model.Role();
+        studentRole.setId(9L);
+        when(roles.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(studentRole));
+        when(accountRoles.existsByAccountIdAndRoleIdAndDeletedAtIsNull(anyLong(), anyLong()))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0, Long.class).equals(41L)));
+        StepVerifier.create(scopedService.addParticipant(20L, new ExamRoomParticipantRequest(null, 3L), 7L, false))
+                .expectError(ApiException.class).verify();
+        verify(participants, never()).save(any(ExamRoomParticipant.class));
     }
 
     @Test
@@ -221,6 +266,22 @@ class ExamRoomServiceTest {
         Account account = new Account();
         account.setId(id);
         return account;
+    }
+
+    private static Question question(Long id, int orderIndex) {
+        Question question = new Question();
+        question.setId(id);
+        question.setStatementId(5L);
+        question.setOrderIndex(orderIndex);
+        return question;
+    }
+
+    private static QuestionOption option(Long id, Long questionId, int orderIndex) {
+        QuestionOption option = new QuestionOption();
+        option.setId(id);
+        option.setQuestionId(questionId);
+        option.setOrderIndex(orderIndex);
+        return option;
     }
 
     private static ExamRoom room(Long id, ExamRoomStatus status) {
