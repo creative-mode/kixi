@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 /**
  * Issue #107 (BE-11): the sweep that finishes the simulations whose time ran
@@ -56,17 +55,6 @@ class SimulationExpirationJobTest {
 
     @Test
     void leavesTheSimulationThatIsStillInTime() {
-        givenSweep(simulation(1L), false);
-
-        job.closeExpiredSimulations();
-
-        verifyNoInteractions(submissions);
-    }
-
-    @Test
-    void leavesTheSimulationInsideTheTolerance() {
-        // The tolerance lives in the deadline service; from here an open
-        // simulation looks exactly like one that has not run out of time yet.
         givenSweep(simulation(1L), false);
 
         job.closeExpiredSimulations();
@@ -148,7 +136,7 @@ class SimulationExpirationJobTest {
     }
 
     @Test
-    void doesNotSubmitASimulationTheSweepIsNotSureAbout() {
+    void doesNotPersistWhenSubmissionReturnsEmpty() {
         Simulation expired = simulation(1L);
         givenSweep(expired, true);
         when(submissions.submit(eq(1L), isNull(), eq(true))).thenReturn(Mono.empty());
@@ -178,9 +166,4 @@ class SimulationExpirationJobTest {
         return simulation;
     }
 
-    @SuppressWarnings("unused")
-    private void unusedStepVerifierAnchor() {
-        // Keeps the StepVerifier import honest if the assertions above change.
-        StepVerifier.create(Mono.empty()).verifyComplete();
-    }
 }

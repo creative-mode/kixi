@@ -15,9 +15,9 @@ public record SimulationResponse(
         LocalDateTime startedAt,
         LocalDateTime finishedAt,
         /**
-         * Issue #107: the instant the server stops accepting answers, computed
-         * from the statement duration and the account's accessibility extra
-         * time. Null when the simulation has no deadline to show.
+         * Issue #107: the effective instant after which the server stops
+         * accepting answers, including accessibility extra time and the
+         * configured tolerance. Null when the simulation has no deadline.
          */
         LocalDateTime deadline,
         Integer timeSpentSeconds,

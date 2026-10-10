@@ -14,10 +14,10 @@ import reactor.core.publisher.Mono;
 /**
  * The single source of truth for the time of a simulation (issue #107).
  *
- * <p>The deadline is the moment the statement's duration, counted from the
- * instant the server started the simulation, is up. An account flagged for
- * accessibility gets +25% of that duration, computed here and nowhere else so
- * the answer gate and the expiration job can never disagree on it.</p>
+ * <p>The effective deadline is the moment the server stops accepting answers:
+ * statement duration, accessibility extra time, and configured tolerance are
+ * all included. It is computed here and nowhere else so the answer gate, the
+ * expiration job, and the response cannot disagree on it.</p>
  *
  * <p>A simulation without a statement, without a start or whose statement has
  * no duration has no deadline at all: it never expires, which is what the
@@ -44,7 +44,8 @@ public class SimulationDeadlineService {
     }
 
     /**
-     * The instant the simulation is due, or empty when it has no deadline.
+     * The effective instant after which the simulation no longer accepts
+     * answers, or empty when it has no deadline.
      */
     public Mono<LocalDateTime> deadline(Simulation simulation) {
         LocalDateTime startedAt = simulation.getStartedAt();
@@ -56,20 +57,19 @@ public class SimulationDeadlineService {
                 // No duration means no deadline to extend, so the account is not read.
                 .filter(statement -> statement.getDurationMinutes() != null)
                 .flatMap(statement -> hasExtraTime(simulation.getAccountId())
-                        .flatMap(extraTime -> Mono.justOrEmpty(deadlineFor(
+                        .flatMap(extraTime -> Mono.justOrEmpty(effectiveDeadlineFor(
                                 startedAt, statement.getDurationMinutes(), extraTime))));
     }
 
     /**
-     * Whether the server clock has already passed the deadline plus the
-     * tolerance. A simulation without a deadline never expires.
+     * Whether the server clock has already passed the effective deadline. A
+     * simulation without a deadline never expires.
      *
      * @param now the server clock, passed in so the caller decides when it is read
      */
     public Mono<Boolean> expired(Simulation simulation, LocalDateTime now) {
         return deadline(simulation)
-                .map(deadline -> now.isAfter(
-                        deadline.plusSeconds(properties.getToleranceSeconds())))
+                .map(deadline -> now.isAfter(deadline))
                 .defaultIfEmpty(false);
     }
 
@@ -81,12 +81,12 @@ public class SimulationDeadlineService {
     }
 
     /**
-     * The pure deadline arithmetic, so a caller that already holds the statement
-     * and the account does not have to query them again.
+     * The pure effective-deadline arithmetic, so a caller that already holds
+     * the statement and the account does not have to query them again.
      *
      * @return the deadline, or null when there is nothing to count from
      */
-    public LocalDateTime deadlineFor(LocalDateTime startedAt, Integer durationMinutes,
+    public LocalDateTime effectiveDeadlineFor(LocalDateTime startedAt, Integer durationMinutes,
             boolean extraTime) {
         if (startedAt == null || durationMinutes == null) {
             return null;
@@ -94,7 +94,8 @@ public class SimulationDeadlineService {
         long secondsPerMinute = extraTime
                 ? EXTRA_TIME_SECONDS_PER_MINUTE
                 : SECONDS_PER_MINUTE;
-        return startedAt.plusSeconds(durationMinutes * secondsPerMinute);
+        return startedAt.plusSeconds(durationMinutes * secondsPerMinute
+                + properties.getToleranceSeconds());
     }
 
     private Mono<Boolean> hasExtraTime(Long accountId) {

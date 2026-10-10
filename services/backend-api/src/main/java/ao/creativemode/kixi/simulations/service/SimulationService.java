@@ -191,7 +191,8 @@ public class SimulationService {
                     Account account = tuple.getT1();
                     Statement statement = tuple.getT2();
                     // The account and the statement are already loaded above, so the
-                    // deadline reuses their pure arithmetic instead of querying again.
+                    // The relationships are already loaded, so deadline arithmetic
+                    // does not issue another query per simulation.
                     boolean extraTime = Boolean.TRUE.equals(account.getAccessibilityExtraTime());
                     return new SimulationResponse(
                         simulation.getId(),
@@ -200,7 +201,7 @@ public class SimulationService {
                         tuple.getT3(),
                         simulation.getStartedAt(),
                         simulation.getFinishedAt(),
-                        deadlineService.deadlineFor(
+                        deadlineService.effectiveDeadlineFor(
                             simulation.getStartedAt(),
                             statement.getDurationMinutes(),
                             extraTime),
