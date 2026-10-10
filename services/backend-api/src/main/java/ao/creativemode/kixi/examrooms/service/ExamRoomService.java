@@ -145,6 +145,9 @@ public class ExamRoomService implements ExamRoomAccess {
 
     private Mono<Void> validateStudent(ExamRoom room, Long accountId) {
         if (accountRoles == null || roles == null) return Mono.empty();
+        if (room.getClassId() == null) {
+            return Mono.error(ApiException.conflict("This legacy room is not scoped to a class"));
+        }
         return accounts.findById(accountId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
                 .flatMap(account -> roles.findByNameAndDeletedAtIsNull("STUDENT")
