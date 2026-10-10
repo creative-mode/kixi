@@ -320,6 +320,14 @@ public class ExamRoomService implements ExamRoomAccess {
                 .defaultIfEmpty(false);
     }
 
+    @Override
+    public Mono<Boolean> answerKeyVisible(Long roomId) {
+        return rooms.findById(roomId)
+                .map(room -> room.getStatus() == ExamRoomStatus.CLOSED)
+                .defaultIfEmpty(false);
+    }
+
+    @Transactional
     public Mono<ExamRoomResponse> transition(Long id, Long caller, boolean admin, ExamRoomStatus next) {
         return managedRoom(id, caller, admin).then(lockedRoom(id)).flatMap(room -> {
             boolean valid = (next == ExamRoomStatus.OPEN && room.getStatus() == ExamRoomStatus.DRAFT)

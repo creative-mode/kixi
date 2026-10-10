@@ -94,15 +94,15 @@ public class SimulationAnswerService {
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
-        return repository.findAllByDeletedAtIsNull().map(this::toResponse);
+        return repository.findAllByDeletedAtIsNull().flatMap(this::toResponse);
     }
 
     public Flux<SimulationAnswerResponse> findAllActiveForStaff(Long accountId, boolean admin) {
         return repository.findAllByDeletedAtIsNull()
             .flatMap(answer -> admin || simulationService == null
-                ? Mono.just(toResponse(answer))
+                ? toResponse(answer)
                 : simulationService.authorize(answer.getSimulationId(), accountId, false, true)
-                    .map(ignored -> toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
+                    .then(toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
     }
 
     public Flux<SimulationAnswerResponse> findAllActiveForAccount(Long accountId) {
@@ -112,24 +112,24 @@ public class SimulationAnswerService {
             .flatMapMany(simulationIds -> simulationIds.isEmpty()
                 ? Flux.empty()
                 : repository.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds))
-            .map(this::toResponse);
+            .flatMap(this::toResponse);
     }
 
     public Flux<SimulationAnswerResponse> findAllDeleted() {
-        return repository.findAllByDeletedAtIsNotNull().map(this::toResponse);
+        return repository.findAllByDeletedAtIsNotNull().flatMap(this::toResponse);
     }
 
     public Flux<SimulationAnswerResponse> findAllDeletedForStaff(Long accountId, boolean admin) {
         return repository.findAllByDeletedAtIsNotNull()
             .flatMap(answer -> simulationService.authorize(answer.getSimulationId(), accountId, admin, !admin, true)
-                .map(ignored -> toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
+                .then(toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
     }
 
     public Flux<SimulationAnswerResponse> findAllDeletedForAccount(Long accountId) {
         return simulationRepository.findByAccountId(accountId)
             .map(Simulation::getId).collectList()
             .flatMapMany(ids -> ids.isEmpty() ? Flux.empty() : repository.findAllBySimulationIdInAndDeletedAtIsNotNull(ids))
-            .map(this::toResponse);
+            .flatMap(this::toResponse);
     }
 
     public Mono<SimulationAnswerResponse> findByIdActive(Long id) {
@@ -138,7 +138,7 @@ public class SimulationAnswerService {
             .switchIfEmpty(
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
-            .map(this::toResponse);
+            .flatMap(this::toResponse);
     }
 
     public Mono<SimulationAnswerResponse> findByIdActiveForAccount(Long id, Long accountId) {
@@ -146,7 +146,7 @@ public class SimulationAnswerService {
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
             .flatMap(answer -> requireSimulationOwner(answer.getSimulationId(), accountId)
                 .thenReturn(answer))
-            .map(this::toResponse);
+            .flatMap(this::toResponse);
     }
 
     @Transactional
@@ -167,7 +167,7 @@ public class SimulationAnswerService {
                     .insertIfInProgress(answer.getSimulationId(), answer.getQuestionId(),
                         answer.getSelectedOptionId(), answer.getAnswerText(), answer.getAnsweredAt())
                     .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
-                    .map(this::toResponse)
+                    .flatMap(this::toResponse)
                     .onErrorMap(DataIntegrityViolationException.class, e ->
                         ApiException.conflict(
                             "This question has already been answered in this simulation."
@@ -259,7 +259,7 @@ public class SimulationAnswerService {
                             request.answerText(), request.answeredAt())
                         .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
                      })))))
-            .map(this::toResponse)
+             .flatMap(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
                     "This question has already been answered in this simulation."
@@ -278,7 +278,7 @@ public class SimulationAnswerService {
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
             .flatMap(answer -> requireSimulationOwner(answer.getSimulationId(), accountId)
                 .then(updateExisting(answer, request)))
-            .map(this::toResponse)
+            .flatMap(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
                     "This question has already been answered in this simulation."
@@ -325,7 +325,20 @@ public class SimulationAnswerService {
             .then();
     }
 
-    private SimulationAnswerResponse toResponse(SimulationAnswer entity) {
+    private Mono<SimulationAnswerResponse> toResponse(SimulationAnswer entity) {
+        Mono<Simulation> simulation = simulationRepository.findById(entity.getSimulationId());
+        if (simulation == null || examRooms == null) {
+            return Mono.just(toResponse(entity, true));
+        }
+        return simulation.defaultIfEmpty(new Simulation())
+            .flatMap(owner -> owner.getExamRoomId() == null
+                ? Mono.just(toResponse(entity, true))
+                : examRooms.answerKeyVisible(owner.getExamRoomId())
+                    .defaultIfEmpty(false)
+                    .map(visible -> toResponse(entity, visible)));
+    }
+
+    private SimulationAnswerResponse toResponse(SimulationAnswer entity, boolean answerKeyVisible) {
         return new SimulationAnswerResponse(
             entity.getId(),
             entity.getSimulationId(),
@@ -333,7 +346,7 @@ public class SimulationAnswerService {
             entity.getSelectedOptionId(),
             entity.getAnswerText(),
             entity.getScoreObtained(),
-            entity.getIsCorrect(),
+            answerKeyVisible ? entity.getIsCorrect() : null,
             entity.getReviewStatus(),
             entity.getAnsweredAt(),
             entity.getCreatedAt(),

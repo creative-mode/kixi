@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.simulations.model.Simulation;
@@ -113,6 +114,29 @@ class SimulationAnswerServiceTest {
         InOrder order = inOrder(simulationRepository, repository);
         order.verify(simulationRepository).lockForAnswerWrite(1L);
         order.verify(repository).insertIfInProgress(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void studentAnswerListingHidesIsCorrectWhileRoomIsRunning() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        Simulation roomSimulation = inProgressSimulation();
+        roomSimulation.setId(1L);
+        roomSimulation.setAccountId(7L);
+        roomSimulation.setExamRoomId(9L);
+        SimulationAnswer saved = answer(7L);
+        saved.setIsCorrect(true);
+        when(simulationRepository.findByAccountIdAndDeletedAtIsNull(7L))
+                .thenReturn(Flux.just(roomSimulation));
+        when(repository.findAllBySimulationIdInAndDeletedAtIsNull(any()))
+                .thenReturn(Flux.just(saved));
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(roomSimulation));
+        when(rooms.answerKeyVisible(9L)).thenReturn(Mono.just(false));
+        SimulationAnswerService roomService = new SimulationAnswerService(repository, simulationRepository,
+                questionRepository, mock(QuestionOptionRepository.class), deadlineService, null, rooms);
+
+        StepVerifier.create(roomService.findAllActiveForAccount(7L))
+                .assertNext(response -> assertThat(response.isCorrect()).isNull())
+                .verifyComplete();
     }
 
     @Test

@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
 
 import ao.creativemode.kixi.academic.repository.ClassRepository;
@@ -263,6 +264,24 @@ class ExamRoomServiceTest {
                         && api.getStatus() == HttpStatus.FORBIDDEN)
                 .verify();
         verify(rooms, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void closingLocksRoomThenItsSimulationsBeforeTransitioning() {
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(new Simulation()));
+        when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(service.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectNextCount(1).verifyComplete();
+
+        InOrder order = inOrder(rooms, simulations);
+        order.verify(rooms).lockForUpdate(20L);
+        order.verify(simulations).lockByExamRoomId(20L);
+        order.verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
     }
 
     @Test

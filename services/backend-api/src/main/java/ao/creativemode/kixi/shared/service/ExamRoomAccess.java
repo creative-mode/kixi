@@ -10,4 +10,7 @@ public interface ExamRoomAccess {
     Mono<LocalDateTime> effectiveRoomDeadline(Long roomId, LocalDateTime durationDeadline);
     Mono<Void> lockRoomForSimulation(Long roomId);
     Mono<Boolean> acceptsSimulationAnswers(Long roomId, LocalDateTime now);
+    default Mono<Boolean> answerKeyVisible(Long roomId) {
+        return Mono.just(true);
+    }
 }

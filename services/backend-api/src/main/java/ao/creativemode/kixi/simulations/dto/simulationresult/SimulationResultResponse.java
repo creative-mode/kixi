@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.dto.simulationresult;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import java.time.LocalDateTime;
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
  * The outcome of a finished simulation, with the answer key.
@@ -39,6 +40,7 @@ public record SimulationResultResponse(
      *                         option marked correct, which the approval gate
      *                         permits for an open question
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record QuestionResult(
             Long questionId,
             Integer number,
@@ -55,6 +57,7 @@ public record SimulationResultResponse(
             List<OptionResult> options
     ) { }
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record OptionResult(
             Long id,
             String optionLabel,
