@@ -76,6 +76,21 @@ class ExamRoomServiceTest {
     }
 
     @Test
+    void closedRoomPublishesItsRealEndAndSeparateClosedSignal() {
+        LocalDateTime endsAt = LocalDateTime.of(2026, 10, 10, 12, 0);
+        ExamRoom room = room(20L, ExamRoomStatus.CLOSED);
+        room.setEndsAt(endsAt);
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(service.effectiveRoomDeadline(20L, endsAt.plusMinutes(30)))
+                .expectNext(endsAt)
+                .verifyComplete();
+        StepVerifier.create(service.roomClosed(20L))
+                .expectNext(true)
+                .verifyComplete();
+    }
+
+    @Test
     void createsRoomOwnedByAuthenticatedTeacher() {
         when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(new Statement()));
         when(accounts.findById(9L)).thenReturn(Mono.just(account(9L)));

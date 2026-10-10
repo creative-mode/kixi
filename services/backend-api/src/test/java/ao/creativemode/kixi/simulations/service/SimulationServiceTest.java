@@ -7,6 +7,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
@@ -117,6 +120,31 @@ class SimulationServiceTest {
                 .verifyComplete();
 
         verify(deadlineService).effectiveDeadlineFor(startedAt, 30, false);
+    }
+
+    @Test
+    void closedRoomDeadlineIsRealAndJsonSerializable() throws Exception {
+        LocalDateTime roomEndsAt = LocalDateTime.of(2026, 10, 10, 12, 0);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setExamRoomId(77L);
+        simulation.setStartedAt(LocalDateTime.of(2026, 10, 10, 10, 0));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(deadlineService.deadline(simulation)).thenReturn(Mono.just(roomEndsAt));
+
+        StepVerifier.create(service.findById(1L))
+                .assertNext(response -> {
+                    assertThat(response.deadline()).isEqualTo(roomEndsAt);
+                    try {
+                        assertThat(new ObjectMapper().findAndRegisterModules()
+                                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                .writeValueAsString(response))
+                                .contains("\"deadline\":\"2026-10-10T12:00:00\"")
+                                .doesNotContain("-999999999");
+                    } catch (Exception error) {
+                        throw new AssertionError(error);
+                    }
+                })
+                .verifyComplete();
     }
 
     @Test

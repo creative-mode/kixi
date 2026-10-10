@@ -17,9 +17,10 @@ public record SimulationResponse(
         LocalDateTime startedAt,
         LocalDateTime finishedAt,
         /**
-         * Issue #107: the effective instant after which the server stops
-         * accepting answers, including accessibility extra time and the
-         * configured tolerance. Null when the simulation has no deadline.
+         * Issue #107: the scheduled effective instant calculated from duration,
+         * accessibility extra time, and tolerance. Room closure is an internal
+         * rejection signal and never changes this public, serializable value.
+         * Null when the simulation has no deadline.
          */
         LocalDateTime deadline,
         Integer timeSpentSeconds,

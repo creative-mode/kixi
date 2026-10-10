@@ -17,10 +17,10 @@ import reactor.core.publisher.Mono;
 /**
  * The single source of truth for the time of a simulation (issue #107).
  *
- * <p>The effective deadline is the moment the server stops accepting answers:
- * statement duration, accessibility extra time, and configured tolerance are
- * all included. It is computed here and nowhere else so the answer gate, the
- * expiration job, and the response cannot disagree on it.</p>
+ * <p>The published deadline is the scheduled instant calculated from statement
+ * duration, accessibility extra time, and configured tolerance. A room being
+ * closed is a separate internal gate, so an early closure never needs a
+ * sentinel value in the public response.</p>
  *
  * <p>A simulation without a statement, without a start or whose statement has
  * no duration has no deadline at all: it never expires, which is what the
@@ -67,8 +67,8 @@ public class SimulationDeadlineService {
     }
 
     /**
-     * The effective instant after which the simulation no longer accepts
-     * answers, or empty when it has no deadline.
+     * The serializable scheduled deadline, or empty when it has no deadline.
+     * Room closure is checked separately by {@link #expired}.
      */
     public Mono<LocalDateTime> deadline(Simulation simulation) {
         LocalDateTime startedAt = simulation.getStartedAt();
@@ -97,7 +97,16 @@ public class SimulationDeadlineService {
      */
     public Mono<Boolean> expired(Simulation simulation, LocalDateTime now) {
         if (simulation.getStartedAt() != null && now.isBefore(simulation.getStartedAt())) return Mono.just(true);
-        return deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false);
+        if (examRoomAccess == null || simulation.getExamRoomId() == null) {
+            return deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false);
+        }
+        Mono<Boolean> roomClosed = examRoomAccess.roomClosed(simulation.getExamRoomId());
+        if (roomClosed == null) roomClosed = Mono.just(false);
+        return roomClosed
+                .defaultIfEmpty(false)
+                .flatMap(closed -> Boolean.TRUE.equals(closed)
+                        ? Mono.just(true)
+                        : deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false));
     }
 
     /**

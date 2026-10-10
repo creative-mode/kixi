@@ -323,9 +323,15 @@ public class ExamRoomService implements ExamRoomAccess {
     @Override
     public Mono<LocalDateTime> effectiveRoomDeadline(Long roomId, LocalDateTime durationDeadline) {
         return rooms.findById(roomId)
-                .map(room -> room.getStatus() == ExamRoomStatus.CLOSED ? LocalDateTime.MIN
-                        : (durationDeadline == null || room.getEndsAt().isBefore(durationDeadline)
-                                ? room.getEndsAt() : durationDeadline));
+                .map(room -> durationDeadline == null || room.getEndsAt().isBefore(durationDeadline)
+                        ? room.getEndsAt() : durationDeadline);
+    }
+
+    @Override
+    public Mono<Boolean> roomClosed(Long roomId) {
+        return rooms.findById(roomId)
+                .map(room -> room.getStatus() == ExamRoomStatus.CLOSED)
+                .defaultIfEmpty(false);
     }
 
     @Override
