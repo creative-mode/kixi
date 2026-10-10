@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  *  |- academic   (school years, terms, subjects, courses, classes) -&gt; shared only
  *  |- institutions (schools, subject/teacher/student affiliations) -&gt; shared, identity, academic
  *  |- exams      (statements, questions, options, question images) -&gt; shared, institutions
- *  |- simulations (simulations, simulation answers) -&gt; shared, identity, academic, exams
+ *  |- simulations (simulations, simulation answers, leaderboard) -&gt; shared, identity, academic, exams, institutions
  *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
  *  '- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
  * </pre>

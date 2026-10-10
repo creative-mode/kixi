@@ -1,6 +1,5 @@
 package ao.creativemode.kixi.simulations.repository;
 
-import org.springframework.data.r2dbc.convert.R2dbcConverter;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 
@@ -44,11 +43,9 @@ public class LeaderboardRepository {
             """;
 
     private final DatabaseClient databaseClient;
-    private final R2dbcConverter converter;
 
-    public LeaderboardRepository(DatabaseClient databaseClient, R2dbcConverter converter) {
+    public LeaderboardRepository(DatabaseClient databaseClient) {
         this.databaseClient = databaseClient;
-        this.converter = converter;
     }
 
     /** One average percentage per account that has a computable score in the group. */
@@ -102,6 +99,9 @@ public class LeaderboardRepository {
         Map<String, Object> binds = new LinkedHashMap<>();
 
         where.add("s.deleted_at IS NULL");
+        // A statement that was taken down stops counting the moment it is taken down,
+        // for the same reason StatementCatalogRepository hides it from the catalog.
+        where.add("st.deleted_at IS NULL");
         where.add("s.status = 'FINISHED'");
         where.add("s.final_score IS NOT NULL");
         // A score without a scale cannot be turned into a percentage, and comparing it
@@ -124,7 +124,7 @@ public class LeaderboardRepository {
 
         String statement = """
                 SELECT s.account_id AS account_id,
-                       AVG(s.final_score * 100.0 / st.total_max_score) AS average
+                       AVG(ROUND(s.final_score * 100.0 / st.total_max_score, 2)) AS average
                   FROM simulations s
                   JOIN statements st ON st.id = s.statement_id
                 WHERE """

@@ -21,7 +21,7 @@ class LeaderboardRepositoryTest {
         String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
 
         assertThat(sql)
-                .contains("AVG(s.final_score * 100.0 / st.total_max_score)")
+                .contains("s.final_score * 100.0 / st.total_max_score")
                 .contains("GROUP BY s.account_id");
     }
 
@@ -35,6 +35,22 @@ class LeaderboardRepositoryTest {
                 // A score with no scale cannot be turned into a percentage, and would
                 // otherwise be compared against one that has a scale.
                 .contains("st.total_max_score IS NOT NULL AND st.total_max_score > 0");
+    }
+
+    @Test
+    void aStatementTakenDownStopsCounting() {
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
+
+        assertThat(sql).contains("st.deleted_at IS NULL");
+    }
+
+    @Test
+    void roundsBeforeAveragingSoTwoIdenticalPapersProduceIdenticalAverages() {
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, null, null, null).statement();
+
+        // Without ROUND, 2/3 can come back as 66.66666666666667 to one student and
+        // 66.66666666666666 to another, and the tie rule would never see a tie.
+        assertThat(sql).contains("AVG(ROUND(s.final_score * 100.0 / st.total_max_score, 2))");
     }
 
     @Test

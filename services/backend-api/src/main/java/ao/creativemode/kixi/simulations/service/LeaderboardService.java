@@ -59,13 +59,13 @@ public class LeaderboardService {
     /** Under this many students a group is too small to publish a podium. */
     static final int SMALL_GROUP_LIMIT = 10;
 
-    /** Bound on the cache so a caller cannot grow it by varying the statement. */
-    private static final int MAX_CACHED_GROUPS = 500;
+    /** Bound on the cache, so it cannot grow with whatever the caller varies. */
+    private static final int MAX_CACHED_COHORTS = 500;
 
     private final MeService meService;
     private final LeaderboardRepository repository;
 
-    private final Map<CacheKey, Mono<Ranking>> cache = new ConcurrentHashMap<>();
+    private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
     public LeaderboardService(MeService meService, LeaderboardRepository repository) {
         this.meService = meService;
@@ -110,27 +110,45 @@ public class LeaderboardService {
                 });
     }
 
-    /**
-     * The whole cohort, ordered. Every member reads the same rows, which is exactly why
-     * it — and not the response — is what gets cached.
-     */
+    /** The whole cohort, ordered. Every member reads the same rows, which is exactly why
+     * it — and not the response — is what gets cached. */
     private Mono<Ranking> ranking(Scope scope, Long groupId, Long statementId, Period period) {
         CacheKey key = new CacheKey(scope, groupId, statementId, period);
-        Mono<Ranking> fresh = Mono.defer(() -> Mono.zip(
+
+        Entry running = cache.get(key);
+        if (running != null && !running.expired()) {
+            return running.ranking();
+        }
+
+        Mono<Ranking> computed = Mono.defer(() -> Mono.zip(
                         repository.findAverages(scope, groupId, statementId, period.from(), period.to())
                                 .collectList(),
                         repository.countMembers(scope, groupId))
-                        .map(tuples -> rank(tuples.getT1(), tuples.getT2())))
+                        .map(tuples -> rank(tuples.getT1(), tuples.getT2())));
+
+        prune();
+        if (cache.size() >= MAX_CACHED_COHORTS) {
+            // Over the bound: this request is served without taking a slot. A caller that
+            // varies statementId can make their own lookups uncached, but cannot push
+            // anybody else's ranking out — which is what clearing the map would let them.
+            return computed;
+        }
+
+        Mono<Ranking> fresh = computed
+                // cache() holds the error as well as the value, and a database that blipped
+                // would then answer the whole cohort with the same failure for the whole
+                // TTL. Dropping the key on the way out leaves the next caller to retry.
+                .doOnError(error -> cache.remove(key))
                 .cache(CACHE_TTL);
 
-        Mono<Ranking> running = cache.putIfAbsent(key, fresh);
-        if (running == null && cache.size() > MAX_CACHED_GROUPS) {
-            // A cached Mono re-reads its source once the TTL is up, so an entry left in
-            // the map past its TTL never serves a stale ranking — it only costs memory.
-            // The bound stops that memory growing with whatever the caller varies.
-            cache.clear();
-        }
-        return running != null ? running : fresh;
+        Entry entry = new Entry(fresh, System.nanoTime() + CACHE_TTL.toNanos());
+        Entry raced = cache.putIfAbsent(key, entry);
+        return raced != null && !raced.expired() ? raced.ranking() : fresh;
+    }
+
+    /** Forgets cohorts whose time is up, one key at a time. */
+    private void prune() {
+        cache.entrySet().removeIf(candidate -> candidate.getValue().expired());
     }
 
     /**
@@ -292,4 +310,16 @@ public class LeaderboardService {
 
     /** What identifies a cached ranking: the cohort and the window everyone shares it under. */
     record CacheKey(Scope scope, Long groupId, Long statementId, Period period) { }
+
+    /**
+     * A cached ranking and when it stops being worth reading. The timestamp is kept here
+     * rather than inside the Mono so expiry is per key and can be pruned, instead of
+     * needing a single act of eviction for the whole cache.
+     */
+    record Entry(Mono<Ranking> ranking, long expiresAtNanos) {
+
+        boolean expired() {
+            return System.nanoTime() - expiresAtNanos >= 0;
+        }
+    }
 }

@@ -208,6 +208,47 @@ class LeaderboardServiceTest {
         assertThat(positions(theirs)).doesNotContain(15);
     }
 
+    // ── The cache under stress ──────────────────────────────────────────────
+
+    @Test
+    void aDatabaseBlipIsNotRememberedForTheWholeCohort() {
+        enrolled(CLASS_ID);
+        when(repository.findAverages(any(), anyLong(), nullable(Long.class),
+                nullable(LocalDateTime.class), nullable(LocalDateTime.class)))
+                .thenReturn(Flux.error(new IllegalStateException("connection reset")));
+        when(repository.countMembers(any(), anyLong())).thenReturn(Mono.just(1L));
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+                    .expectError(IllegalStateException.class)
+                    .verify();
+        }
+
+        // cache() holds the error as well as the value. If the key survived, one reset of
+        // the connection would answer this class with the same failure for 45 seconds.
+        verify(repository, times(3)).findAverages(any(), anyLong(), nullable(Long.class),
+                nullable(LocalDateTime.class), nullable(LocalDateTime.class));
+    }
+
+    @Test
+    void aCallerVaryingTheStatementCannotPushAnotherCohortOutOfTheCache() {
+        enrolled(CLASS_ID);
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 1);
+
+        // The ranking with no statement filter, which is the one worth protecting.
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        for (long statement = 1; statement <= 600; statement++) {
+            one(service.leaderboard(ACCOUNT_ID, "class", statement, "all"));
+        }
+
+        long readsSoFar = averages();
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        // Still served from the cache: flooding the map with variants never reaches a
+        // ranking that somebody else is relying on.
+        assertThat(averages()).isEqualTo(readsSoFar);
+    }
+
     // ── The parts not built yet ─────────────────────────────────────────────
 
     @Test
@@ -279,6 +320,13 @@ class LeaderboardServiceTest {
 
     private static GroupScore score(Long accountId, double average) {
         return new GroupScore(accountId, average);
+    }
+
+    /** How many times the ranking was actually read from the database. */
+    private long averages() {
+        return org.mockito.Mockito.mockingDetails(repository).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("findAverages"))
+                .count();
     }
 
     private static MeResponse me(Long classId, Long schoolId) {
