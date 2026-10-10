@@ -15,8 +15,16 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Flux<Simulation> findByDeletedAtIsNull();
     Flux<Simulation> findByDeletedAtIsNotNull();
     Flux<Simulation> findByAccountIdAndDeletedAtIsNull(Long accountId);
+    Flux<Simulation> findByAccountId(Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNull(Long id);
     Mono<Simulation> findByIdAndAccountIdAndDeletedAtIsNull(Long id, Long accountId);
+    Mono<Simulation> findByIdAndAccountId(Long id, Long accountId);
+    Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
+
+    @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
+            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, CURRENT_TIMESTAMP, 'IN_PROGRESS') "
+            + "ON CONFLICT (exam_room_id, account_id) WHERE exam_room_id IS NOT NULL DO NOTHING RETURNING *")
+    Mono<Simulation> insertExamRoomSimulation(Long accountId, Long statementId, Long roomId, Integer durationMinutes);
     Mono<Simulation> findByIdAndDeletedAtIsNotNull(Long id);
 
     /** The simulations the expiration job sweeps on every poll. */
@@ -28,6 +36,13 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
      */
     @Query("SELECT * FROM simulations WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
     Mono<Simulation> lockForAnswerWrite(Long id);
+
+    @Query("SELECT s.* FROM simulations s JOIN simulation_answers a ON a.simulation_id = s.id "
+            + "WHERE a.id = :answerId AND s.deleted_at IS NULL FOR UPDATE")
+    Mono<Simulation> lockForAnswerWriteByAnswerId(Long answerId);
+
+    @Query("SELECT * FROM simulations WHERE exam_room_id = :roomId AND deleted_at IS NULL ORDER BY id FOR UPDATE")
+    Flux<Simulation> lockByExamRoomId(Long roomId);
 
     // @Modifying makes this answer the number of rows updated; without it R2DBC
     // reads the (empty) result set and the Mono completes with nothing.

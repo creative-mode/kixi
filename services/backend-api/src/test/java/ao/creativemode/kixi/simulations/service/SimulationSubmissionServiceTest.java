@@ -129,6 +129,25 @@ class SimulationSubmissionServiceTest {
     }
 
     @Test
+    void explicitSubmitFinalizesEvenWhenAnswerWindowHasExpired() {
+        SimulationDeadlineService deadlines = mock(SimulationDeadlineService.class);
+        SimulationSubmissionService finalizer = new SimulationSubmissionService(
+                simulations, answers, questions, options, statements, teachingAuthorizer, deadlines,
+                java.time.Clock.systemDefaultZone());
+        Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
+        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(10L, 7L)).thenReturn(Mono.just(simulation));
+        when(simulations.claimSubmission(10L)).thenReturn(Mono.just(1));
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(20L)).thenReturn(Flux.empty());
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L))).thenReturn(Flux.empty());
+        when(simulations.save(any())).thenReturn(Mono.just(simulation));
+
+        StepVerifier.create(finalizer.submit(10L, 7L, false))
+                .assertNext(result -> assertThat(result.getStatus()).isEqualTo(SimulationStatus.FINISHED))
+                .verifyComplete();
+        verifyNoInteractions(deadlines);
+    }
+
+    @Test
     void doesNotAllowAStudentToSubmitSomebodyElsesSimulation() {
         when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(10L, 7L)).thenReturn(Mono.empty());
         StepVerifier.create(service.submit(10L, 7L, false))

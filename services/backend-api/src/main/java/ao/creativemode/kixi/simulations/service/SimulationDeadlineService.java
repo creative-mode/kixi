@@ -4,20 +4,23 @@ import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.simulations.config.SimulationTimeLimitProperties;
 import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import reactor.core.publisher.Mono;
 
 /**
  * The single source of truth for the time of a simulation (issue #107).
  *
- * <p>The effective deadline is the moment the server stops accepting answers:
- * statement duration, accessibility extra time, and configured tolerance are
- * all included. It is computed here and nowhere else so the answer gate, the
- * expiration job, and the response cannot disagree on it.</p>
+ * <p>The published deadline is the scheduled instant calculated from statement
+ * duration, accessibility extra time, and configured tolerance. A room being
+ * closed is a separate internal gate, so an early closure never needs a
+ * sentinel value in the public response.</p>
  *
  * <p>A simulation without a statement, without a start or whose statement has
  * no duration has no deadline at all: it never expires, which is what the
@@ -33,25 +36,50 @@ public class SimulationDeadlineService {
     private final StatementRepository statements;
     private final AccountRepository accounts;
     private final SimulationTimeLimitProperties properties;
+    private final ExamRoomAccess examRoomAccess;
+    private final Clock clock;
 
     public SimulationDeadlineService(
             StatementRepository statements,
             AccountRepository accounts,
-            SimulationTimeLimitProperties properties) {
+            SimulationTimeLimitProperties properties,
+            ExamRoomAccess examRoomAccess) {
+        this(statements, accounts, properties, examRoomAccess, Clock.systemDefaultZone());
+    }
+
+    @Autowired
+    public SimulationDeadlineService(
+            StatementRepository statements,
+            AccountRepository accounts,
+            SimulationTimeLimitProperties properties,
+            ExamRoomAccess examRoomAccess,
+            Clock clock) {
         this.statements = statements;
         this.accounts = accounts;
         this.properties = properties;
+        this.examRoomAccess = examRoomAccess;
+        this.clock = clock;
+    }
+
+    public SimulationDeadlineService(StatementRepository statements, AccountRepository accounts,
+            SimulationTimeLimitProperties properties) {
+        this(statements, accounts, properties, null);
     }
 
     /**
-     * The effective instant after which the simulation no longer accepts
-     * answers, or empty when it has no deadline.
+     * The serializable scheduled deadline, or empty when it has no deadline.
+     * Room closure is checked separately by {@link #expired}.
      */
     public Mono<LocalDateTime> deadline(Simulation simulation) {
         LocalDateTime startedAt = simulation.getStartedAt();
         Long statementId = simulation.getStatementId();
         if (startedAt == null || statementId == null) {
             return Mono.empty();
+        }
+        if (simulation.getExamRoomDurationMinutes() != null) {
+            return hasExtraTime(simulation.getAccountId())
+                    .flatMap(extraTime -> withRoomEnd(simulation,
+                            effectiveDeadlineFor(startedAt, simulation.getExamRoomDurationMinutes(), extraTime)));
         }
         return statements.findById(statementId)
                 // No duration means no deadline to extend, so the account is not read.
@@ -68,16 +96,36 @@ public class SimulationDeadlineService {
      * @param now the server clock, passed in so the caller decides when it is read
      */
     public Mono<Boolean> expired(Simulation simulation, LocalDateTime now) {
-        return deadline(simulation)
-                .map(deadline -> now.isAfter(deadline))
-                .defaultIfEmpty(false);
+        if (simulation.getStartedAt() != null && now.isBefore(simulation.getStartedAt())) return Mono.just(true);
+        if (examRoomAccess == null || simulation.getExamRoomId() == null) {
+            return deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false);
+        }
+        Mono<Boolean> roomClosed = examRoomAccess.roomClosed(simulation.getExamRoomId());
+        if (roomClosed == null) roomClosed = Mono.just(false);
+        return roomClosed
+                .defaultIfEmpty(false)
+                .flatMap(closed -> Boolean.TRUE.equals(closed)
+                        ? Mono.just(true)
+                        : deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false));
     }
 
     /**
      * Whether the simulation still accepts answers at the given instant.
      */
     public Mono<Boolean> acceptsAnswers(Simulation simulation, LocalDateTime now) {
+        if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
+            return Mono.just(false);
+        }
         return expired(simulation, now).map(expired -> !expired);
+    }
+
+    public LocalDateTime now() {
+        return LocalDateTime.now(clock);
+    }
+
+    private Mono<LocalDateTime> withRoomEnd(Simulation simulation, LocalDateTime deadline) {
+        if (examRoomAccess == null || simulation.getExamRoomId() == null) return Mono.justOrEmpty(deadline);
+        return examRoomAccess.effectiveRoomDeadline(simulation.getExamRoomId(), deadline);
     }
 
     /**

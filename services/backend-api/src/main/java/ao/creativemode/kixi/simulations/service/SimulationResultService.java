@@ -5,6 +5,7 @@ import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import reactor.core.publisher.Mono;
 
 /**
@@ -38,6 +40,7 @@ public class SimulationResultService {
     private final SimulationAnswerRepository answers;
     private final QuestionRepository questions;
     private final QuestionOptionRepository options;
+    private final ExamRoomAccess examRooms;
 
     public SimulationResultService(
         SimulationRepository simulations,
@@ -45,10 +48,22 @@ public class SimulationResultService {
         QuestionRepository questions,
         QuestionOptionRepository options
     ) {
+        this(simulations, answers, questions, options, null);
+    }
+
+    @Autowired
+    public SimulationResultService(
+        SimulationRepository simulations,
+        SimulationAnswerRepository answers,
+        QuestionRepository questions,
+        QuestionOptionRepository options,
+        ExamRoomAccess examRooms
+    ) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
         this.options = options;
+        this.examRooms = examRooms;
     }
 
     /**
@@ -70,7 +85,8 @@ public class SimulationResultService {
             .switchIfEmpty(Mono.error(ApiException.notFound(
                 "Simulation not found: " + simulationId)))
             .flatMap(this::requireFinished)
-            .flatMap(this::render);
+            .flatMap(simulation -> answerKeyVisible(simulation)
+                .flatMap(visible -> render(simulation, visible)));
     }
 
     /**
@@ -89,14 +105,14 @@ public class SimulationResultService {
                 + simulation.getStatus()));
     }
 
-    private Mono<SimulationResultResponse> render(Simulation simulation) {
+    private Mono<SimulationResultResponse> render(Simulation simulation, boolean answerKeyVisible) {
         return Mono.zip(
             questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId())
                 .collectList(),
             answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId()))
                 .collectList()
         )
-            .flatMap(tuple -> withOptions(simulation, tuple.getT1(), tuple.getT2()));
+            .flatMap(tuple -> withOptions(simulation, tuple.getT1(), tuple.getT2(), answerKeyVisible));
     }
 
     /**
@@ -109,22 +125,24 @@ public class SimulationResultService {
     private Mono<SimulationResultResponse> withOptions(
         Simulation simulation,
         List<Question> questions,
-        List<SimulationAnswer> answers
+        List<SimulationAnswer> answers,
+        boolean answerKeyVisible
     ) {
         if (questions.isEmpty()) {
-            return Mono.just(build(simulation, questions, answers, List.of()));
+            return Mono.just(build(simulation, questions, answers, List.of(), answerKeyVisible));
         }
         List<Long> questionIds = questions.stream().map(Question::getId).toList();
         return options.findAllByQuestionIdInAndDeletedAtIsNull(questionIds)
             .collectList()
-            .map(allOptions -> build(simulation, questions, answers, allOptions));
+            .map(allOptions -> build(simulation, questions, answers, allOptions, answerKeyVisible));
     }
 
     private SimulationResultResponse build(
         Simulation simulation,
         List<Question> questions,
         List<SimulationAnswer> answers,
-        List<QuestionOption> allOptions
+        List<QuestionOption> allOptions,
+        boolean answerKeyVisible
     ) {
         Map<Long, List<QuestionOption>> optionsByQuestion = allOptions.stream()
             .collect(Collectors.groupingBy(QuestionOption::getQuestionId));
@@ -139,17 +157,17 @@ public class SimulationResultService {
             .map(question -> renderQuestion(
                 question,
                 optionsByQuestion.getOrDefault(question.getId(), List.of()),
-                answerByQuestion.get(question.getId())))
+                answerByQuestion.get(question.getId()), answerKeyVisible))
             .toList();
 
         return new SimulationResultResponse(
             simulation.getId(),
             simulation.getStatus(),
-            simulation.getFinalScore(),
-            (int) rendered.stream().filter(question -> Boolean.TRUE.equals(question.isCorrect())).count(),
+            answerKeyVisible ? simulation.getFinalScore() : null,
+            answerKeyVisible ? (int) rendered.stream().filter(question -> Boolean.TRUE.equals(question.isCorrect())).count() : null,
             rendered.size(),
-            (int) rendered.stream().filter(question -> question.reviewStatus()
-                    == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count(),
+            answerKeyVisible ? (int) rendered.stream().filter(question -> question.reviewStatus()
+                    == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count() : null,
             simulation.getTimeSpentSeconds(),
             simulation.getFinishedAt(),
             rendered
@@ -159,21 +177,22 @@ public class SimulationResultService {
     private SimulationResultResponse.QuestionResult renderQuestion(
         Question question,
         List<QuestionOption> questionOptions,
-        SimulationAnswer answer
+        SimulationAnswer answer,
+        boolean answerKeyVisible
     ) {
         List<SimulationResultResponse.OptionResult> optionResults = questionOptions.stream()
             .map(option -> new SimulationResultResponse.OptionResult(
                 option.getId(),
                 option.getOptionLabel(),
                 option.getOptionText(),
-                option.getIsCorrect()))
+                answerKeyVisible ? option.getIsCorrect() : null))
             .toList();
 
         // Null when no option is marked correct. The approval gate asks for at
         // least one and only for questions that have options, so an open question
         // reaches here with none and its model answer stands on its own.
         Long correctOptionId = optionResults.stream()
-            .filter(SimulationResultResponse.OptionResult::isCorrect)
+            .filter(option -> Boolean.TRUE.equals(option.isCorrect()))
             .map(SimulationResultResponse.OptionResult::id)
             .findFirst()
             .orElse(null);
@@ -184,14 +203,26 @@ public class SimulationResultService {
             question.getText(),
             question.getQuestionType(),
             question.getMaxScore(),
-            question.getModelAnswer(),
-            correctOptionId,
+            answerKeyVisible ? question.getModelAnswer() : null,
+            answerKeyVisible ? correctOptionId : null,
             answer == null ? null : answer.getSelectedOptionId(),
             answer == null ? null : answer.getAnswerText(),
-            answer == null ? null : answer.getScoreObtained(),
-            answer == null ? null : answer.getIsCorrect(),
-            answer == null ? null : answer.getReviewStatus(),
+            answerKeyVisible && answer != null ? answer.getScoreObtained() : null,
+            answerKeyVisible && answer != null ? answer.getIsCorrect() : null,
+            answerKeyVisible && answer != null ? answer.getReviewStatus() : null,
             optionResults
         );
+    }
+
+    private Mono<Boolean> answerKeyVisible(Simulation simulation) {
+        if (examRooms == null) {
+            return Mono.just(true);
+        }
+        if (simulation.getExamRoomId() == null) {
+            Mono<Boolean> active = examRooms.hasOpenOrRunningRoom(simulation.getStatementId());
+            return (active == null ? Mono.just(false) : active)
+                    .defaultIfEmpty(false).map(value -> !value);
+        }
+        return examRooms.answerKeyVisible(simulation.getExamRoomId()).defaultIfEmpty(false);
     }
 }

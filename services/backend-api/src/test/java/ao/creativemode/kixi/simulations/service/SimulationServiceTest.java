@@ -7,7 +7,11 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.academic.model.SchoolYear;
@@ -18,6 +22,8 @@ import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
+import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,7 +52,9 @@ class SimulationServiceTest {
 
         when(accountRepository.findById(1L)).thenReturn(Mono.just(account(1L)));
         when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
-        when(statementRepository.findById(1L)).thenReturn(Mono.just(new Statement()));
+        Statement statement = new Statement();
+        statement.setId(1L);
+        when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
     }
 
     @Test
@@ -115,6 +123,31 @@ class SimulationServiceTest {
     }
 
     @Test
+    void closedRoomDeadlineIsRealAndJsonSerializable() throws Exception {
+        LocalDateTime roomEndsAt = LocalDateTime.of(2026, 10, 10, 12, 0);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setExamRoomId(77L);
+        simulation.setStartedAt(LocalDateTime.of(2026, 10, 10, 10, 0));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(deadlineService.deadline(simulation)).thenReturn(Mono.just(roomEndsAt));
+
+        StepVerifier.create(service.findById(1L))
+                .assertNext(response -> {
+                    assertThat(response.deadline()).isEqualTo(roomEndsAt);
+                    try {
+                        assertThat(new ObjectMapper().findAndRegisterModules()
+                                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                .writeValueAsString(response))
+                                .contains("\"deadline\":\"2026-10-10T12:00:00\"")
+                                .doesNotContain("-999999999");
+                    } catch (Exception error) {
+                        throw new AssertionError(error);
+                    }
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void findAllTrashedReturnsOnlyDeletedEntities() {
         Simulation deleted = simulation(2L, SimulationStatus.CANCELLED);
         deleted.markAsDelete();
@@ -175,6 +208,26 @@ class SimulationServiceTest {
     }
 
     @Test
+    void teacherCreationUsesTheRealStatementWriteGate() {
+        InstitutionAccessService institutionAccess = mock(InstitutionAccessService.class);
+        when(institutionAccess.requireAssignedTo(7L, false, 3L, null))
+                .thenReturn(Mono.error(ApiException.forbidden("not assigned")));
+        Statement statement = new Statement();
+        statement.setId(1L);
+        statement.setClassId(3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(statement));
+        SimulationService teacherService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, null,
+                new StatementWriteAccessService(institutionAccess, statementRepository));
+
+        StepVerifier.create(teacherService.create(
+                        new SimulationRequest(1L, 1L, null, null, null, null, null, null), 7L, false))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
     void createForAccountRejectsMismatchedAccountId() {
         StepVerifier.create(service.createForAccount(
                         new SimulationRequest(2L, 1L, 1L, null, null, null, null, null), 1L))
@@ -185,6 +238,38 @@ class SimulationServiceTest {
                 .verify();
 
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void participantCannotCreateNormalSimulationForAnOpenOrRunningRoomStatement() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasOpenOrRunningRoom(1L)).thenReturn(Mono.just(true));
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
+    void participantCanStillCreateAStatementWithoutAnActiveRoom() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasOpenOrRunningRoom(1L)).thenReturn(Mono.just(false));
+        when(repository.save(any(Simulation.class))).thenAnswer(invocation -> {
+            Simulation entity = invocation.getArgument(0);
+            entity.setId(11L);
+            return Mono.just(entity);
+        });
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectNextCount(1).verifyComplete();
+        verify(repository).save(any(Simulation.class));
     }
 
     @Test
@@ -306,6 +391,22 @@ class SimulationServiceTest {
         StepVerifier.create(service.restore(1L)).verifyComplete();
 
         assertThat(deleted.getDeletedAt()).isNull();
+    }
+
+    @Test
+    void restoreRejectsDeletedExamRoomSimulationToKeepRoomJoinUnique() {
+        Simulation deleted = simulation(1L, SimulationStatus.IN_PROGRESS);
+        deleted.setExamRoomId(20L);
+        deleted.markAsDelete();
+        when(repository.findById(1L)).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.restore(1L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                })
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
     }
 
     @Test

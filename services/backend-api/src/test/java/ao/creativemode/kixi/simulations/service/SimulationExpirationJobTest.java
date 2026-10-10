@@ -7,11 +7,22 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import ao.creativemode.kixi.simulations.config.SimulationTimeLimitProperties;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.LocalDateTime;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,12 +44,22 @@ class SimulationExpirationJobTest {
     private SimulationSubmissionService submissions;
     private SimulationTimeLimitProperties properties;
     private SimulationExpirationJob job;
+    private SimulationAnswerRepository answers;
+    private QuestionRepository questions;
+    private QuestionOptionRepository options;
+    private StatementRepository statements;
+    private TeachingAssignmentAuthorizer teachingAuthorizer;
 
     @BeforeEach
     void setUp() {
         simulations = mock(SimulationRepository.class);
         deadlines = mock(SimulationDeadlineService.class);
         submissions = mock(SimulationSubmissionService.class);
+        answers = mock(SimulationAnswerRepository.class);
+        questions = mock(QuestionRepository.class);
+        options = mock(QuestionOptionRepository.class);
+        statements = mock(StatementRepository.class);
+        teachingAuthorizer = mock(TeachingAssignmentAuthorizer.class);
         properties = new SimulationTimeLimitProperties();
         job = new SimulationExpirationJob(simulations, deadlines, submissions, properties);
     }
@@ -100,6 +121,30 @@ class SimulationExpirationJobTest {
 
         verify(submissions).submit(eq(1L), isNull(), eq(true));
         verify(submissions).submit(eq(2L), isNull(), eq(true));
+    }
+
+    @Test
+    void closesExpiredSimulationThroughTheRealSubmissionService() {
+        Simulation expired = simulation(1L);
+        expired.setStartedAt(LocalDateTime.of(2026, 10, 10, 10, 0));
+        when(simulations.findByStatusAndDeletedAtIsNull(SimulationStatus.IN_PROGRESS))
+                .thenReturn(Flux.just(expired));
+        when(deadlines.expired(eq(expired), org.mockito.ArgumentMatchers.any())).thenReturn(Mono.just(true));
+        when(simulations.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(expired));
+        when(simulations.claimSubmission(1L)).thenReturn(Mono.just(1));
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(null)).thenReturn(Flux.empty());
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(1L))).thenReturn(Flux.empty());
+        when(simulations.save(expired)).thenReturn(Mono.just(expired));
+        SimulationSubmissionService realSubmission = new SimulationSubmissionService(
+                simulations, answers, questions, options, statements, teachingAuthorizer, null,
+                Clock.fixed(Instant.parse("2026-10-10T12:00:00Z"), ZoneId.systemDefault()));
+        job = new SimulationExpirationJob(simulations, deadlines, realSubmission, properties,
+                Clock.fixed(Instant.parse("2026-10-10T12:00:00Z"), ZoneId.systemDefault()));
+
+        job.closeExpiredSimulations();
+
+        assertThat(expired.getStatus()).isEqualTo(SimulationStatus.FINISHED);
+        verify(simulations).claimSubmission(1L);
     }
 
     /**

@@ -14,6 +14,7 @@ import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
@@ -44,6 +45,7 @@ class SimulationResultServiceTest {
     private SimulationAnswerRepository answers;
     private QuestionRepository questions;
     private QuestionOptionRepository options;
+    private ExamRoomAccess examRooms;
     private SimulationResultService service;
 
     @BeforeEach
@@ -52,7 +54,8 @@ class SimulationResultServiceTest {
         answers = mock(SimulationAnswerRepository.class);
         questions = mock(QuestionRepository.class);
         options = mock(QuestionOptionRepository.class);
-        service = new SimulationResultService(simulations, answers, questions, options);
+        examRooms = mock(ExamRoomAccess.class);
+        service = new SimulationResultService(simulations, answers, questions, options, examRooms);
     }
 
     // ── The gate ────────────────────────────────────────────────────────────
@@ -150,6 +153,50 @@ class SimulationResultServiceTest {
                     assertThat(question.scoreObtained()).isEqualTo(0.0f);
                     assertThat(question.options())
                         .anySatisfy(option -> assertThat(option.isCorrect()).isTrue());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void aStudentResultInARunningRoomDoesNotExposeTheAnswerKey() {
+        givenAFinishedSimulationWithOneAnsweredQuestion();
+        Simulation simulation = simulation(SimulationStatus.FINISHED);
+        simulation.setExamRoomId(77L);
+        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(SIMULATION_ID, ACCOUNT_ID))
+                .thenReturn(Mono.just(simulation));
+        when(examRooms.answerKeyVisible(77L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.findResult(SIMULATION_ID, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    SimulationResultResponse.QuestionResult question = response.questions().get(0);
+                    assertThat(question.modelAnswer()).isNull();
+                     assertThat(question.correctOptionId()).isNull();
+                     assertThat(question.isCorrect()).isNull();
+                     assertThat(question.options()).allSatisfy(option -> assertThat(option.isCorrect()).isNull());
+                     assertThat(response.finalScore()).isNull();
+                     assertThat(response.correctAnswers()).isNull();
+                     assertThat(response.pendingReviewCount()).isNull();
+                     assertThat(question.scoreObtained()).isNull();
+                     assertThat(question.reviewStatus()).isNull();
+                 })
+                .verifyComplete();
+    }
+
+    @Test
+    void aStudentResultInAClosedRoomExposesTheAnswerKey() {
+        givenAFinishedSimulationWithOneAnsweredQuestion();
+        Simulation simulation = simulation(SimulationStatus.FINISHED);
+        simulation.setExamRoomId(77L);
+        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(SIMULATION_ID, ACCOUNT_ID))
+                .thenReturn(Mono.just(simulation));
+        when(examRooms.answerKeyVisible(77L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.findResult(SIMULATION_ID, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    SimulationResultResponse.QuestionResult question = response.questions().get(0);
+                    assertThat(question.modelAnswer()).isEqualTo("because B is right");
+                    assertThat(question.correctOptionId()).isEqualTo(RIGHT_OPTION_ID);
+                    assertThat(question.options()).anySatisfy(option -> assertThat(option.isCorrect()).isTrue());
                 })
                 .verifyComplete();
     }
