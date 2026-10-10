@@ -160,6 +160,14 @@ public class SecurityConfig {
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // The relative ranking (issue #117). Any signed-in account may
+                        // read it; the cohort comes from /me and never from a query
+                        // parameter, so what keeps a ranking relative is the service,
+                        // not this rule. It is spelled out because leaving it to
+                        // anyExchange() would work by accident, and the two bugs this
+                        // file already carries were both accidents of the same kind.
+                        .pathMatchers("/api/v1/leaderboard", "/api/v1/leaderboard/**")
+                        .authenticated()
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling

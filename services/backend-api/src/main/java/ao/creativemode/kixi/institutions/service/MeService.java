@@ -168,6 +168,23 @@ public class MeService {
     }
 
     /**
+     * The school a class belongs to, read through the class.
+     *
+     * <p>Public because a cohort membership cannot be decided from a profile alone:
+     * issue #117 has to know which school an enrollment actually sits in before it
+     * ranks the student with it.</p>
+     */
+    public Mono<Long> classInstitutionId(Long classId) {
+        if (classId == null) {
+            return Mono.empty();
+        }
+        return classRepository.findByIdAndDeletedAtIsNull(classId)
+                .flatMap(clazz -> clazz.getInstitutionId() == null
+                        ? Mono.empty()
+                        : Mono.just(clazz.getInstitutionId()));
+    }
+
+    /**
      * The school of the most recent active enrollment, resolved through the class.
      */
     private Mono<MeResponse.SchoolInfo> enrolledSchool(Long accountId) {
