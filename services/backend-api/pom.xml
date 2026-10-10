@@ -144,6 +144,12 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j_jdk17-core</artifactId>
+            <version>8.20.0</version>
+        </dependency>
+
         <!-- API documentation (Swagger UI + OpenAPI JSON).
              2.3.0 is the springdoc line for Spring Boot 3.2.x. -->
         <dependency>
