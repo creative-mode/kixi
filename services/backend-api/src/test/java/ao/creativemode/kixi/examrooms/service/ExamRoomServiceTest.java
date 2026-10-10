@@ -17,6 +17,10 @@ import ao.creativemode.kixi.examrooms.model.*;
 import ao.creativemode.kixi.examrooms.repository.*;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
@@ -35,6 +39,8 @@ class ExamRoomServiceTest {
     private StatementRepository statements;
     private ClassRepository classes;
     private EnrollmentRepository enrollments;
+    private QuestionOptionRepository options;
+    private QuestionRepository questions;
     private ExamRoomService service;
     private final LocalDateTime start = LocalDateTime.now().minusMinutes(30);
 
@@ -47,7 +53,10 @@ class ExamRoomServiceTest {
         statements = mock(StatementRepository.class);
         classes = mock(ClassRepository.class);
         enrollments = mock(EnrollmentRepository.class);
-        service = new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments);
+        options = mock(QuestionOptionRepository.class);
+        questions = mock(QuestionRepository.class);
+        service = new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
+                null, null, null, questions, options);
     }
 
     @Test
@@ -103,15 +112,19 @@ class ExamRoomServiceTest {
             simulation.setId(80L);
             return Mono.just(simulation);
         });
+        when(simulations.insertExamRoomSimulation(any(), any(), any(), any())).thenAnswer(invocation -> {
+            Simulation simulation = new Simulation();
+            simulation.setId(80L);
+            return Mono.just(simulation);
+        });
+        when(simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(20L, 42L)).thenReturn(Mono.empty());
         when(participants.save(any(ExamRoomParticipant.class))).thenAnswer(invocation ->
                 Mono.just(invocation.getArgument(0)));
 
         StepVerifier.create(service.join(20L, 42L))
                 .assertNext(response -> assertThat(response.simulationId()).isEqualTo(80L))
                 .verifyComplete();
-        verify(simulations).save(argThat(simulation -> simulation.getExamRoomId().equals(20L)
-                && simulation.getExamRoomDurationMinutes().equals(90)
-                && !simulation.getStartedAt().isBefore(start)));
+        verify(simulations).insertExamRoomSimulation(42L, 5L, 20L, 90);
     }
 
     @Test
@@ -126,6 +139,29 @@ class ExamRoomServiceTest {
                 .expectNextMatches(response -> response.simulationId().equals(80L))
                 .verifyComplete();
         verify(simulations).findById(80L);
+    }
+
+    @Test
+    void studentViewIncludesOptionsWithoutTheAnswerKey() {
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
+        ExamRoomParticipant participant = participant(20L, 42L);
+        participant.setSimulationId(80L);
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        Question question = new Question();
+        question.setId(12L);
+        question.setStatementId(5L);
+        question.setText("2 + 2?");
+        when(questions.findAllByStatementIdOrderedByOrderIndex(5L)).thenReturn(Flux.just(question));
+        QuestionOption option = new QuestionOption();
+        option.setId(99L);
+        option.setQuestionId(12L);
+        option.setIsCorrect(true);
+        option.setOptionText("4");
+        when(options.findAllByQuestionIdAndDeletedAtIsNull(12L)).thenReturn(Flux.just(option));
+
+        StepVerifier.create(service.studentView(20L, 42L))
+                .assertNext(view -> assertThat(view.questions().get(0).options().get(0).isCorrect()).isNull())
+                .verifyComplete();
     }
 
     @Test

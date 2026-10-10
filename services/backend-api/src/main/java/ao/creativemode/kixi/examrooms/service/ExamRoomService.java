@@ -15,6 +15,7 @@ import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomRequest;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomStudentResponse;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomQuestionResponse;
 import ao.creativemode.kixi.examrooms.model.ExamRoom;
 import ao.creativemode.kixi.examrooms.model.ExamRoomParticipant;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
@@ -22,7 +23,8 @@ import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
-import ao.creativemode.kixi.exams.dto.question.QuestionResponse;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
+import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
 import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.identity.repository.AccountRoleRepository;
@@ -49,21 +51,24 @@ public class ExamRoomService implements ExamRoomAccess {
     private final AccountRoleRepository accountRoles;
     private final RoleRepository roles;
     private final QuestionRepository questions;
+    private final QuestionOptionRepository options;
     private final Clock clock;
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
-            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions) {
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
-                accountRoles, roles, questions, Clock.systemDefaultZone());
+                accountRoles, roles, questions, options, Clock.systemDefaultZone());
     }
 
     @Autowired
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
-            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions, Clock clock) {
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options, Clock clock) {
         this.rooms = rooms;
         this.participants = participants;
         this.simulations = simulations;
@@ -75,13 +80,14 @@ public class ExamRoomService implements ExamRoomAccess {
         this.accountRoles = accountRoles;
         this.roles = roles;
         this.questions = questions;
+        this.options = options;
         this.clock = clock;
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments) {
-        this(rooms, participants, simulations, accounts, statements, classes, enrollments, null, null, null, null);
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, null, null, null, null, null);
     }
 
     public Mono<ExamRoomResponse> create(ExamRoomRequest data, Long teacherAccountId) {
@@ -238,10 +244,7 @@ public class ExamRoomService implements ExamRoomAccess {
         if (existing == null) existing = Mono.empty();
         Mono<Simulation> inserted = simulations.insertExamRoomSimulation(accountId, simulation.getStatementId(), roomId,
                 simulation.getExamRoomDurationMinutes());
-        if (inserted == null) inserted = simulations.save(simulation);
-        if (inserted == null) inserted = Mono.empty();
         Mono<Simulation> afterConflict = simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(roomId, accountId);
-        if (afterConflict == null) afterConflict = Mono.empty();
         return existing.switchIfEmpty(inserted.switchIfEmpty(afterConflict));
     }
 
@@ -252,10 +255,16 @@ public class ExamRoomService implements ExamRoomAccess {
                         .filter(participant -> participant.getSimulationId() != null)
                         .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
                         .flatMap(participant -> questions.findAllByStatementIdOrderedByOrderIndex(room.getStatementId())
-                                .map(question -> new QuestionResponse(question.getId(), question.getStatementId(),
-                                        question.getNumber(), question.getText(), question.getQuestionType(),
-                                        question.getMaxScore(), question.getOrderIndex(), question.getPageIndex(),
-                                        null, null, question.getCreatedAt(), question.getUpdatedAt(), null))
+                                .flatMap(question -> options.findAllByQuestionIdAndDeletedAtIsNull(question.getId())
+                                        .map(option -> new QuestionOptionResponse(option.getId(), option.getQuestionId(),
+                                                option.getOptionLabel(), option.getOptionText(), null,
+                                                option.getOrderIndex(), option.getCreatedAt(), option.getUpdatedAt(), null))
+                                        .collectList()
+                                        .map(questionOptions -> new ExamRoomQuestionResponse(question.getId(),
+                                                question.getStatementId(), question.getNumber(), question.getText(),
+                                                question.getQuestionType(), question.getMaxScore(), question.getOrderIndex(),
+                                                question.getPageIndex(), questionOptions, question.getCreatedAt(),
+                                                question.getUpdatedAt())))
                                 .collectList()
                                 .map(items -> new ExamRoomStudentResponse(roomId, participant.getSimulationId(),
                                         room.getStatus(), room.getStartsAt(), room.getEndsAt(), room.getDurationMinutes(), items))));
