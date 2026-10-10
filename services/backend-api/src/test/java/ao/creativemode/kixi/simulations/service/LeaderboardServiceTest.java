@@ -39,7 +39,9 @@ class LeaderboardServiceTest {
 
     private static final Long ACCOUNT_ID = 12L;
     private static final Long CLASS_ID = 7L;
+    private static final Long OTHER_CLASS_ID = 9L;
     private static final Long SCHOOL_ID = 1L;
+    private static final Long OTHER_SCHOOL_ID = 2L;
 
     private MeService meService;
     private EnrollmentRepository enrollments;
@@ -53,6 +55,7 @@ class LeaderboardServiceTest {
         repository = mock(LeaderboardRepository.class);
         service = new LeaderboardService(meService, enrollments, repository);
         when(meService.classInstitutionId(CLASS_ID)).thenReturn(Mono.just(SCHOOL_ID));
+        when(meService.classInstitutionId(OTHER_CLASS_ID)).thenReturn(Mono.just(OTHER_SCHOOL_ID));
     }
 
     /** Every account in these tests holds a seat, unless a test takes it away. */
@@ -77,8 +80,12 @@ class LeaderboardServiceTest {
 
     /** A cancelled enrollment: the seat is gone, the profile does not know it. */
     private void cancelledEnrollment() {
+        cancelledEnrollment(CLASS_ID, SCHOOL_ID);
+    }
+
+    private void cancelledEnrollment(Long classId, Long institutionId) {
         when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
-                .thenReturn(Flux.just(enrollment(ACCOUNT_ID, CLASS_ID, SCHOOL_ID, true)));
+                .thenReturn(Flux.just(enrollment(ACCOUNT_ID, classId, institutionId, true)));
     }
 
     /** No enrollment at all: linked to the school, seated nowhere. */
@@ -144,11 +151,47 @@ class LeaderboardServiceTest {
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
                 .expectErrorSatisfies(error -> {
                     assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-                    assertThat(error).hasMessageContaining("No active enrollment");
+                    assertThat(error).hasMessageContaining("active enrollment");
                 })
                 .verify();
 
         verify(repository, never()).findAverages(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void aCancelledSeatInAnotherSchoolDoesNotRefuseTheValidOne() {
+        // /me sorts enrollments by id and not by state, so a newer cancelled row — a late
+        // withdrawal from elsewhere — can point the profile at the wrong school. The seat
+        // that counts is the ACTIVE one, whichever order the profile read them in.
+        // The profile points at OTHER_SCHOOL_ID, the school of the newer cancelled row.
+        when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(OTHER_CLASS_ID, OTHER_SCHOOL_ID)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+        // The ACTIVE seat in CLASS_ID is the one that counts.
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(
+                        enrollment(ACCOUNT_ID, OTHER_CLASS_ID, OTHER_SCHOOL_ID, true),
+                        enrollment(ACCOUNT_ID, CLASS_ID, SCHOOL_ID, false)));
+
+        // Served, not refused: the ACTIVE seat is a valid reason on its own, whatever
+        // /me reported and whatever school the withdrawn row pointed at.
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(1);
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID);
+        verify(repository, never()).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID);
+    }
+
+    @Test
+    void theSchoolComesFromTheSeatAndNotFromAnInstitutionalLinkAlone() {
+        // The profile reports a school that the ACTIVE seat is not in; the seat decides.
+        enrolled(CLASS_ID);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(enrollment(ACCOUNT_ID, CLASS_ID, SCHOOL_ID, false)));
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID);
     }
 
     @Test
@@ -195,8 +238,11 @@ class LeaderboardServiceTest {
     }
 
     @Test
-    void refusesASchoolRankingForAnAccountWithNoAffiliation() {
+    void refusesASchoolRankingForAnAccountSeatedNowhere() {
+        // The profile reports no school because there is no enrollment to read one from,
+        // and a link without a seat cannot stand in for it.
         when(meService.getMe(ACCOUNT_ID)).thenReturn(Mono.just(me(CLASS_ID, null)));
+        noEnrollment();
 
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())

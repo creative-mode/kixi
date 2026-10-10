@@ -141,25 +141,37 @@ public class LeaderboardService {
                 .map(enrollment -> new Cohort(classId, enrollment.getSchoolYearId()));
     }
 
+    /**
+     * The school comes from the caller's ACTIVE enrollment, never from {@code me.school()}.
+     *
+     * <p>{@code /me} picks its enrollment by id and not by state, so a cancelled one that
+     * happens to be newer — say a late withdrawal from another school — points the profile
+     * at that school. Filtering ACTIVE enrollments of *that* school would then refuse a
+     * student who does hold a valid seat somewhere else. Reading the school off the seat
+     * itself cannot be wrong in that way: there is no seat, there is no school.</p>
+     */
     private Mono<Cohort> schoolCohort(Long accountId, MeResponse me) {
-        if (me.school() == null) {
-            return Mono.error(ApiException.forbidden(
-                    "A school ranking needs an affiliation; this account has none"));
-        }
-        Long institutionId = me.school().id();
-        // An institutional link is not a seat in a class, so on its own it cannot open the
-        // ranking: at least one ACTIVE enrollment inside that school is required. Resolved
-        // without blocking, because reading the school of an enrollment is itself a query.
+        return firstActiveEnrollmentWithASchool(accountId)
+                .switchIfEmpty(Mono.error(ApiException.forbidden(
+                        "A school ranking needs an active enrollment in a school")))
+                .map(entry -> new Cohort(entry.schoolId(), entry.enrollment().getSchoolYearId()));
+    }
+
+    /**
+     * The caller's first ACTIVE enrollment whose class belongs to a school.
+     *
+     * <p>An institutional link with no enrollment never gets this far: there is no seat,
+     * so there is nothing to rank with.</p>
+     */
+    private Mono<ActiveSeat> firstActiveEnrollmentWithASchool(Long accountId) {
         return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
                 .filter(Enrollment::isActive)
                 .filter(enrollment -> enrollment.getClassId() != null)
+                // concatMap, not filter: deciding whether an enrollment sits in a school is
+                // a query, and blocking here would park a thread on the database.
                 .concatMap(enrollment -> meService.classInstitutionId(enrollment.getClassId())
-                        .filter(institutionId::equals)
-                        .map(school -> enrollment))
-                .next()
-                .switchIfEmpty(Mono.error(ApiException.forbidden(
-                        "No active enrollment in that school")))
-                .map(enrollment -> new Cohort(institutionId, enrollment.getSchoolYearId()));
+                        .map(schoolId -> new ActiveSeat(schoolId, enrollment)))
+                .next();
     }
 
     /** The caller's ACTIVE enrollment in the class they are asking about. */
@@ -340,6 +352,9 @@ public class LeaderboardService {
 
     /** The group being ranked and the year the caller's seat in it belongs to. */
     record Cohort(Long id, Long schoolYearId) { }
+
+    /** An ACTIVE enrollment together with the school it sits in. */
+    record ActiveSeat(Long schoolId, Enrollment enrollment) { }
 
     /** The time window a ranking covers. */
     enum Period {
