@@ -215,8 +215,13 @@ public class SimulationResultService {
     }
 
     private Mono<Boolean> answerKeyVisible(Simulation simulation) {
-        if (examRooms == null || simulation.getExamRoomId() == null) {
+        if (examRooms == null) {
             return Mono.just(true);
+        }
+        if (simulation.getExamRoomId() == null) {
+            Mono<Boolean> active = examRooms.hasOpenOrRunningRoom(simulation.getStatementId());
+            return (active == null ? Mono.just(false) : active)
+                    .defaultIfEmpty(false).map(value -> !value);
         }
         return examRooms.answerKeyVisible(simulation.getExamRoomId()).defaultIfEmpty(false);
     }

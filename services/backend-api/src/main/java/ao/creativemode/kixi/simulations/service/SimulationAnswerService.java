@@ -331,11 +331,17 @@ public class SimulationAnswerService {
             return Mono.just(toResponse(entity, true));
         }
         return simulation.defaultIfEmpty(new Simulation())
-            .flatMap(owner -> owner.getExamRoomId() == null
-                ? Mono.just(toResponse(entity, true))
-                : examRooms.answerKeyVisible(owner.getExamRoomId())
-                    .defaultIfEmpty(false)
-                    .map(visible -> toResponse(entity, visible)));
+            .flatMap(owner -> {
+                if (owner.getExamRoomId() != null) {
+                    return examRooms.answerKeyVisible(owner.getExamRoomId())
+                            .defaultIfEmpty(false)
+                            .map(visible -> toResponse(entity, visible));
+                }
+                Mono<Boolean> active = examRooms.hasOpenOrRunningRoom(owner.getStatementId());
+                return (active == null ? Mono.just(false) : active)
+                        .defaultIfEmpty(false)
+                        .map(value -> toResponse(entity, !value));
+            });
     }
 
     private SimulationAnswerResponse toResponse(SimulationAnswer entity, boolean answerKeyVisible) {

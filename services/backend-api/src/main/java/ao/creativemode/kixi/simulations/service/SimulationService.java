@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
@@ -131,10 +132,12 @@ public class SimulationService {
                         .onErrorResume(ignored -> Mono.empty()));
     }
 
+    @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto) {
         return create(dto, dto.accountId(), true);
     }
 
+    @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin) {
         return create(dto, callerAccountId, admin, true);
     }
@@ -151,18 +154,22 @@ public class SimulationService {
                                 ? admin ? Mono.just(statement) : Mono.error(ApiException.forbidden(
                                         "Statement authorization is unavailable"))
                                 : statementWriteAccess.requireCanWrite(statement.getId(), callerAccountId, admin))
-                        .flatMap(statement -> {
-                            if (!authorizeStatement && dto.accountId().equals(callerAccountId) && examRoomAccess != null) {
-                                Mono<Boolean> activeRoom = examRoomAccess.hasOpenOrRunningRoom(statement.getId());
-                                return (activeRoom == null ? Mono.just(false) : activeRoom)
-                                        .defaultIfEmpty(false)
-                                        .flatMap(active -> active
-                                                ? Mono.error(ApiException.conflict(
-                                                        "The statement is currently assigned to an exam room"))
-                                                : Mono.just(statement));
-                            }
-                            return Mono.just(statement);
-                        })
+                         .flatMap(statement -> {
+                             if (examRoomAccess == null) {
+                                 return Mono.just(statement);
+                             }
+                             Mono<Void> statementLock = examRoomAccess.lockStatementForSimulation(statement.getId());
+                             if (statementLock == null) statementLock = Mono.empty();
+                             Mono<Boolean> activeRoom = examRoomAccess.hasOpenOrRunningRoom(statement.getId());
+                             if (activeRoom == null) activeRoom = Mono.just(false);
+                             return statementLock
+                                     .then(activeRoom)
+                                     .defaultIfEmpty(false)
+                                     .flatMap(active -> active
+                                             ? Mono.error(ApiException.conflict(
+                                                     "The statement is currently assigned to an exam room"))
+                                             : Mono.just(statement));
+                         })
                         .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
@@ -189,6 +196,7 @@ public class SimulationService {
         return active == null ? statementRepository.findById(statementId) : active;
     }
 
+    @Transactional
     public Mono<SimulationResponse> createForAccount(SimulationRequest dto, Long accountId) {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
@@ -288,7 +296,12 @@ public class SimulationService {
         if (deadlineLookup == null) deadlineLookup = Mono.empty();
         Mono<LocalDateTime> finalDeadlineLookup = deadlineLookup;
         Mono<Boolean> visibility = simulation.getExamRoomId() == null || examRoomAccess == null
-                ? Mono.just(true)
+                ? (examRoomAccess == null ? Mono.just(true)
+                        : Mono.defer(() -> {
+                            Mono<Boolean> active = examRoomAccess.hasOpenOrRunningRoom(simulation.getStatementId());
+                            return (active == null ? Mono.just(false) : active)
+                                    .defaultIfEmpty(false).map(value -> !value);
+                        }))
                 : Mono.justOrEmpty(examRoomAccess.answerKeyVisible(simulation.getExamRoomId()))
                         .flatMap(value -> value).defaultIfEmpty(false);
         return Mono.zip(accountMono, statementMono, schoolYearMono, visibility)

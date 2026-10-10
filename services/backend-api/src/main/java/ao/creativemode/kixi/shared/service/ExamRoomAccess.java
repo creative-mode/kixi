@@ -17,4 +17,8 @@ public interface ExamRoomAccess {
     default Mono<Boolean> hasOpenOrRunningRoom(Long statementId) {
         return Mono.just(false);
     }
+
+    default Mono<Void> lockStatementForSimulation(Long statementId) {
+        return Mono.empty();
+    }
 }

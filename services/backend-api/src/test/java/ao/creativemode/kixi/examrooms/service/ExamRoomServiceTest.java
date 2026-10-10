@@ -290,6 +290,65 @@ class ExamRoomServiceTest {
     }
 
     @Test
+    void transitionUsesTheSameInclusiveStartExclusiveEndWindow() {
+        LocalDateTime starts = LocalDateTime.of(2026, 10, 10, 12, 0);
+        LocalDateTime ends = starts.plusHours(1);
+        ExamRoom draft = room(20L, ExamRoomStatus.DRAFT);
+        draft.setStartsAt(starts);
+        draft.setEndsAt(ends);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(draft));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(draft));
+
+        ExamRoomService atEnd = boundaryService(ends);
+        StepVerifier.create(atEnd.transition(20L, 7L, false, ExamRoomStatus.OPEN))
+                .expectError(ApiException.class).verify();
+
+        ExamRoom open = room(20L, ExamRoomStatus.OPEN);
+        open.setStartsAt(starts);
+        open.setEndsAt(ends);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(open));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(open));
+        when(rooms.transition(20L, ExamRoomStatus.OPEN, ExamRoomStatus.RUNNING)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(open));
+        when(rooms.existsOpenOrRunningByStatementId(5L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(boundaryService(starts).transition(20L, 7L, false, ExamRoomStatus.RUNNING))
+                .expectNextCount(1).verifyComplete();
+        StepVerifier.create(atEnd.transition(20L, 7L, false, ExamRoomStatus.RUNNING))
+                .expectError(ApiException.class).verify();
+    }
+
+    @Test
+    void answerWindowIsInclusiveAtStartAndExclusiveAtEnd() {
+        LocalDateTime starts = LocalDateTime.of(2026, 10, 10, 12, 0);
+        LocalDateTime ends = starts.plusHours(1);
+        ExamRoom running = room(20L, ExamRoomStatus.RUNNING);
+        running.setStartsAt(starts);
+        running.setEndsAt(ends);
+        when(rooms.findById(20L)).thenReturn(Mono.just(running));
+
+        StepVerifier.create(boundaryService(starts).acceptsSimulationAnswers(20L, starts))
+                .expectNext(true).verifyComplete();
+        StepVerifier.create(boundaryService(ends).acceptsSimulationAnswers(20L, ends))
+                .expectNext(false).verifyComplete();
+
+        ExamRoomParticipant joined = participant(20L, 42L);
+        joined.setSimulationId(80L);
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(joined));
+        when(questions.findAllByStatementIdOrderedByOrderIndex(5L)).thenReturn(Flux.empty());
+        StepVerifier.create(boundaryService(starts).studentView(20L, 42L))
+                .expectNextCount(1).verifyComplete();
+        StepVerifier.create(boundaryService(ends).studentView(20L, 42L))
+                .expectError(ApiException.class).verify();
+    }
+
+    private ExamRoomService boundaryService(LocalDateTime now) {
+        return new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
+                null, null, null, questions, options,
+                Clock.fixed(now.toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
+    }
+
+    @Test
     void teacherCannotManageAnotherTeachersRoom() {
         when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.empty());
 

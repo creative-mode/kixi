@@ -22,6 +22,7 @@ import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
@@ -303,6 +304,23 @@ public class ExamRoomService implements ExamRoomAccess {
     }
 
     @Override
+    public Mono<Boolean> hasOpenOrRunningRoom(Long statementId) {
+        Mono<Boolean> exists = rooms.existsOpenOrRunningByStatementId(statementId);
+        return (exists == null ? Mono.just(false) : exists).defaultIfEmpty(false);
+    }
+
+    @Override
+    public Mono<Void> lockStatementForSimulation(Long statementId) {
+        Mono<Statement> locked = statements.lockForUpdate(statementId);
+        Mono<Statement> fallback = statements.findByIdAndDeletedAtIsNull(statementId);
+        Mono<Statement> lookup = locked == null ? fallback : locked;
+        if (lookup == null) lookup = Mono.empty();
+        return lookup
+                .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+                .then();
+    }
+
+    @Override
     public Mono<LocalDateTime> effectiveRoomDeadline(Long roomId, LocalDateTime durationDeadline) {
         return rooms.findById(roomId)
                 .map(room -> room.getStatus() == ExamRoomStatus.CLOSED ? LocalDateTime.MIN
@@ -338,11 +356,18 @@ public class ExamRoomService implements ExamRoomAccess {
                     || (next == ExamRoomStatus.CLOSED && (room.getStatus() == ExamRoomStatus.OPEN
                             || room.getStatus() == ExamRoomStatus.RUNNING));
             if (!valid) return Mono.error(ApiException.conflict("Invalid exam room state transition"));
-            if (next == ExamRoomStatus.RUNNING && LocalDateTime.now(clock).isBefore(room.getStartsAt())) {
-                return Mono.error(ApiException.conflict("The exam room has not reached its start time"));
+            LocalDateTime now = LocalDateTime.now(clock);
+            if (next == ExamRoomStatus.OPEN && !now.isBefore(room.getEndsAt())) {
+                return Mono.error(ApiException.conflict("The exam room has ended"));
             }
+            if (next == ExamRoomStatus.RUNNING
+                    && (now.isBefore(room.getStartsAt()) || !now.isBefore(room.getEndsAt()))) {
+                return Mono.error(ApiException.conflict("The exam room is outside its active window"));
+            }
+            Mono<Void> statementLock = next == ExamRoomStatus.OPEN
+                    ? lockStatementForSimulation(room.getStatementId()) : Mono.empty();
             Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
-            return lockSimulations.then(rooms.transition(id, room.getStatus(), next))
+            return statementLock.then(lockSimulations).then(rooms.transition(id, room.getStatus(), next))
                     .filter(count -> count == 1)
                     .switchIfEmpty(Mono.error(ApiException.conflict("Exam room changed concurrently")))
                     .then(rooms.findById(id)).map(ExamRoomService::toResponse);

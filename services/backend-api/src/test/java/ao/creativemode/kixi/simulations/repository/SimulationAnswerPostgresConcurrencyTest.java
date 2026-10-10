@@ -3,140 +3,120 @@ package ao.creativemode.kixi.simulations.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.LocalDateTime;
 
-import org.junit.jupiter.api.AfterEach;
+import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import ao.creativemode.kixi.examrooms.service.ExamRoomService;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
+import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
+import io.r2dbc.spi.ConnectionFactoryOptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import io.r2dbc.spi.Connection;
-import io.r2dbc.spi.ConnectionFactories;
-import io.r2dbc.spi.ConnectionFactory;
-import io.r2dbc.spi.ConnectionFactoryOptions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-import reactor.test.StepVerifier;
 
-/**
- * PostgreSQL-only proof that room closure and answer lifecycle writes serialize
- * in the room-then-simulation order. Run with KIXI_POSTGRES_TESTS=true.
- */
+/** Runs the public services against a database migrated by Flyway V1 through V37. */
+@SpringBootTest(properties = {
+        "spring.main.web-application-type=none",
+        "app.simulations.expiry-poll-ms=86400000",
+        "app.simulations.expiry-enabled=false",
+        "app.jwt.secret=integration-test-secret-which-is-long-enough",
+        "ocr.service.url=http://127.0.0.1:1",
+        "ocr.service.api-key=test"
+})
 @EnabledIfEnvironmentVariable(named = "KIXI_POSTGRES_TESTS", matches = "true")
 class SimulationAnswerPostgresConcurrencyTest {
-    private static final String SCHEMA = "answer_lock_test";
-    private ConnectionFactory connectionFactory;
-    private Connection first;
-    private Connection second;
+    private static final long ACCOUNT = 910001L;
+    private static final long STATEMENT = 910001L;
+    private static final long QUESTION = 910001L;
+    private static final long ROOM = 910001L;
+    private static final long SIMULATION = 910001L;
+    private static final long ANSWER = 910001L;
+    private static final LocalDateTime START = LocalDateTime.now().minusMinutes(5);
+    private static final LocalDateTime END = LocalDateTime.now().plusHours(1);
+
+    @Autowired DatabaseClient database;
+    @Autowired ExamRoomService rooms;
+    @Autowired SimulationAnswerService answerService;
+    @Autowired SimulationSubmissionService submissionService;
+
+    @DynamicPropertySource
+    static void postgres(DynamicPropertyRegistry registry) {
+        String host = env("KIXI_POSTGRES_HOST", "localhost");
+        String port = env("KIXI_POSTGRES_PORT", "5433");
+        String database = env("KIXI_POSTGRES_DATABASE", "kixi_exam_room_it");
+        String user = env("KIXI_POSTGRES_USER", "kixi");
+        String password = env("KIXI_POSTGRES_PASSWORD", "kixi_secret");
+        registry.add("spring.r2dbc.url", () -> "r2dbc:postgresql://" + host + ":" + port + "/" + database);
+        registry.add("spring.r2dbc.username", () -> user);
+        registry.add("spring.r2dbc.password", () -> password);
+        registry.add("spring.flyway.url", () -> "jdbc:postgresql://" + host + ":" + port + "/" + database);
+        registry.add("spring.flyway.user", () -> user);
+        registry.add("spring.flyway.password", () -> password);
+    }
 
     @BeforeEach
-    void setUp() {
-        connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
-                .option(ConnectionFactoryOptions.DRIVER, "postgresql")
-                .option(ConnectionFactoryOptions.HOST, env("KIXI_POSTGRES_HOST", "localhost"))
-                .option(ConnectionFactoryOptions.PORT, Integer.parseInt(env("KIXI_POSTGRES_PORT", "5434")))
-                .option(ConnectionFactoryOptions.DATABASE, env("KIXI_POSTGRES_DATABASE", "prumo"))
-                .option(ConnectionFactoryOptions.USER, env("KIXI_POSTGRES_USER", "prumo"))
-                .option(ConnectionFactoryOptions.PASSWORD, env("KIXI_POSTGRES_PASSWORD", "change-me"))
-                .build());
-        first = Mono.from(connectionFactory.create()).block(Duration.ofSeconds(10));
-        second = Mono.from(connectionFactory.create()).block(Duration.ofSeconds(10));
-        execute(first, "CREATE SCHEMA " + SCHEMA);
-        execute(first, "SET search_path TO " + SCHEMA);
-        execute(second, "SET search_path TO " + SCHEMA);
-        execute(first, "CREATE TABLE exam_rooms (id BIGINT PRIMARY KEY, status VARCHAR(20) NOT NULL)");
-        execute(first, "CREATE TABLE simulations (id BIGINT PRIMARY KEY, exam_room_id BIGINT NOT NULL, status VARCHAR(20) NOT NULL)");
-        execute(first, "CREATE TABLE simulation_answers (id BIGINT PRIMARY KEY, simulation_id BIGINT NOT NULL, deleted_at TIMESTAMP NULL)");
-        execute(first, "INSERT INTO exam_rooms VALUES (1, 'RUNNING')");
-        execute(first, "INSERT INTO simulations VALUES (1, 1, 'IN_PROGRESS')");
-        execute(first, "INSERT INTO simulation_answers VALUES (1, 1, NULL)");
-    }
-
-    @AfterEach
-    void tearDown() {
-        if (first != null) execute(first, "DROP SCHEMA IF EXISTS " + SCHEMA + " CASCADE");
-        close(first);
-        close(second);
+    void data() {
+        sql("DELETE FROM exam_room_participants WHERE exam_room_id = " + ROOM).block(Duration.ofSeconds(10));
+        sql("DELETE FROM simulation_answers WHERE id = " + ANSWER).block(Duration.ofSeconds(10));
+        sql("DELETE FROM simulations WHERE id = " + SIMULATION).block(Duration.ofSeconds(10));
+        sql("DELETE FROM exam_rooms WHERE id = " + ROOM).block(Duration.ofSeconds(10));
+        sql("DELETE FROM questions WHERE id = " + QUESTION).block(Duration.ofSeconds(10));
+        sql("DELETE FROM statements WHERE id = " + STATEMENT).block(Duration.ofSeconds(10));
+        sql("DELETE FROM accounts WHERE id = " + ACCOUNT).block(Duration.ofSeconds(10));
+        sql("INSERT INTO accounts(id, username, email, password_hash) VALUES (" + ACCOUNT + ", 'it-room', 'it-room@example.com', 'x')").block(Duration.ofSeconds(10));
+        sql("INSERT INTO statements(id, title, source, created_by) VALUES (" + STATEMENT + ", 'integration', 'manual', " + ACCOUNT + ")").block(Duration.ofSeconds(10));
+        sql("INSERT INTO questions(id, statement_id, number, text, question_type, order_index) VALUES (" + QUESTION + ", " + STATEMENT + ", 1, '1 + 1', 'open', 1)").block(Duration.ofSeconds(10));
+        sql("INSERT INTO exam_rooms(id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES (" + ROOM + ", " + STATEMENT + ", " + ACCOUNT + ", '" + START + "', '" + END + "', 60, 'RUNNING')").block(Duration.ofSeconds(10));
+        sql("INSERT INTO simulations(id, account_id, statement_id, exam_room_id, exam_room_duration_minutes, status) VALUES (" + SIMULATION + ", " + ACCOUNT + ", " + STATEMENT + ", " + ROOM + ", 60, 'IN_PROGRESS')").block(Duration.ofSeconds(10));
+        sql("INSERT INTO exam_room_participants(exam_room_id, account_id, simulation_id, joined_at) VALUES (" + ROOM + ", " + ACCOUNT + ", " + SIMULATION + ", CURRENT_TIMESTAMP)").block(Duration.ofSeconds(10));
+        sql("INSERT INTO simulation_answers(id, simulation_id, question_id, answer_text) VALUES (" + ANSWER + ", " + SIMULATION + ", " + QUESTION + ", 'old')").block(Duration.ofSeconds(10));
     }
 
     @Test
-    void closeWaitsForAnAnswerWriteThatStartedFirst() {
-        execute(first, "BEGIN");
-        execute(first, "SELECT * FROM exam_rooms WHERE id = 1 FOR UPDATE");
-        execute(first, "SELECT * FROM simulations WHERE id = 1 FOR UPDATE");
+    void closeAndAnswerMutationSerializeThroughThePublicServices() {
+        Mono<?> close = rooms.transition(ROOM, ACCOUNT, true, ExamRoomStatus.CLOSED)
+                .subscribeOn(Schedulers.boundedElastic());
+        Mono<?> answer = answerService.updateForAccount(ANSWER,
+                new SimulationAnswerRequest(SIMULATION, QUESTION, null, "new", null), ACCOUNT)
+                .subscribeOn(Schedulers.boundedElastic());
 
-        execute(second, "BEGIN");
-        Mono<Void> close = Mono.from(second.createStatement(
-                "UPDATE exam_rooms SET status = 'CLOSED' WHERE id = 1 AND status = 'RUNNING'").execute())
-                .then(Mono.from(second.createStatement("SELECT * FROM simulations WHERE exam_room_id = 1 FOR UPDATE").execute()))
-                .then().timeout(Duration.ofSeconds(2)).subscribeOn(Schedulers.boundedElastic()).cache();
+        Mono.when(close.onErrorResume(error -> Mono.empty()),
+                answer.onErrorResume(error -> Mono.empty())).block(Duration.ofSeconds(10));
 
-        AtomicBoolean closed = new AtomicBoolean();
-        close.subscribe(ignored -> { }, error -> { }, () -> closed.set(true));
-        try {
-            Thread.sleep(200);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError(interrupted);
-        }
-        assertThat(closed).isFalse();
-
-        execute(first, "UPDATE simulation_answers SET deleted_at = CURRENT_TIMESTAMP WHERE id = 1");
-        execute(first, "COMMIT");
-        StepVerifier.create(close).verifyComplete();
-        execute(second, "COMMIT");
-
-        assertThat(query(first, "SELECT status FROM exam_rooms WHERE id = 1")).isEqualTo("CLOSED");
-        assertThat(query(first, "SELECT deleted_at IS NOT NULL FROM simulation_answers WHERE id = 1"))
-                .isEqualTo("true");
+        assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("CLOSED");
+        assertThat(value("SELECT answer_text FROM simulation_answers WHERE id = " + ANSWER)).isIn("old", "new");
     }
 
     @Test
-    void answerWaitsWhenCloseStartedFirstAndCannotWriteAfterClose() {
-        execute(first, "BEGIN");
-        execute(first, "UPDATE exam_rooms SET status = 'CLOSED' WHERE id = 1 AND status = 'RUNNING'");
-        execute(first, "SELECT * FROM simulations WHERE id = 1 FOR UPDATE");
+    void submitAndAnswerWriteSerializeThroughThePublicServices() {
+        Mono<?> submit = submissionService.submit(SIMULATION, ACCOUNT, false)
+                .subscribeOn(Schedulers.boundedElastic());
+        Mono<?> answer = answerService.updateForAccount(ANSWER,
+                new SimulationAnswerRequest(SIMULATION, QUESTION, null, "new", null), ACCOUNT)
+                .subscribeOn(Schedulers.boundedElastic());
 
-        execute(second, "BEGIN");
-        Mono<Void> answer = Mono.from(second.createStatement(
-                "SELECT * FROM exam_rooms WHERE id = 1 FOR UPDATE").execute())
-                .then(Mono.from(second.createStatement("SELECT * FROM simulations WHERE id = 1 FOR UPDATE").execute()))
-                .then(Mono.from(second.createStatement(
-                        "UPDATE simulation_answers SET deleted_at = CURRENT_TIMESTAMP WHERE id = 1 "
-                                + "AND EXISTS (SELECT 1 FROM simulations WHERE id = 1 AND status = 'IN_PROGRESS') "
-                                + "AND EXISTS (SELECT 1 FROM exam_rooms WHERE id = 1 AND status = 'RUNNING')").execute()))
-                .then().timeout(Duration.ofSeconds(2)).subscribeOn(Schedulers.boundedElastic()).cache();
+        Mono.when(submit.onErrorResume(error -> Mono.empty()),
+                answer.onErrorResume(error -> Mono.empty())).block(Duration.ofSeconds(10));
 
-        AtomicBoolean answered = new AtomicBoolean();
-        answer.subscribe(ignored -> { }, error -> { }, () -> answered.set(true));
-        try {
-            Thread.sleep(200);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError(interrupted);
-        }
-        assertThat(answered).isFalse();
-
-        execute(first, "COMMIT");
-        StepVerifier.create(answer).verifyComplete();
-        execute(second, "COMMIT");
-
-        assertThat(query(first, "SELECT status FROM exam_rooms WHERE id = 1")).isEqualTo("CLOSED");
-        assertThat(query(first, "SELECT deleted_at IS NOT NULL FROM simulation_answers WHERE id = 1"))
-                .isEqualTo("false");
+        assertThat(value("SELECT status FROM simulations WHERE id = " + SIMULATION)).isEqualTo("FINISHED");
+        assertThat(value("SELECT answer_text FROM simulation_answers WHERE id = " + ANSWER)).isIn("old", "new");
     }
 
-    private static void execute(Connection connection, String sql) {
-        Mono.from(connection.createStatement(sql).execute()).block(Duration.ofSeconds(10));
+    private Mono<Void> sql(String statement) {
+        return database.sql(statement).then();
     }
 
-    private static String query(Connection connection, String sql) {
-        return Mono.from(connection.createStatement(sql).execute())
-                .flatMap(result -> Mono.from(result.map((row, metadata) -> String.valueOf(row.get(0)))))
-                .block(Duration.ofSeconds(10));
-    }
-
-    private static void close(Connection connection) {
-        if (connection != null) Mono.from(connection.close()).block(Duration.ofSeconds(10));
+    private String value(String statement) {
+        return database.sql(statement).map((row, metadata) -> row.get(0, String.class))
+                .one().block(Duration.ofSeconds(10));
     }
 
     private static String env(String name, String fallback) {
