@@ -130,17 +130,16 @@ class ExamRoomServiceTest {
     }
 
     @Test
-    void joiningTwiceReusesTheExistingSimulation() {
+    void joiningInOpenOnlyRecordsPresenceAndDoesNotExposeSimulation() {
         ExamRoomParticipant participant = participant(20L, 42L);
         participant.setSimulationId(80L);
         when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.OPEN)));
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
-        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
 
         StepVerifier.create(service.join(20L, 42L))
-                .expectNextMatches(response -> response.simulationId().equals(80L))
+                .expectNextMatches(response -> response.simulationId() == null)
                 .verifyComplete();
-        verify(simulations).findById(80L);
+        verifyNoInteractions(simulations);
     }
 
     @Test
@@ -210,10 +209,32 @@ class ExamRoomServiceTest {
     }
 
     @Test
-    void rejectsJoiningBeforeTheRoomWindow() {
+    void joiningInOpenBeforeStartsAtRecordsPresence() {
         ExamRoom room = room(20L, ExamRoomStatus.OPEN);
         room.setStartsAt(LocalDateTime.now().plusMinutes(5));
         when(rooms.findById(20L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
+
+        StepVerifier.create(service.join(20L, 42L))
+                .expectNextMatches(response -> response.simulationId() == null).verifyComplete();
+        verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void runningBeforeStartsAtCannotCreateSimulation() {
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        room.setStartsAt(LocalDateTime.now().plusMinutes(5));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
+
+        StepVerifier.create(service.join(20L, 42L))
+                .expectError(ApiException.class).verify();
+        verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void closedRoomCannotBeJoined() {
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.CLOSED)));
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
 
         StepVerifier.create(service.join(20L, 42L))

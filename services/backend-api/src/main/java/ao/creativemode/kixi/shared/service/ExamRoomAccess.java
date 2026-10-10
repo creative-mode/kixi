@@ -8,4 +8,6 @@ public interface ExamRoomAccess {
     Mono<Boolean> canAccessSimulation(Long roomId, Long simulationId, Long simulationAccountId,
             Long accountId, boolean admin, boolean teacher);
     Mono<LocalDateTime> effectiveRoomDeadline(Long roomId, LocalDateTime durationDeadline);
+    Mono<Void> lockRoomForSimulation(Long roomId);
+    Mono<Boolean> acceptsSimulationAnswers(Long roomId, LocalDateTime now);
 }

@@ -198,16 +198,22 @@ public class ExamRoomService implements ExamRoomAccess {
 
     @Transactional
     public Mono<ExamRoomParticipantResponse> join(Long roomId, Long accountId) {
-        return rooms.findById(roomId)
+        return lockedRoom(roomId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
                 .flatMap(room -> participants.findByExamRoomIdAndAccountId(roomId, accountId)
                         .switchIfEmpty(Mono.error(ApiException.forbidden("The student is not invited to this room")))
                         .flatMap(participant -> {
                             LocalDateTime now = LocalDateTime.now(clock);
-                            if (room.getStatus() != ExamRoomStatus.OPEN && room.getStatus() != ExamRoomStatus.RUNNING) {
-                                return Mono.error(ApiException.conflict("The exam room is not open"));
-                            }
-                            if (now.isBefore(room.getStartsAt())) {
+                             if (room.getStatus() == ExamRoomStatus.CLOSED || room.getStatus() == ExamRoomStatus.DRAFT) {
+                                 return Mono.error(ApiException.conflict("The exam room is not open"));
+                             }
+                             // OPEN is only an attendance phase. The teacher controls when
+                             // access to the paper begins by transitioning the room to RUNNING.
+                             if (room.getStatus() == ExamRoomStatus.OPEN) {
+                                 participant.setJoinedAt(LocalDateTime.now(clock));
+                                 return saveParticipant(participant);
+                             }
+                             if (now.isBefore(room.getStartsAt())) {
                                 return Mono.error(ApiException.conflict("The exam room has not started"));
                             }
                             if (!now.isBefore(room.getEndsAt())) {
@@ -240,7 +246,10 @@ public class ExamRoomService implements ExamRoomAccess {
                                                   : participants.findByExamRoomIdAndAccountId(roomId, accountId)
                                                       .switchIfEmpty(Mono.error(ApiException.conflict("Could not claim the invitation"))));
                                       });
-                         }).map(ExamRoomService::toParticipantResponse));
+                          }).map(saved -> room.getStatus() == ExamRoomStatus.OPEN
+                                  ? new ExamRoomParticipantResponse(saved.getExamRoomId(), saved.getAccountId(),
+                                          null, saved.getJoinedAt())
+                                  : toParticipantResponse(saved)));
     }
 
     private Mono<Simulation> existingOrInsert(Long roomId, Long accountId, Simulation simulation) {
@@ -255,6 +264,10 @@ public class ExamRoomService implements ExamRoomAccess {
     public Mono<ExamRoomStudentResponse> studentView(Long roomId, Long accountId) {
         return rooms.findById(roomId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
+                .filter(room -> room.getStatus() == ExamRoomStatus.RUNNING
+                        && !LocalDateTime.now(clock).isBefore(room.getStartsAt())
+                        && LocalDateTime.now(clock).isBefore(room.getEndsAt()))
+                .switchIfEmpty(Mono.error(ApiException.conflict("The exam room is not accepting answers")))
                 .flatMap(room -> participants.findByExamRoomIdAndAccountId(roomId, accountId)
                         .filter(participant -> participant.getSimulationId() != null)
                         .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
@@ -294,8 +307,21 @@ public class ExamRoomService implements ExamRoomAccess {
                                 ? room.getEndsAt() : durationDeadline));
     }
 
+    @Override
+    public Mono<Void> lockRoomForSimulation(Long roomId) {
+        return lockedRoom(roomId).then();
+    }
+
+    @Override
+    public Mono<Boolean> acceptsSimulationAnswers(Long roomId, LocalDateTime now) {
+        return rooms.findById(roomId)
+                .map(room -> room.getStatus() == ExamRoomStatus.RUNNING
+                        && !now.isBefore(room.getStartsAt()) && now.isBefore(room.getEndsAt()))
+                .defaultIfEmpty(false);
+    }
+
     public Mono<ExamRoomResponse> transition(Long id, Long caller, boolean admin, ExamRoomStatus next) {
-        return managedRoom(id, caller, admin).flatMap(room -> {
+        return managedRoom(id, caller, admin).then(lockedRoom(id)).flatMap(room -> {
             boolean valid = (next == ExamRoomStatus.OPEN && room.getStatus() == ExamRoomStatus.DRAFT)
                     || (next == ExamRoomStatus.RUNNING && room.getStatus() == ExamRoomStatus.OPEN)
                     || (next == ExamRoomStatus.CLOSED && (room.getStatus() == ExamRoomStatus.OPEN
@@ -304,7 +330,8 @@ public class ExamRoomService implements ExamRoomAccess {
             if (next == ExamRoomStatus.RUNNING && LocalDateTime.now(clock).isBefore(room.getStartsAt())) {
                 return Mono.error(ApiException.conflict("The exam room has not reached its start time"));
             }
-            return rooms.transition(id, room.getStatus(), next)
+            Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
+            return lockSimulations.then(rooms.transition(id, room.getStatus(), next))
                     .filter(count -> count == 1)
                     .switchIfEmpty(Mono.error(ApiException.conflict("Exam room changed concurrently")))
                     .then(rooms.findById(id)).map(ExamRoomService::toResponse);
@@ -314,6 +341,23 @@ public class ExamRoomService implements ExamRoomAccess {
     private Mono<ExamRoom> managedRoom(Long id, Long caller, boolean admin) {
         Mono<ExamRoom> room = admin ? rooms.findById(id) : rooms.findByIdAndTeacherAccountId(id, caller);
         return room.switchIfEmpty(Mono.error(ApiException.forbidden("Only the room owner or ADMIN can manage it")));
+    }
+
+    private Mono<ExamRoom> lockedRoom(Long id) {
+        return Mono.defer(() -> {
+            Mono<ExamRoom> locked = rooms.lockForUpdate(id);
+            return locked == null ? rooms.findById(id) : locked;
+        });
+    }
+
+    private Mono<Void> lockRoomSimulations(Long roomId) {
+        Flux<Simulation> locked = simulations.lockByExamRoomId(roomId);
+        return locked == null ? Mono.empty() : locked.then();
+    }
+
+    private Mono<ExamRoomParticipant> saveParticipant(ExamRoomParticipant participant) {
+        Mono<ExamRoomParticipant> saved = participants.save(participant);
+        return saved == null ? Mono.just(participant) : saved;
     }
 
     private static ExamRoomResponse toResponse(ExamRoom room) {
