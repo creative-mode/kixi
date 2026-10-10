@@ -37,6 +37,10 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     @Query("SELECT * FROM simulations WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
     Mono<Simulation> lockForAnswerWrite(Long id);
 
+    @Query("SELECT s.* FROM simulations s JOIN simulation_answers a ON a.simulation_id = s.id "
+            + "WHERE a.id = :answerId AND s.deleted_at IS NULL FOR UPDATE")
+    Mono<Simulation> lockForAnswerWriteByAnswerId(Long answerId);
+
     // @Modifying makes this answer the number of rows updated; without it R2DBC
     // reads the (empty) result set and the Mono completes with nothing.
     @Modifying

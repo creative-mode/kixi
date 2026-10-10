@@ -270,45 +270,41 @@ public class SimulationAnswerService {
             );
     }
 
+    @Transactional
     public Mono<Void> softDelete(Long id) {
-        return repository
-            .findByIdAndDeletedAtIsNull(id)
-            .switchIfEmpty(
-                Mono.error(ApiException.notFound("Simulation answer not found"))
-            )
-            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(Mono.defer(() -> {
-                entity.markAsDeleted();
-                return repository.save(entity);
-            })))
-            .then();
+        return lifecycleMutation(id, false, entity -> {
+            entity.markAsDeleted();
+            return repository.save(entity);
+        });
     }
 
+    @Transactional
     public Mono<Void> restore(Long id) {
-        return repository
-            .findByIdAndDeletedAtIsNotNull(id)
-            .switchIfEmpty(
-                Mono.error(
-                    ApiException.badRequest("Simulation answer is not deleted")
-                )
-            )
-            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(Mono.defer(() -> {
-                entity.restore();
-                return repository.save(entity);
-            })))
-            .then();
+        return lifecycleMutation(id, true, entity -> {
+            entity.restore();
+            return repository.save(entity);
+        });
     }
 
+    @Transactional
     public Mono<Void> hardDelete(Long id) {
-        return repository
-            .findByIdAndDeletedAtIsNotNull(id)
-            .switchIfEmpty(
-                Mono.error(
-                    ApiException.badRequest(
-                        "Only deleted simulation answers can be permanently removed"
-                    )
-                )
-            )
-            .flatMap(entity -> requireLifecycleWindow(entity.getSimulationId()).then(repository.delete(entity)))
+        return lifecycleMutation(id, true, repository::delete);
+    }
+
+    private Mono<Void> lifecycleMutation(Long id, boolean deleted,
+            java.util.function.Function<SimulationAnswer, Mono<?>> mutation) {
+        return simulationRepository.lockForAnswerWriteByAnswerId(id)
+            .switchIfEmpty(Mono.error(deleted
+                    ? ApiException.badRequest("Simulation answer is not deleted")
+                    : ApiException.notFound("Simulation answer not found")))
+            .flatMap(this::requireLockedLifecycleWindow)
+            .then(Mono.defer(() -> deleted
+                    ? repository.findByIdAndDeletedAtIsNotNull(id)
+                    : repository.findByIdAndDeletedAtIsNull(id)))
+            .switchIfEmpty(Mono.error(deleted
+                    ? ApiException.badRequest("Simulation answer is not deleted")
+                    : ApiException.notFound("Simulation answer not found")))
+            .flatMap(entity -> Mono.defer(() -> mutation.apply(entity)))
             .then();
     }
 
@@ -381,13 +377,11 @@ public class SimulationAnswerService {
             : Mono.error(ApiException.forbidden("A simulation answer cannot be moved to another simulation"));
     }
 
-    private Mono<Void> requireLifecycleWindow(Long simulationId) {
-        return simulationRepository.findById(simulationId)
-            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
-            .flatMap(simulation -> simulation.getStatus()
+    private Mono<Void> requireLockedLifecycleWindow(Simulation simulation) {
+        return simulation.getStatus()
                 == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
                     ? requireNotExpired(simulation).then()
                     : Mono.error(ApiException.conflict(
-                        "Simulation answers cannot be changed after the simulation is finished")));
+                        "Simulation answers cannot be changed after the simulation is finished"));
     }
 }

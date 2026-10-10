@@ -51,6 +51,7 @@ class SimulationAnswerServiceTest {
         deadlineService = mock(SimulationDeadlineService.class);
         when(deadlineService.expired(any(Simulation.class), any())).thenReturn(Mono.just(false));
         when(simulationRepository.lockForAnswerWrite(any())).thenReturn(Mono.just(inProgressSimulation()));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(any())).thenReturn(Mono.empty());
         service = new SimulationAnswerService(repository, simulationRepository, questionRepository,
                 deadlineService);
     }
@@ -253,7 +254,7 @@ class SimulationAnswerServiceTest {
         Simulation finished = inProgressSimulation();
         finished.setStatus(SimulationStatus.FINISHED);
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(simulationRepository.findById(1L)).thenReturn(Mono.just(finished));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(1L)).thenReturn(Mono.just(finished));
 
         StepVerifier.create(service.softDelete(1L))
                 .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 409)
@@ -290,13 +291,17 @@ class SimulationAnswerServiceTest {
     @Test
     void softDeleteMarksEntityAsDeleted() {
         SimulationAnswer existing = answer(1L);
-        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(repository.save(existing)).thenReturn(Mono.just(existing));
 
         StepVerifier.create(service.softDelete(1L)).verifyComplete();
 
         assertThat(existing.isDeleted()).isTrue();
+        InOrder order = inOrder(repository, simulationRepository);
+        order.verify(simulationRepository).lockForAnswerWriteByAnswerId(1L);
+        order.verify(repository).findByIdAndDeletedAtIsNull(1L);
+        order.verify(repository).save(existing);
     }
 
     @Test
@@ -314,13 +319,14 @@ class SimulationAnswerServiceTest {
     void restoreClearsDeletedAt() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
-        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.save(deleted)).thenReturn(Mono.just(deleted));
 
         StepVerifier.create(service.restore(1L)).verifyComplete();
 
         assertThat(deleted.isDeleted()).isFalse();
+        verify(simulationRepository).lockForAnswerWriteByAnswerId(1L);
     }
 
     @Test
@@ -338,13 +344,29 @@ class SimulationAnswerServiceTest {
     void hardDeleteRemovesTrashedAnswer() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
-        when(simulationRepository.findById(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.delete(deleted)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
         verify(repository).delete(deleted);
+        verify(simulationRepository).lockForAnswerWriteByAnswerId(1L);
+    }
+
+    @Test
+    void hardDeleteCannotDeleteAfterSimulationIsFinished() {
+        SimulationAnswer deleted = answer(1L);
+        deleted.markAsDeleted();
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(1L)).thenReturn(Mono.just(finished));
+
+        StepVerifier.create(service.hardDelete(1L))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 409)
+                .verify();
+        verify(repository, never()).delete(any(SimulationAnswer.class));
     }
 
     private SimulationAnswer answer(Long id) {

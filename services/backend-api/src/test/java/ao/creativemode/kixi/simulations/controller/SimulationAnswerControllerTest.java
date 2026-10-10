@@ -52,6 +52,7 @@ class SimulationAnswerControllerTest {
         when(answers.findById(10L)).thenReturn(Mono.just(answer));
         when(answers.delete(answer)).thenReturn(Mono.empty());
         when(simulations.findById(20L)).thenReturn(Mono.just(finished));
+        when(simulations.lockForAnswerWriteByAnswerId(10L)).thenReturn(Mono.just(finished));
         SimulationAnswerService service = new SimulationAnswerService(answers, simulations,
                 mock(QuestionRepository.class), mock(QuestionOptionRepository.class),
                 mock(ao.creativemode.kixi.simulations.service.SimulationDeadlineService.class), null);
