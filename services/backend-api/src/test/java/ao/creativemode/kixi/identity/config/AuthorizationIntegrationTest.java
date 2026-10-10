@@ -23,6 +23,7 @@ import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,9 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private ao.creativemode.kixi.simulations.service.SimulationResultService simulationResultService;
+
+    @MockBean
+    private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
     private SimulationAnswerService simulationAnswerService;

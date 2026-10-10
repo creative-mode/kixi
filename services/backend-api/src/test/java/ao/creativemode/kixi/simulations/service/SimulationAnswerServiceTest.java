@@ -12,6 +12,7 @@ import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerReq
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
@@ -67,7 +68,7 @@ class SimulationAnswerServiceTest {
 
     @Test
     void createRejectsNonexistentQuestionWithoutTouchingRepository() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(9999L)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 9999L, null, null, null)))
@@ -83,7 +84,7 @@ class SimulationAnswerServiceTest {
 
     @Test
     void createSavesAnswerWhenSimulationAndQuestionExist() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
         when(repository.save(any(SimulationAnswer.class))).thenAnswer(invocation -> {
             SimulationAnswer entity = invocation.getArgument(0);
@@ -101,8 +102,24 @@ class SimulationAnswerServiceTest {
     }
 
     @Test
+    void createRejectsAnswersForFinishedSimulation() {
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(finished));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
+
+        StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                })
+                .verify();
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void createReportsRealDuplicateAsConflictAfterReferencesAreValid() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
         when(repository.save(any(SimulationAnswer.class)))
                 .thenReturn(Mono.error(new DataIntegrityViolationException("duplicate key")));
@@ -161,7 +178,7 @@ class SimulationAnswerServiceTest {
     void updateAppliesNewFieldsToExistingAnswer() {
         SimulationAnswer existing = answer(1L);
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
         when(repository.save(any(SimulationAnswer.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
@@ -244,5 +261,11 @@ class SimulationAnswerServiceTest {
         answer.setSimulationId(1L);
         answer.setQuestionId(1L);
         return answer;
+    }
+
+    private Simulation inProgressSimulation() {
+        Simulation simulation = new Simulation();
+        simulation.setStatus(SimulationStatus.IN_PROGRESS);
+        return simulation;
     }
 }

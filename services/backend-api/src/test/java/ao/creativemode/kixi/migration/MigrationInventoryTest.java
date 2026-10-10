@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -63,6 +64,15 @@ class MigrationInventoryTest {
                     () -> entry.getKey() + " must contain: " + entry.getValue()
             );
         }
+    }
+
+    @Test
+    void simulationAnswerReviewMigrationDoesNotClassifyLegacyRows() throws IOException, URISyntaxException {
+        Path migration = migrationDirectory().resolve("V34__add_simulation_answer_review_status.sql");
+        String sql = Files.readString(migration).toLowerCase();
+
+        assertFalse(sql.contains("update simulation_answers"),
+                "Legacy answers must stay out of the review queue until a simulation is submitted");
     }
 
     private Path migrationDirectory() throws URISyntaxException {

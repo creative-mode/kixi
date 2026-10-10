@@ -136,6 +136,9 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.PATCH,
+                                "/api/v1/simulation-answers/*/grade")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",

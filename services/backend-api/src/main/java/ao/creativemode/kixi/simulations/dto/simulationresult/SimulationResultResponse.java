@@ -20,6 +20,9 @@ public record SimulationResultResponse(
         Long simulationId,
         SimulationStatus status,
         Double finalScore,
+        Integer correctAnswers,
+        Integer totalQuestions,
+        Integer pendingReviewCount,
         Integer timeSpentSeconds,
         LocalDateTime finishedAt,
         List<QuestionResult> questions
@@ -47,6 +50,8 @@ public record SimulationResultResponse(
             Long selectedOptionId,
             String answerText,
             Float scoreObtained,
+            Boolean isCorrect,
+            ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
             List<OptionResult> options
     ) { }
 

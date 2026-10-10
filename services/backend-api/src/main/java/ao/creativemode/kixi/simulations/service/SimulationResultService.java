@@ -146,6 +146,10 @@ public class SimulationResultService {
             simulation.getId(),
             simulation.getStatus(),
             simulation.getFinalScore(),
+            (int) rendered.stream().filter(question -> Boolean.TRUE.equals(question.isCorrect())).count(),
+            rendered.size(),
+            (int) rendered.stream().filter(question -> question.reviewStatus()
+                    == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count(),
             simulation.getTimeSpentSeconds(),
             simulation.getFinishedAt(),
             rendered
@@ -185,6 +189,8 @@ public class SimulationResultService {
             answer == null ? null : answer.getSelectedOptionId(),
             answer == null ? null : answer.getAnswerText(),
             answer == null ? null : answer.getScoreObtained(),
+            answer == null ? null : answer.getIsCorrect(),
+            answer == null ? null : answer.getReviewStatus(),
             optionResults
         );
     }
