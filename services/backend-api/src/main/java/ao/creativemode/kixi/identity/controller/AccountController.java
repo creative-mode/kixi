@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.identity.controller;
 
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.identity.service.AccountService;
@@ -99,6 +100,18 @@ public class AccountController {
             @Valid @RequestBody AccountRequest request) {
 
         return service.update(id, request)
+                .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Turns the accessibility extra time of an account on or off (issue #107).
+     */
+    @PatchMapping("/{id}/accessibility")
+    public Mono<ResponseEntity<AccountResponse>> updateAccessibility(
+            @PathVariable Long id,
+            @Valid @RequestBody AccountAccessibilityRequest request) {
+
+        return service.updateAccessibility(id, request)
                 .map(ResponseEntity::ok);
     }
 

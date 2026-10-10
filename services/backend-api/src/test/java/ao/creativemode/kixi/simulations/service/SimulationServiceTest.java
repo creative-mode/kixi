@@ -31,6 +31,7 @@ class SimulationServiceTest {
     private AccountRepository accountRepository;
     private SchoolYearRepository schoolYearRepository;
     private StatementRepository statementRepository;
+    private SimulationDeadlineService deadlineService;
     private SimulationService service;
 
     @BeforeEach
@@ -39,7 +40,9 @@ class SimulationServiceTest {
         accountRepository = mock(AccountRepository.class);
         schoolYearRepository = mock(SchoolYearRepository.class);
         statementRepository = mock(StatementRepository.class);
-        service = new SimulationService(repository, accountRepository, schoolYearRepository, statementRepository);
+        deadlineService = mock(SimulationDeadlineService.class);
+        service = new SimulationService(repository, accountRepository, schoolYearRepository,
+                statementRepository, deadlineService);
 
         when(accountRepository.findById(1L)).thenReturn(Mono.just(account(1L)));
         when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
@@ -63,6 +66,52 @@ class SimulationServiceTest {
         StepVerifier.create(service.findAllActiveForAccount(1L))
                 .assertNext(response -> assertThat(response.account().id()).isEqualTo(1L))
                 .verifyComplete();
+    }
+
+    @Test
+    void findByIdExposesDeadlineCalculatedForAccountWithExtraTime() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 3, 1, 10, 0);
+        LocalDateTime deadline = startedAt.plusMinutes(37).plusSeconds(40);
+        Account account = account(1L);
+        account.setAccessibilityExtraTime(true);
+        Statement statement = new Statement();
+        statement.setDurationMinutes(30);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setStartedAt(startedAt);
+
+        when(accountRepository.findById(1L)).thenReturn(Mono.just(account));
+        when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(deadlineService.effectiveDeadlineFor(startedAt, 30, true)).thenReturn(deadline);
+
+        StepVerifier.create(service.findById(1L))
+                .assertNext(response -> assertThat(response.deadline()).isEqualTo(deadline))
+                .verifyComplete();
+
+        verify(deadlineService).effectiveDeadlineFor(startedAt, 30, true);
+    }
+
+    @Test
+    void findByIdExposesEffectiveDeadlineForAccountWithoutExtraTime() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 3, 1, 10, 0);
+        LocalDateTime deadline = startedAt.plusMinutes(30).plusSeconds(10);
+        Account account = account(1L);
+        account.setAccessibilityExtraTime(false);
+        Statement statement = new Statement();
+        statement.setDurationMinutes(30);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setStartedAt(startedAt);
+
+        when(accountRepository.findById(1L)).thenReturn(Mono.just(account));
+        when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(deadlineService.effectiveDeadlineFor(startedAt, 30, false)).thenReturn(deadline);
+
+        StepVerifier.create(service.findById(1L))
+                .assertNext(response -> assertThat(response.deadline()).isEqualTo(deadline))
+                .verifyComplete();
+
+        verify(deadlineService).effectiveDeadlineFor(startedAt, 30, false);
     }
 
     @Test

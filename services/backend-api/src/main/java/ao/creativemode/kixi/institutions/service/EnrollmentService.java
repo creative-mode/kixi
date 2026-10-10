@@ -2,7 +2,10 @@ package ao.creativemode.kixi.institutions.service;
 
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
+import ao.creativemode.kixi.identity.model.Role;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
+import ao.creativemode.kixi.identity.repository.AccountRoleRepository;
+import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.institutions.dto.enrollment.EnrollRequest;
 import ao.creativemode.kixi.institutions.dto.enrollment.EnrollmentResponse;
 import ao.creativemode.kixi.institutions.model.Enrollment;
@@ -19,25 +22,38 @@ import reactor.core.publisher.Mono;
  * At most one active enrollment per account and school year exists: a
  * cancelled enrollment is restored (and moved to the new class) instead of
  * duplicated.</p>
+ *
+ * <p>The account being enrolled must hold the STUDENT role (#148). Checking the
+ * caller's right to enroll an account is not the same as checking that the
+ * account is a student: without this, an admin could enroll a teacher account
+ * into a class and the class roll would then be wrong for everyone downstream.</p>
  */
 @Service
 public class EnrollmentService {
+
+    private static final String STUDENT_ROLE = "STUDENT";
 
     private final EnrollmentRepository enrollments;
     private final AccountRepository accountRepository;
     private final ClassRepository classRepository;
     private final SchoolYearRepository schoolYearRepository;
+    private final AccountRoleRepository accountRoleRepository;
+    private final RoleRepository roleRepository;
 
     public EnrollmentService(
         EnrollmentRepository enrollments,
         AccountRepository accountRepository,
         ClassRepository classRepository,
-        SchoolYearRepository schoolYearRepository
+        SchoolYearRepository schoolYearRepository,
+        AccountRoleRepository accountRoleRepository,
+        RoleRepository roleRepository
     ) {
         this.enrollments = enrollments;
         this.accountRepository = accountRepository;
         this.classRepository = classRepository;
         this.schoolYearRepository = schoolYearRepository;
+        this.accountRoleRepository = accountRoleRepository;
+        this.roleRepository = roleRepository;
     }
 
     public Mono<EnrollmentResponse> enroll(Long callerAccountId, boolean staff, EnrollRequest request) {
@@ -49,6 +65,7 @@ public class EnrollmentService {
         return Mono.defer(() -> accountRepository.findById(targetAccountId)
                 .filter(account -> account.getDeletedAt() == null && Boolean.TRUE.equals(account.getActive()))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found"))))
+            .then(Mono.defer(() -> requireStudentRole(targetAccountId)))
             .then(Mono.defer(() -> classRepository.findByIdAndDeletedAtIsNull(request.classId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))))
             .flatMap(clazz -> {
@@ -73,6 +90,25 @@ public class EnrollmentService {
                     ));
             })
             .map(EnrollmentService::toResponse);
+    }
+
+    /**
+     * Rejects an enrollment whose target account is not a student.
+     *
+     * <p>Same query as {@code MeService.loadRoleNames}: the live role links, then the
+     * role, skipping soft-deleted ones. Done after the account exists and before the
+     * class, so a caller enrolling a teacher gets a clear 400 rather than a conflict on a
+     * class they were never going to join.</p>
+     */
+    private Mono<Void> requireStudentRole(Long accountId) {
+        return accountRoleRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .flatMap(link -> roleRepository.findById(link.getRoleId()))
+            .filter(role -> role.getDeletedAt() == null)
+            .map(Role::getName)
+            .any(STUDENT_ROLE::equals)
+            .flatMap(isStudent -> isStudent
+                ? Mono.empty()
+                : Mono.error(ApiException.badRequest("Account does not have the STUDENT role")));
     }
 
     /**

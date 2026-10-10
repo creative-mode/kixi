@@ -2,6 +2,7 @@ package ao.creativemode.kixi.identity.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -16,6 +17,10 @@ import ao.creativemode.kixi.exams.controller.StatementController;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
+import ao.creativemode.kixi.identity.controller.AccountController;
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
+import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
+import ao.creativemode.kixi.identity.service.AccountService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.identity.service.JwtService;
@@ -46,6 +51,7 @@ import reactor.core.publisher.Mono;
         ao.creativemode.kixi.simulations.controller.SimulationController.class,
         ao.creativemode.kixi.simulations.controller.SimulationAnswerController.class,
         OcrController.class,
+        AccountController.class,
         StatementController.class,
         ao.creativemode.kixi.institutions.controller.TeachingAssignmentController.class
 })
@@ -74,6 +80,9 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private SimulationAnswerService simulationAnswerService;
+
+    @MockBean
+    private AccountService accountService;
 
     @MockBean
     private OcrServiceClient ocrServiceClient;
@@ -122,6 +131,50 @@ class AuthorizationIntegrationTest {
                 .uri("/api/v1/simulations")
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void rejectsStudentPatchingAccountAccessibility() {
+        client.mutateWith(studentJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("accessibility_extra_time", true))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    void validatesAccessibilityPatchBodyForAdmin() {
+        client.mutateWith(adminJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{}")
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    void adminAccessibilityPatchBindsDocumentedPayloadAndCallsService() {
+        AccountResponse response = new AccountResponse(1L, "student", "student@kixi.ao", true,
+                true, true, null, null, null, null);
+        when(accountService.updateAccessibility(eq(1L), any(AccountAccessibilityRequest.class)))
+                .thenReturn(Mono.just(response));
+
+        client.mutateWith(adminJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("accessibility_extra_time", true))
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(accountService).updateAccessibility(eq(1L), eq(new AccountAccessibilityRequest(true)));
     }
 
     @Test

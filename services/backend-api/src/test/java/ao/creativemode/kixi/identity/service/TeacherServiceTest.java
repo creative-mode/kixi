@@ -152,6 +152,7 @@ class TeacherServiceTest {
     }
 
     private AccountResponse accountResponse(Long id) {
-        return new AccountResponse(id, "ana.silva", "ana@itel.ao", false, true, null, null, null, null);
+        return new AccountResponse(id, "ana.silva", "ana@itel.ao", false, true, false,
+                null, null, null, null);
     }
 }
