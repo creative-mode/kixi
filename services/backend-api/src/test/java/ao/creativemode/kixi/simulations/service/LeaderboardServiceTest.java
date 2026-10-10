@@ -335,7 +335,8 @@ class LeaderboardServiceTest {
                 schoolId == null ? null : new MeResponse.SchoolInfo(schoolId, "ITEL", "ITEL"),
                 null,
                 classId == null ? null
-                        : new MeResponse.ClassInfo(classId, "10A", 10, 1L, "2024/2025"));
+                        : new MeResponse.ClassInfo(classId, "10A", 10, 1L, "2024/2025"),
+                false);
     }
 
     private static LeaderboardResponse one(Mono<LeaderboardResponse> mono) {
