@@ -117,7 +117,10 @@ public class SimulationAnswerController {
         @PathVariable Long id,
         @Valid @RequestBody SimulationAnswerGradeRequest request
     ) {
-        return submissionService.grade(id, request.scoreObtained()).map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .flatMap(tuple -> submissionService.grade(id, request.scoreObtained(), tuple.getT1(), tuple.getT2()))
+            .map(ResponseEntity::ok);
     }
 
     /**

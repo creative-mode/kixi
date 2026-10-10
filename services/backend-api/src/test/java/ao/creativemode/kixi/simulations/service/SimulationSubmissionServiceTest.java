@@ -6,13 +6,17 @@ import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import ao.creativemode.kixi.simulations.model.SimulationAnswerStatus;
@@ -33,6 +37,8 @@ class SimulationSubmissionServiceTest {
     private SimulationAnswerRepository answers;
     private QuestionRepository questions;
     private QuestionOptionRepository options;
+    private StatementRepository statements;
+    private TeachingAssignmentAuthorizer teachingAuthorizer;
     private SimulationSubmissionService service;
 
     @BeforeEach
@@ -41,7 +47,9 @@ class SimulationSubmissionServiceTest {
         answers = mock(SimulationAnswerRepository.class);
         questions = mock(QuestionRepository.class);
         options = mock(QuestionOptionRepository.class);
-        service = new SimulationSubmissionService(simulations, answers, questions, options);
+        statements = mock(StatementRepository.class);
+        teachingAuthorizer = mock(TeachingAssignmentAuthorizer.class);
+        service = new SimulationSubmissionService(simulations, answers, questions, options, statements, teachingAuthorizer);
         when(simulations.claimSubmission(10L)).thenReturn(Mono.just(1));
     }
 
@@ -129,6 +137,64 @@ class SimulationSubmissionServiceTest {
         verify(simulations, never()).save(any());
     }
 
+    @Test
+    void letsAnAssignedTeacherGradeAnOpenAnswer() {
+        SimulationAnswer pending = pendingAnswer();
+        Question question = question(2L, 5);
+        question.setStatementId(20L);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(statements.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(statement()));
+        when(teachingAuthorizer.requireAssignedTo(7L, false, 3L, 4L)).thenReturn(Mono.empty());
+        when(answers.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(simulations.findByIdAndDeletedAtIsNull(10L)).thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L))).thenReturn(Flux.just(pending));
+        when(simulations.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.grade(30L, 4.5, 7L, false))
+                .assertNext(response -> {
+                    assertThat(response.reviewStatus()).isEqualTo(SimulationAnswerStatus.GRADED);
+                    assertThat(response.scoreObtained()).isEqualTo(4.5f);
+                    assertThat(response.isCorrect()).isFalse();
+                }).verifyComplete();
+        verify(teachingAuthorizer).requireAssignedTo(7L, false, 3L, 4L);
+    }
+
+    @Test
+    void rejectsGradingWhenTeacherIsNotAssignedToTheStatement() {
+        SimulationAnswer pending = pendingAnswer();
+        Question question = question(2L, 5);
+        question.setStatementId(20L);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(statements.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(statement()));
+        when(teachingAuthorizer.requireAssignedTo(7L, false, 3L, 4L))
+                .thenReturn(Mono.error(ApiException.forbidden("Teacher is not assigned")));
+
+        StepVerifier.create(service.grade(30L, 4.5, 7L, false))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(answers, never()).save(any());
+    }
+
+    @Test
+    void administratorsCanGradeWithoutAClassAssignment() {
+        SimulationAnswer pending = pendingAnswer();
+        Question question = question(2L, 5);
+        question.setStatementId(20L);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(answers.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(simulations.findByIdAndDeletedAtIsNull(10L)).thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L))).thenReturn(Flux.just(pending));
+        when(simulations.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.grade(30L, 5.0, 99L, true))
+                .assertNext(response -> assertThat(response.isCorrect()).isTrue())
+                .verifyComplete();
+        verifyNoInteractions(teachingAuthorizer, statements);
+    }
+
     private Simulation simulation(SimulationStatus status) {
         Simulation simulation = new Simulation();
         simulation.setId(10L);
@@ -160,5 +226,22 @@ class SimulationSubmissionServiceTest {
         option.setQuestionId(questionId);
         option.setIsCorrect(correct);
         return option;
+    }
+
+    private SimulationAnswer pendingAnswer() {
+        SimulationAnswer answer = new SimulationAnswer();
+        answer.setId(30L);
+        answer.setSimulationId(10L);
+        answer.setQuestionId(2L);
+        answer.setReviewStatus(SimulationAnswerStatus.PENDING_REVIEW);
+        return answer;
+    }
+
+    private Statement statement() {
+        Statement statement = new Statement();
+        statement.setId(20L);
+        statement.setClassId(3L);
+        statement.setSubjectId(4L);
+        return statement;
     }
 }

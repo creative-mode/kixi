@@ -2,9 +2,12 @@ package ao.creativemode.kixi.simulations.service;
 
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
@@ -27,14 +30,19 @@ public class SimulationSubmissionService {
     private final SimulationAnswerRepository answers;
     private final QuestionRepository questions;
     private final QuestionOptionRepository options;
+    private final StatementRepository statements;
+    private final TeachingAssignmentAuthorizer teachingAuthorizer;
 
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
-            QuestionOptionRepository options) {
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
         this.options = options;
+        this.statements = statements;
+        this.teachingAuthorizer = teachingAuthorizer;
     }
 
     @Transactional
@@ -123,12 +131,13 @@ public class SimulationSubmissionService {
     }
 
     @Transactional
-    public Mono<SimulationAnswerResponse> grade(Long answerId, Double score) {
+    public Mono<SimulationAnswerResponse> grade(Long answerId, Double score,
+            Long accountId, boolean admin) {
         return answers.findByIdAndDeletedAtIsNull(answerId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
             .flatMap(answer -> questions.findByIdAndDeletedAtIsNull(answer.getQuestionId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
-                .flatMap(question -> {
+                .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
                     if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
                         return Mono.error(ApiException.conflict("Only answers pending review can be graded"));
                     }
@@ -141,7 +150,17 @@ public class SimulationSubmissionService {
                     answer.setUpdatedAt(LocalDateTime.now());
                     return answers.save(answer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
                             .thenReturn(toResponse(saved)));
-                }));
+                }))));
+    }
+
+    private Mono<Void> authorizeGrading(Question question, Long accountId, boolean admin) {
+        if (admin) {
+            return Mono.empty();
+        }
+        return statements.findByIdAndDeletedAtIsNull(question.getStatementId())
+            .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+            .flatMap(statement -> teachingAuthorizer.requireAssignedTo(
+                    accountId, false, statement.getClassId(), statement.getSubjectId()));
     }
 
     private Mono<Void> refreshFinalScore(Long simulationId) {

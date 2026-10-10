@@ -5,6 +5,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionSubjectRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -13,7 +14,7 @@ import reactor.core.publisher.Mono;
  * exams module can enforce the school rules without knowing how they are stored.
  */
 @Service
-public class InstitutionAccessService {
+public class InstitutionAccessService implements TeachingAssignmentAuthorizer {
 
     private final InstitutionRepository institutionRepository;
     private final InstitutionSubjectRepository subjectLinks;
@@ -44,6 +45,7 @@ public class InstitutionAccessService {
      * against, but the class is still on them, and skipping it entirely let any
      * teacher edit or delete a statement sitting in a class they do not teach.
      */
+    @Override
     public Mono<Void> requireAssignedTo(Long accountId, boolean admin, Long classId, Long subjectId) {
         return Mono.defer(() -> teachingAssignments.requireTeaches(accountId, admin, classId, subjectId));
     }
