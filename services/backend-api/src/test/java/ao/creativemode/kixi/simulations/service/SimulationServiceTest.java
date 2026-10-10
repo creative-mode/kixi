@@ -18,6 +18,8 @@ import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
+import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -175,6 +177,26 @@ class SimulationServiceTest {
     }
 
     @Test
+    void teacherCreationUsesTheRealStatementWriteGate() {
+        InstitutionAccessService institutionAccess = mock(InstitutionAccessService.class);
+        when(institutionAccess.requireAssignedTo(7L, false, 3L, null))
+                .thenReturn(Mono.error(ApiException.forbidden("not assigned")));
+        Statement statement = new Statement();
+        statement.setId(1L);
+        statement.setClassId(3L);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(statement));
+        SimulationService teacherService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, null,
+                new StatementWriteAccessService(institutionAccess, statementRepository));
+
+        StepVerifier.create(teacherService.create(
+                        new SimulationRequest(1L, 1L, null, null, null, null, null, null), 7L, false))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
     void createForAccountRejectsMismatchedAccountId() {
         StepVerifier.create(service.createForAccount(
                         new SimulationRequest(2L, 1L, 1L, null, null, null, null, null), 1L))
@@ -306,6 +328,22 @@ class SimulationServiceTest {
         StepVerifier.create(service.restore(1L)).verifyComplete();
 
         assertThat(deleted.getDeletedAt()).isNull();
+    }
+
+    @Test
+    void restoreRejectsDeletedExamRoomSimulationToKeepRoomJoinUnique() {
+        Simulation deleted = simulation(1L, SimulationStatus.IN_PROGRESS);
+        deleted.setExamRoomId(20L);
+        deleted.markAsDelete();
+        when(repository.findById(1L)).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.restore(1L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                })
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
     }
 
     @Test

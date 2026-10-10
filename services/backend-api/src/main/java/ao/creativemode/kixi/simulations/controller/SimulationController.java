@@ -93,10 +93,13 @@ public class SimulationController {
     @PostMapping
     public Mono<ResponseEntity<SimulationResponse>> create(@Valid @RequestBody SimulationRequest dto) {
         return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMap(tuple -> tuple.getT2()
-                        ? service.create(dto)
-                        : service.createForAccount(dto, tuple.getT1()))
+                .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+                .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+                .flatMap(tuple -> tuple.getT1().getT2()
+                        ? service.create(dto, tuple.getT1().getT1(), true)
+                        : tuple.getT2()
+                            ? service.create(dto, tuple.getT1().getT1(), false)
+                            : service.createForAccount(dto, tuple.getT1().getT1()))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
 
@@ -119,14 +122,14 @@ public class SimulationController {
 
     @PutMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return authorizedContext().flatMap(context -> authorized(id, context)
+        return authorizedContext().flatMap(context -> authorized(id, context, true)
                 .then(service.restore(id)))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @DeleteMapping("/{id}/permanent")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return authorizedContext().flatMap(context -> service.authorize(id, context.accountId(), context.admin(), context.teacher())
+        return authorizedContext().flatMap(context -> service.authorize(id, context.accountId(), context.admin(), context.teacher(), true)
                 .then(service.hardDelete(id)))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
@@ -144,7 +147,11 @@ public class SimulationController {
     }
 
     private Mono<Void> authorized(Long id, Context context) {
-        Mono<?> result = service.authorize(id, context.accountId(), context.admin(), context.teacher());
+        return authorized(id, context, false);
+    }
+
+    private Mono<Void> authorized(Long id, Context context, boolean includeDeleted) {
+        Mono<?> result = service.authorize(id, context.accountId(), context.admin(), context.teacher(), includeDeleted);
         return (result == null ? Mono.empty() : result).then();
     }
 

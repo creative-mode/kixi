@@ -6,6 +6,7 @@ import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRes
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import java.time.LocalDateTime;
@@ -25,6 +26,7 @@ public class SimulationAnswerService {
     private final SimulationAnswerRepository repository;
     private final SimulationRepository simulationRepository;
     private final QuestionRepository questionRepository;
+    private final QuestionOptionRepository optionRepository;
     private final SimulationDeadlineService deadlineService;
     private final SimulationService simulationService;
 
@@ -33,12 +35,14 @@ public class SimulationAnswerService {
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
         QuestionRepository questionRepository,
+        QuestionOptionRepository optionRepository,
         SimulationDeadlineService deadlineService,
         SimulationService simulationService
     ) {
         this.repository = repository;
         this.simulationRepository = simulationRepository;
         this.questionRepository = questionRepository;
+        this.optionRepository = optionRepository;
         this.deadlineService = deadlineService;
         this.simulationService = simulationService;
     }
@@ -46,18 +50,31 @@ public class SimulationAnswerService {
     public SimulationAnswerService(
         SimulationAnswerRepository repository, SimulationRepository simulationRepository,
         QuestionRepository questionRepository, SimulationDeadlineService deadlineService) {
-        this(repository, simulationRepository, questionRepository, deadlineService, null);
+        this(repository, simulationRepository, questionRepository, null, deadlineService, null);
     }
 
     public Mono<Void> authorizeAnswer(Long answerId, Long accountId, boolean admin, boolean teacher) {
-        return repository.findById(answerId)
+        return authorizeAnswer(answerId, accountId, admin, teacher, false);
+    }
+
+    public Mono<Void> authorizeAnswer(Long answerId, Long accountId, boolean admin, boolean teacher,
+            boolean includeDeleted) {
+        Mono<SimulationAnswer> lookup = includeDeleted ? repository.findById(answerId)
+            : repository.findByIdAndDeletedAtIsNull(answerId);
+        return lookup
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
-            .flatMap(answer -> authorizeSimulation(answer.getSimulationId(), accountId, admin, teacher));
+            .flatMap(answer -> authorizeSimulation(answer.getSimulationId(), accountId, admin, teacher,
+                includeDeleted));
     }
 
     public Mono<Void> authorizeSimulation(Long simulationId, Long accountId, boolean admin, boolean teacher) {
+        return authorizeSimulation(simulationId, accountId, admin, teacher, false);
+    }
+
+    private Mono<Void> authorizeSimulation(Long simulationId, Long accountId, boolean admin, boolean teacher,
+            boolean includeDeleted) {
         return simulationService == null ? Mono.empty()
-            : simulationService.authorize(simulationId, accountId, admin, teacher).then();
+            : simulationService.authorize(simulationId, accountId, admin, teacher, includeDeleted).then();
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
@@ -69,7 +86,7 @@ public class SimulationAnswerService {
             .flatMap(answer -> admin || simulationService == null
                 ? Mono.just(toResponse(answer))
                 : simulationService.authorize(answer.getSimulationId(), accountId, false, true)
-                    .map(ignored -> toResponse(answer)));
+                    .map(ignored -> toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
     }
 
     public Flux<SimulationAnswerResponse> findAllActiveForAccount(Long accountId) {
@@ -84,6 +101,19 @@ public class SimulationAnswerService {
 
     public Flux<SimulationAnswerResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull().map(this::toResponse);
+    }
+
+    public Flux<SimulationAnswerResponse> findAllDeletedForStaff(Long accountId, boolean admin) {
+        return repository.findAllByDeletedAtIsNotNull()
+            .flatMap(answer -> simulationService.authorize(answer.getSimulationId(), accountId, admin, !admin, true)
+                .map(ignored -> toResponse(answer)).onErrorResume(ignored -> Mono.empty()));
+    }
+
+    public Flux<SimulationAnswerResponse> findAllDeletedForAccount(Long accountId) {
+        return simulationRepository.findByAccountId(accountId)
+            .map(Simulation::getId).collectList()
+            .flatMapMany(ids -> ids.isEmpty() ? Flux.empty() : repository.findAllBySimulationIdInAndDeletedAtIsNotNull(ids))
+            .map(this::toResponse);
     }
 
     public Mono<SimulationAnswerResponse> findByIdActive(Long id) {
@@ -107,7 +137,7 @@ public class SimulationAnswerService {
     public Mono<SimulationAnswerResponse> create(
         SimulationAnswerRequest request
     ) {
-        return requireSimulationAndQuestion(request.simulationId(), request.questionId())
+        return requireSimulationAndQuestion(request.simulationId(), request.questionId(), request.selectedOptionId())
              .then(Mono.defer(() -> lockEditableSimulations(request.simulationId())
                  .then(Mono.defer(() -> {
                  SimulationAnswer answer = new SimulationAnswer();
@@ -130,18 +160,44 @@ public class SimulationAnswerService {
                   }))));
     }
 
-    private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId) {
+    private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId, Long optionId) {
         return simulationRepository.findByIdAndDeletedAtIsNull(simulationId)
             .switchIfEmpty(Mono.error(ApiException.badRequest("Simulation not found: " + simulationId)))
             .flatMap(simulation -> {
                 if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
                     return Mono.error(ApiException.conflict("Simulation no longer accepts answers"));
                 }
-                return requireNotExpired(simulation);
+                return requireNotExpired(simulation)
+                        .then(questionLookup(questionId)
+                        .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId)))
+                        .flatMap(question -> {
+                            if (simulation.getStatementId() != null
+                                    && !simulation.getStatementId().equals(question.getStatementId())) {
+                                return Mono.error(ApiException.badRequest("Question does not belong to the simulation statement"));
+                            }
+                            return validateSelectedOption(question, optionId);
+                        }));
             })
-            .then(questionRepository.findById(questionId)
-                .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId))))
             .then();
+    }
+
+    private Mono<Void> validateSelectedOption(ao.creativemode.kixi.exams.model.Question question, Long optionId) {
+        if (optionId == null) return Mono.empty();
+        if ("open".equalsIgnoreCase(question.getQuestionType())
+                || "development".equalsIgnoreCase(question.getQuestionType())) {
+            return Mono.error(ApiException.badRequest("Open questions cannot select an option"));
+        }
+        if (optionRepository == null) return Mono.empty();
+        return optionRepository.findByIdAndDeletedAtIsNull(optionId)
+            .filter(option -> question.getId().equals(option.getQuestionId()))
+            .switchIfEmpty(Mono.error(ApiException.badRequest("Option does not belong to the question")))
+            .then();
+    }
+
+    private Mono<ao.creativemode.kixi.exams.model.Question> questionLookup(Long questionId) {
+        Mono<ao.creativemode.kixi.exams.model.Question> result =
+            questionRepository.findByIdAndDeletedAtIsNull(questionId);
+        return result == null ? questionRepository.findById(questionId) : result;
     }
 
     /**
@@ -152,7 +208,7 @@ public class SimulationAnswerService {
      * to run out of and is always let through.
      */
     private Mono<Simulation> requireNotExpired(Simulation simulation) {
-        return deadlineService.expired(simulation, LocalDateTime.now())
+        return deadlineService.expired(simulation, deadlineService.now())
             .flatMap(expired -> Boolean.TRUE.equals(expired)
                 ? Mono.<Simulation>error(ApiException.conflict(EXPIRED_MESSAGE))
                 : Mono.just(simulation));
@@ -178,7 +234,7 @@ public class SimulationAnswerService {
                 Mono.error(ApiException.notFound("Simulation answer not found"))
             )
             .flatMap(answer -> requireEditableSimulation(answer.getSimulationId())
-                .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
+                .then(requireSimulationAndQuestion(request.simulationId(), request.questionId(), request.selectedOptionId()))
                  .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
                      .then(Mono.defer(() -> {
                      return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
@@ -285,7 +341,7 @@ public class SimulationAnswerService {
         SimulationAnswerRequest request
     ) {
         return requireEditableSimulation(answer.getSimulationId())
-            .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
+            .then(requireSimulationAndQuestion(request.simulationId(), request.questionId(), request.selectedOptionId()))
             .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
                 .then(Mono.defer(() -> {
                 return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),

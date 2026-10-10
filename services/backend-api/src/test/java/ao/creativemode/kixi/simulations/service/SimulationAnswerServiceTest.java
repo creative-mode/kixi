@@ -15,6 +15,7 @@ import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -127,6 +128,25 @@ class SimulationAnswerServiceTest {
                 })
                 .verify();
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createRejectsQuestionFromAnotherStatementBeforeWriting() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        SimulationAnswerService scopedService = new SimulationAnswerService(repository, simulationRepository,
+                questionRepository, options, deadlineService, null);
+        Simulation simulation = inProgressSimulation();
+        simulation.setStatementId(10L);
+        Question question = new Question();
+        question.setId(1L);
+        question.setStatementId(11L);
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(question));
+
+        StepVerifier.create(scopedService.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).insertIfInProgress(any(), any(), any(), any(), any());
     }
 
     @Test

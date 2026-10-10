@@ -20,6 +20,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
+import ao.creativemode.kixi.exams.service.StatementWriteAccessService;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -33,6 +34,7 @@ public class SimulationService {
     private final StatementRepository statementRepository;
     private final SimulationDeadlineService deadlineService;
     private final ExamRoomAccess examRoomAccess;
+    private final StatementWriteAccessService statementWriteAccess;
 
     @Autowired
     public SimulationService(
@@ -41,7 +43,8 @@ public class SimulationService {
             SchoolYearRepository schoolYearRepository,
             StatementRepository statementRepository,
             SimulationDeadlineService deadlineService,
-            ExamRoomAccess examRoomAccess
+            ExamRoomAccess examRoomAccess,
+            StatementWriteAccessService statementWriteAccess
     ) {
         this.repository = repository;
         this.accountRepository = accountRepository;
@@ -49,6 +52,7 @@ public class SimulationService {
         this.statementRepository = statementRepository;
         this.deadlineService = deadlineService;
         this.examRoomAccess = examRoomAccess;
+        this.statementWriteAccess = statementWriteAccess;
     }
 
     public SimulationService(
@@ -56,7 +60,7 @@ public class SimulationService {
             SchoolYearRepository schoolYearRepository, StatementRepository statementRepository,
             SimulationDeadlineService deadlineService) {
         this(repository, accountRepository, schoolYearRepository, statementRepository,
-                deadlineService, null);
+                deadlineService, null, null);
     }
 
     public Flux<SimulationResponse> findAllActive() {
@@ -85,11 +89,22 @@ public class SimulationService {
     }
 
     public Mono<Simulation> authorize(Long id, Long accountId, boolean admin, boolean teacher) {
-        return repository.findByIdAndDeletedAtIsNull(id)
+        return authorize(id, accountId, admin, teacher, false);
+    }
+
+    public Mono<Simulation> authorize(Long id, Long accountId, boolean admin, boolean teacher,
+            boolean includeDeleted) {
+        Mono<Simulation> lookup = includeDeleted ? repository.findById(id)
+                : repository.findByIdAndDeletedAtIsNull(id);
+        return lookup
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
                 .flatMap(simulation -> {
-                    if (admin || (simulation.getExamRoomId() == null && teacher)
-                            || (simulation.getExamRoomId() == null && accountId.equals(simulation.getAccountId()))) {
+                    if (admin)
+                        return Mono.just(simulation);
+                    if (simulation.getExamRoomId() == null && teacher && statementWriteAccess != null)
+                        return statementWriteAccess.requireCanWrite(simulation.getStatementId(), accountId, false)
+                                .thenReturn(simulation);
+                    if (simulation.getExamRoomId() == null && accountId.equals(simulation.getAccountId())) {
                         return Mono.just(simulation);
                     }
                     if (examRoomAccess == null) {
@@ -105,39 +120,45 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
-                        .flatMap(this::toResponse));
+                        .flatMap(this::toResponse)
+                        .onErrorResume(ignored -> Mono.empty()));
     }
 
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNotNull()
-                .flatMap(simulation -> {
-                    if (admin || (simulation.getExamRoomId() == null
-                            && (teacher || accountId.equals(simulation.getAccountId())))) {
-                        return toResponse(simulation);
-                    }
-                    if (examRoomAccess == null || simulation.getExamRoomId() == null) return Mono.empty();
-                    return examRoomAccess.canAccessSimulation(simulation.getExamRoomId(), simulation.getId(),
-                            simulation.getAccountId(), accountId, false, teacher)
-                            .filter(Boolean::booleanValue).flatMap(ignored -> toResponse(simulation));
-                });
+                .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher, true)
+                        .flatMap(this::toResponse)
+                        .onErrorResume(ignored -> Mono.empty()));
     }
 
     public Mono<SimulationResponse> create(SimulationRequest dto) {
+        return create(dto, dto.accountId(), true);
+    }
+
+    public Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin) {
+        return create(dto, callerAccountId, admin, true);
+    }
+
+    private Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin,
+            boolean authorizeStatement) {
         return accountRepository.findById(dto.accountId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
-                .then(Mono.defer(() -> {
+                .then(statementLookup(dto.statementId())
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+                        .flatMap(statement -> !authorizeStatement
+                                ? Mono.just(statement)
+                                : statementWriteAccess == null
+                                ? admin ? Mono.just(statement) : Mono.error(ApiException.forbidden(
+                                        "Statement authorization is unavailable"))
+                                : statementWriteAccess.requireCanWrite(statement.getId(), callerAccountId, admin))
+                        .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
                                 .switchIfEmpty(Mono.error(ApiException.notFound("SchoolYear not found")))
                                 .then(Mono.just(true));
                     }
                     return Mono.just(true);
-                }))
-                .then(Mono.defer(() -> {
-                    return statementRepository.findById(dto.statementId())
-                            .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
-                            .then(Mono.just(true));
-                }))
+                })))
                 .then(Mono.defer(() -> {
                     Simulation simulation = new Simulation();
                     simulation.setAccountId(dto.accountId());
@@ -151,11 +172,16 @@ public class SimulationService {
                 .flatMap(this::toResponse);
     }
 
+    private Mono<Statement> statementLookup(Long statementId) {
+        Mono<Statement> active = statementRepository.findByIdAndDeletedAtIsNull(statementId);
+        return active == null ? statementRepository.findById(statementId) : active;
+    }
+
     public Mono<SimulationResponse> createForAccount(SimulationRequest dto, Long accountId) {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
         }
-        return create(dto);
+        return create(dto, accountId, false, false);
     }
 
     public Mono<SimulationResponse> update(Long id, SimulationRequest dto) {
@@ -198,6 +224,10 @@ public class SimulationService {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(simulation -> {
+                    if (simulation.getExamRoomId() != null) {
+                        return Mono.error(ApiException.conflict(
+                                "Exam-room simulations cannot be moved to trash; close or submit the room instead"));
+                    }
                     simulation.markAsDelete();
                     return repository.save(simulation);
                 })
@@ -210,6 +240,10 @@ public class SimulationService {
                 .flatMap(simulation -> {
                     if (simulation.getDeletedAt() == null) {
                         return Mono.error(ApiException.conflict("Simulation is not deleted"));
+                    }
+                    if (simulation.getExamRoomId() != null) {
+                        return Mono.error(ApiException.conflict(
+                                "Exam-room simulations cannot be restored after deletion"));
                     }
                     simulation.restore();
                     return repository.save(simulation);
@@ -238,15 +272,25 @@ public class SimulationService {
                     .switchIfEmpty(Mono.just(new SchoolYearResponse(null, null, null, null, null, null)))
                 : Mono.just(new SchoolYearResponse(null, null, null, null, null, null));
 
+        Mono<LocalDateTime> deadlineLookup = deadlineService.deadline(simulation);
+        if (deadlineLookup == null) deadlineLookup = Mono.empty();
+        Mono<LocalDateTime> finalDeadlineLookup = deadlineLookup;
         return Mono.zip(accountMono, statementMono, schoolYearMono)
-                .map(tuple -> {
+                .flatMap(tuple -> finalDeadlineLookup
+                    .switchIfEmpty(Mono.justOrEmpty(deadlineService.effectiveDeadlineFor(
+                        simulation.getStartedAt(),
+                        simulation.getExamRoomDurationMinutes() != null
+                                ? simulation.getExamRoomDurationMinutes() : tuple.getT2().getDurationMinutes(),
+                        Boolean.TRUE.equals(tuple.getT1().getAccessibilityExtraTime()))))
+                    .map(deadline -> toResponse(simulation, tuple, deadline))
+                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null))));
+    }
+
+    private SimulationResponse toResponse(Simulation simulation,
+            reactor.util.function.Tuple3<Account, Statement, SchoolYearResponse> tuple,
+            LocalDateTime deadline) {
                     Account account = tuple.getT1();
                     Statement statement = tuple.getT2();
-                    // The account and statement are already loaded above, so deadline arithmetic
-                    // does not issue another query per simulation.
-                    boolean extraTime = Boolean.TRUE.equals(account.getAccessibilityExtraTime());
-                    Integer durationMinutes = simulation.getExamRoomDurationMinutes() != null
-                            ? simulation.getExamRoomDurationMinutes() : statement.getDurationMinutes();
                     return new SimulationResponse(
                         simulation.getId(),
                         toAccountResponse(account),
@@ -254,10 +298,7 @@ public class SimulationService {
                         tuple.getT3(),
                         simulation.getStartedAt(),
                         simulation.getFinishedAt(),
-                        deadlineService.effectiveDeadlineFor(
-                            simulation.getStartedAt(),
-                            durationMinutes,
-                            extraTime),
+                        deadline,
                         simulation.getTimeSpentSeconds(),
                         simulation.getFinalScore(),
                         simulation.getStatus(),
@@ -265,7 +306,6 @@ public class SimulationService {
                         simulation.getUpdatedAt(),
                         simulation.getDeletedAt()
                     );
-                });
     }
 
     private Account accountWithIdOnly(Long accountId) {

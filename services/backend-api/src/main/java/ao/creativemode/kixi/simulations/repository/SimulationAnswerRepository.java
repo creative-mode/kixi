@@ -13,6 +13,7 @@ public interface SimulationAnswerRepository
 {
     Flux<SimulationAnswer> findAllByDeletedAtIsNull();
     Flux<SimulationAnswer> findAllBySimulationIdInAndDeletedAtIsNull(Collection<Long> simulationIds);
+    Flux<SimulationAnswer> findAllBySimulationIdInAndDeletedAtIsNotNull(Collection<Long> simulationIds);
     Flux<SimulationAnswer> findAllByDeletedAtIsNotNull();
     Mono<SimulationAnswer> findByIdAndDeletedAtIsNull(Long id);
     Mono<SimulationAnswer> findByIdAndDeletedAtIsNotNull(Long id);
@@ -25,6 +26,13 @@ public interface SimulationAnswerRepository
                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         FROM simulations
         WHERE id = :simulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM questions q
+                      WHERE q.id = :questionId AND q.statement_id = simulations.statement_id
+                        AND q.deleted_at IS NULL)
+          AND (:selectedOptionId IS NULL OR EXISTS (
+              SELECT 1 FROM question_options o
+              WHERE o.id = :selectedOptionId AND o.question_id = :questionId
+                AND o.deleted_at IS NULL))
         RETURNING *
         """)
     Mono<SimulationAnswer> insertIfInProgress(
@@ -49,10 +57,18 @@ public interface SimulationAnswerRepository
               SELECT 1 FROM simulations
               WHERE id = :oldSimulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
           )
-          AND EXISTS (
-              SELECT 1 FROM simulations
-              WHERE id = :simulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
-          )
+           AND EXISTS (
+               SELECT 1 FROM simulations
+               WHERE id = :simulationId AND status = 'IN_PROGRESS' AND deleted_at IS NULL
+           )
+           AND EXISTS (SELECT 1 FROM questions q
+                       JOIN simulations target ON target.id = :simulationId
+                       WHERE q.id = :questionId AND q.statement_id = target.statement_id
+                         AND q.deleted_at IS NULL)
+           AND (:selectedOptionId IS NULL OR EXISTS (
+               SELECT 1 FROM question_options o
+               WHERE o.id = :selectedOptionId AND o.question_id = :questionId
+                 AND o.deleted_at IS NULL))
         RETURNING answer.*
         """)
     Mono<SimulationAnswer> updateIfInProgress(

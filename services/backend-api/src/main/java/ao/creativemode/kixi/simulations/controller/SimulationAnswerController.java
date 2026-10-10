@@ -56,7 +56,13 @@ public class SimulationAnswerController {
      */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<SimulationAnswerResponse>>> listTrashed() {
-        return service.findAllDeleted().collectList().map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMapMany(tuple -> tuple.getT1().getT2() || tuple.getT2()
+                ? service.findAllDeletedForStaff(tuple.getT1().getT1(), tuple.getT1().getT2())
+                : service.findAllDeletedForAccount(tuple.getT1().getT1()))
+            .collectList().map(ResponseEntity::ok);
     }
 
     /**
@@ -138,7 +144,7 @@ public class SimulationAnswerController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return authorize(id).then(service.restore(id)).thenReturn(ResponseEntity.noContent().build());
+        return authorize(id, true).then(service.restore(id)).thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
@@ -146,16 +152,20 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return authorize(id).then(service.hardDelete(id))
+        return authorize(id, true).then(service.hardDelete(id))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
     private Mono<Void> authorize(Long answerId) {
+        return authorize(answerId, false);
+    }
+
+    private Mono<Void> authorize(Long answerId, boolean includeDeleted) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN"))
             .zipWith(currentAccountService.hasAnyRole("TEACHER"))
             .flatMap(tuple -> service.authorizeAnswer(answerId, tuple.getT1().getT1(),
-                    tuple.getT1().getT2(), tuple.getT2()));
+                    tuple.getT1().getT2(), tuple.getT2(), includeDeleted));
     }
 
     private Mono<Void> authorizeSimulation(Long simulationId) {
