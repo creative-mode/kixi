@@ -102,8 +102,9 @@ public class MeService {
                     enrollment.map(context -> new MeResponse.ClassInfo(
                             context.clazz().getId(), context.clazz().getCode(), context.clazz().getGrade(),
                             context.clazz().getSchoolYearId(), context.schoolYearLabel()))
-                        .orElse(null)
-                );
+                        .orElse(null),
+                    account.getAccessibilityExtraTime()
+            );
             }));
     }
 

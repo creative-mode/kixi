@@ -192,7 +192,8 @@ class StatementCatalogServiceTest {
                 STUDENT, "aluno", "aluno@itel.ao", "Ana", "Silva", null, List.of("STUDENT"),
                 schoolId == null ? null : new MeResponse.SchoolInfo(schoolId, "ITEL", "ITEL"),
                 courseId == null ? null : new MeResponse.CourseInfo(courseId, "TI", "Informática"),
-                classId == null ? null : new MeResponse.ClassInfo(classId, "TI12A", 12, 2024L, "2024/2025"));
+                classId == null ? null : new MeResponse.ClassInfo(classId, "TI12A", 12, 2024L, "2024/2025"),
+                false);
     }
 
     private static Statement statement(Long id) {

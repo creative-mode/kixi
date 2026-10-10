@@ -11,24 +11,31 @@ import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Service
 public class SimulationAnswerService {
 
+    private static final String EXPIRED_MESSAGE =
+        "The time allowed for this simulation has expired";
+
     private final SimulationAnswerRepository repository;
     private final SimulationRepository simulationRepository;
     private final QuestionRepository questionRepository;
+    private final SimulationDeadlineService deadlineService;
 
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
-        QuestionRepository questionRepository
+        QuestionRepository questionRepository,
+        SimulationDeadlineService deadlineService
     ) {
         this.repository = repository;
         this.simulationRepository = simulationRepository;
         this.questionRepository = questionRepository;
+        this.deadlineService = deadlineService;
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
@@ -66,12 +73,14 @@ public class SimulationAnswerService {
             .map(this::toResponse);
     }
 
+    @Transactional
     public Mono<SimulationAnswerResponse> create(
         SimulationAnswerRequest request
     ) {
         return requireSimulationAndQuestion(request.simulationId(), request.questionId())
-            .then(Mono.defer(() -> {
-                SimulationAnswer answer = new SimulationAnswer();
+             .then(Mono.defer(() -> lockEditableSimulations(request.simulationId())
+                 .then(Mono.defer(() -> {
+                 SimulationAnswer answer = new SimulationAnswer();
                 answer.setSimulationId(request.simulationId());
                 answer.setQuestionId(request.questionId());
                 answer.setSelectedOptionId(request.selectedOptionId());
@@ -79,14 +88,16 @@ public class SimulationAnswerService {
                 answer.setAnsweredAt(request.answeredAt());
 
                 return repository
-                    .save(answer)
+                    .insertIfInProgress(answer.getSimulationId(), answer.getQuestionId(),
+                        answer.getSelectedOptionId(), answer.getAnswerText(), answer.getAnsweredAt())
+                    .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
                     .map(this::toResponse)
                     .onErrorMap(DataIntegrityViolationException.class, e ->
                         ApiException.conflict(
                             "This question has already been answered in this simulation."
                         )
                     );
-            }));
+                  }))));
     }
 
     private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId) {
@@ -96,13 +107,28 @@ public class SimulationAnswerService {
                 if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
                     return Mono.error(ApiException.conflict("Simulation no longer accepts answers"));
                 }
-                return Mono.just(simulation);
+                return requireNotExpired(simulation);
             })
             .then(questionRepository.findById(questionId)
                 .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId))))
             .then();
     }
 
+    /**
+     * Issue #107: the server clock alone decides. The answeredAt the client
+     * sends is never read here — the elapsed time belongs to the simulation,
+     * not to whoever is submitting the answer. A simulation with no deadline
+     * (no statement, no start, or a statement without a duration) has no time
+     * to run out of and is always let through.
+     */
+    private Mono<Simulation> requireNotExpired(Simulation simulation) {
+        return deadlineService.expired(simulation, LocalDateTime.now())
+            .flatMap(expired -> Boolean.TRUE.equals(expired)
+                ? Mono.<Simulation>error(ApiException.conflict(EXPIRED_MESSAGE))
+                : Mono.just(simulation));
+    }
+
+    @Transactional
     public Mono<SimulationAnswerResponse> createForAccount(
         SimulationAnswerRequest request,
         Long accountId
@@ -111,6 +137,7 @@ public class SimulationAnswerService {
             .then(create(request));
     }
 
+    @Transactional
     public Mono<SimulationAnswerResponse> update(
         Long id,
         SimulationAnswerRequest request
@@ -122,16 +149,13 @@ public class SimulationAnswerService {
             )
             .flatMap(answer -> requireEditableSimulation(answer.getSimulationId())
                 .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
-                .then(Mono.defer(() -> {
-                    answer.setSimulationId(request.simulationId());
-                    answer.setQuestionId(request.questionId());
-                    answer.setSelectedOptionId(request.selectedOptionId());
-                    answer.setAnswerText(request.answerText());
-                    answer.setAnsweredAt(request.answeredAt());
-                    answer.setUpdatedAt(LocalDateTime.now());
-
-                    return repository.save(answer);
-                })))
+                 .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
+                     .then(Mono.defer(() -> {
+                     return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
+                            request.simulationId(), request.questionId(), request.selectedOptionId(),
+                            request.answerText(), request.answeredAt())
+                        .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
+                     })))))
             .map(this::toResponse)
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
@@ -140,6 +164,7 @@ public class SimulationAnswerService {
             );
     }
 
+    @Transactional
     public Mono<SimulationAnswerResponse> updateForAccount(
         Long id,
         SimulationAnswerRequest request,
@@ -231,15 +256,26 @@ public class SimulationAnswerService {
     ) {
         return requireEditableSimulation(answer.getSimulationId())
             .then(requireSimulationAndQuestion(request.simulationId(), request.questionId()))
-            .then(Mono.defer(() -> {
-                answer.setSimulationId(request.simulationId());
-                answer.setQuestionId(request.questionId());
-                answer.setSelectedOptionId(request.selectedOptionId());
-                answer.setAnswerText(request.answerText());
-                answer.setAnsweredAt(request.answeredAt());
-                answer.setUpdatedAt(LocalDateTime.now());
-                return repository.save(answer);
-            }));
+            .then(Mono.defer(() -> lockEditableSimulations(answer.getSimulationId(), request.simulationId())
+                .then(Mono.defer(() -> {
+                return repository.updateIfInProgress(answer.getId(), answer.getSimulationId(),
+                        request.simulationId(), request.questionId(), request.selectedOptionId(),
+                        request.answerText(), request.answeredAt())
+                    .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
+                }))));
+    }
+
+    private Mono<Void> lockEditableSimulations(Long... simulationIds) {
+        return Flux.fromArray(simulationIds)
+            .distinct()
+            .sort()
+            .concatMap(id -> simulationRepository.lockForAnswerWrite(id)
+                .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
+                .flatMap(simulation -> simulation.getStatus()
+                    == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
+                    ? requireNotExpired(simulation)
+                    : Mono.error(ApiException.conflict("Simulation no longer accepts answers"))))
+            .then();
     }
 
     private Mono<Void> requireEditableSimulation(Long simulationId) {
@@ -247,7 +283,7 @@ public class SimulationAnswerService {
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
             .flatMap(simulation -> simulation.getStatus()
                     == ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS
-                ? Mono.empty()
+                ? requireNotExpired(simulation).then()
                 : Mono.error(ApiException.conflict("Simulation no longer accepts answers")));
     }
 }

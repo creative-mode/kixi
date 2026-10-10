@@ -14,6 +14,12 @@ public record SimulationResponse(
         SchoolYearResponse schoolYear,
         LocalDateTime startedAt,
         LocalDateTime finishedAt,
+        /**
+         * Issue #107: the effective instant after which the server stops
+         * accepting answers, including accessibility extra time and the
+         * configured tolerance. Null when the simulation has no deadline.
+         */
+        LocalDateTime deadline,
         Integer timeSpentSeconds,
         Double finalScore,
         SimulationStatus status,
