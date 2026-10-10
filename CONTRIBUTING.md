@@ -67,6 +67,35 @@ pytest       # for ocr-service
 
 ---
 
+### 2.3 Texto: encoding e indentação
+
+Duas coisas não falham o build e já custaram revisão humana mais do que uma vez, por isso
+passaram a ser verificadas na CI (`.github/scripts/text-hygiene.js`). Corre-as localmente
+antes de fazeres push:
+
+```bash
+node .github/scripts/text-hygiene.js
+```
+
+**Encoding.** Ao resolver conflitos entre ficheiros em encodings diferentes, caracteres como
+`─` (U+2500) ficam reinterpretados como Latin-1 e aparecem como `â”€`. Todos os ficheiros
+`.java`, `.sql`, `.yml`, `.md` e `.json` são guardados em UTF-8. Nota: nenhuma regra do
+`.gitattributes` impede isto — `working-tree-encoding` assume que a working tree já está em
+UTF-8 e grava os bytes tal e qual. É a verificação que apanha.
+
+**Indentação.** Um `@Test`, um `@ExceptionHandler`, um `fieldErrors` ou um javadoc de membro
+encostados à coluna zero enquanto o resto da classe usa quatro espaços. Cabeçalhos de
+`record` e o `{` de uma interface multilínea ficam na coluna zero por convenção e não são
+assinalados.
+
+**Um teste que confirma o que acabaste de inventar não vale nada.** Vale a pena confirmar
+que o teste falha se inverteres a asserção: um payload tem de ser verificado contra aquilo
+que o cliente já lê, não contra a forma que escolheste. Foi assim que entrou um erro de
+validação aninhado que nenhum dos três frontends conseguia ler, e que só apareceu quando um
+teste de integração o exercitou a sério.
+
+---
+
 ## 3. Legal and Licensing
 
 By contributing to this project, you agree that:
