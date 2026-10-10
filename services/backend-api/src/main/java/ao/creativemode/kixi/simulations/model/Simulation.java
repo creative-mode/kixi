@@ -21,6 +21,12 @@ public class Simulation {
     @Column("school_year_id")
     private Long schoolYearId;
 
+    @Column("exam_room_id")
+    private Long examRoomId;
+
+    @Column("exam_room_duration_minutes")
+    private Integer examRoomDurationMinutes;
+
     @Column("started_at")
     private LocalDateTime startedAt;
 
@@ -80,6 +86,11 @@ public class Simulation {
     public void setSchoolYearId(Long schoolYearId) {
         this.schoolYearId = schoolYearId;
     }
+
+    public Long getExamRoomId() { return examRoomId; }
+    public void setExamRoomId(Long examRoomId) { this.examRoomId = examRoomId; }
+    public Integer getExamRoomDurationMinutes() { return examRoomDurationMinutes; }
+    public void setExamRoomDurationMinutes(Integer value) { examRoomDurationMinutes = value; }
 
     public LocalDateTime getStartedAt() {
         return startedAt;

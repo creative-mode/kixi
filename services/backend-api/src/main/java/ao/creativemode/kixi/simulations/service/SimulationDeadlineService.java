@@ -53,6 +53,11 @@ public class SimulationDeadlineService {
         if (startedAt == null || statementId == null) {
             return Mono.empty();
         }
+        if (simulation.getExamRoomDurationMinutes() != null) {
+            return hasExtraTime(simulation.getAccountId())
+                    .flatMap(extraTime -> Mono.justOrEmpty(effectiveDeadlineFor(
+                            startedAt, simulation.getExamRoomDurationMinutes(), extraTime)));
+        }
         return statements.findById(statementId)
                 // No duration means no deadline to extend, so the account is not read.
                 .filter(statement -> statement.getDurationMinutes() != null)

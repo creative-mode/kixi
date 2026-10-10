@@ -193,6 +193,8 @@ public class SimulationService {
                     // The account and statement are already loaded above, so deadline arithmetic
                     // does not issue another query per simulation.
                     boolean extraTime = Boolean.TRUE.equals(account.getAccessibilityExtraTime());
+                    Integer durationMinutes = simulation.getExamRoomDurationMinutes() != null
+                            ? simulation.getExamRoomDurationMinutes() : statement.getDurationMinutes();
                     return new SimulationResponse(
                         simulation.getId(),
                         toAccountResponse(account),
@@ -202,7 +204,7 @@ public class SimulationService {
                         simulation.getFinishedAt(),
                         deadlineService.effectiveDeadlineFor(
                             simulation.getStartedAt(),
-                            statement.getDurationMinutes(),
+                            durationMinutes,
                             extraTime),
                         simulation.getTimeSpentSeconds(),
                         simulation.getFinalScore(),
