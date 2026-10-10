@@ -69,6 +69,29 @@ class SimulationServiceTest {
     }
 
     @Test
+    void findByIdExposesDeadlineCalculatedForAccountWithExtraTime() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 3, 1, 10, 0);
+        LocalDateTime deadline = startedAt.plusMinutes(37).plusSeconds(30);
+        Account account = account(1L);
+        account.setAccessibilityExtraTime(true);
+        Statement statement = new Statement();
+        statement.setDurationMinutes(30);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setStartedAt(startedAt);
+
+        when(accountRepository.findById(1L)).thenReturn(Mono.just(account));
+        when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(deadlineService.deadlineFor(startedAt, 30, true)).thenReturn(deadline);
+
+        StepVerifier.create(service.findById(1L))
+                .assertNext(response -> assertThat(response.deadline()).isEqualTo(deadline))
+                .verifyComplete();
+
+        verify(deadlineService).deadlineFor(startedAt, 30, true);
+    }
+
+    @Test
     void findAllTrashedReturnsOnlyDeletedEntities() {
         Simulation deleted = simulation(2L, SimulationStatus.CANCELLED);
         deleted.markAsDelete();
