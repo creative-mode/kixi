@@ -135,7 +135,7 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return staffLifecycleContext(id, false).then(service.softDelete(id))
+        return staffLifecycleContext(id, false).then(Mono.defer(() -> service.softDelete(id)))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -144,7 +144,8 @@ public class SimulationAnswerController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return staffLifecycleContext(id, true).then(service.restore(id)).thenReturn(ResponseEntity.noContent().build());
+        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.restore(id)))
+            .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
@@ -152,7 +153,7 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return staffLifecycleContext(id, true).then(service.hardDelete(id))
+        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.hardDelete(id)))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
