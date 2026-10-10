@@ -85,8 +85,9 @@ public class SimulationSubmissionService {
                             });
                     List<QuestionOption> questionOptions = allOptions.stream()
                             .filter(option -> option.getQuestionId().equals(question.getId())).toList();
-                    boolean objective = !"short_answer".equals(question.getQuestionType())
-                            && !"development".equals(question.getQuestionType());
+                    // The approval gate defines objective questions by the existence of
+                    // active alternatives; question_type may be "open" or unset.
+                    boolean objective = !questionOptions.isEmpty();
                     if (!objective) {
                         answer.setScoreObtained(null);
                         answer.setIsCorrect(null);

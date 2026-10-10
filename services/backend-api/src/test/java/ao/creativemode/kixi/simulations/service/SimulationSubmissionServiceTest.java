@@ -73,7 +73,7 @@ class SimulationSubmissionServiceTest {
         when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(10L, 7L)).thenReturn(Mono.just(simulation));
         Question choice = question(1L, 2);
         Question open = question(2L, 4);
-        open.setQuestionType("development");
+        open.setQuestionType("open");
         when(questions.findAllByStatementIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(choice, open));
         when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L)))
                 .thenReturn(Flux.just(answer(1L, 102L), answer(2L, null)));
