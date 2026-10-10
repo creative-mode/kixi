@@ -6,6 +6,7 @@ import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -17,6 +18,16 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> findByIdAndDeletedAtIsNull(Long id);
     Mono<Simulation> findByIdAndAccountIdAndDeletedAtIsNull(Long id, Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNotNull(Long id);
+
+    /** The simulations the expiration job sweeps on every poll. */
+    Flux<Simulation> findByStatusAndDeletedAtIsNull(SimulationStatus status);
+
+    /**
+     * Serializes answer writes with submission/finalization on PostgreSQL.
+     * The lock is held by the surrounding reactive transaction until commit.
+     */
+    @Query("SELECT * FROM simulations WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
+    Mono<Simulation> lockForAnswerWrite(Long id);
 
     // @Modifying makes this answer the number of rows updated; without it R2DBC
     // reads the (empty) result set and the Mono completes with nothing.

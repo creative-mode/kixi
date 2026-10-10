@@ -14,6 +14,12 @@ public record SimulationResponse(
         SchoolYearResponse schoolYear,
         LocalDateTime startedAt,
         LocalDateTime finishedAt,
+        /**
+         * Issue #107: the instant the server stops accepting answers, computed
+         * from the statement duration and the account's accessibility extra
+         * time. Null when the simulation has no deadline to show.
+         */
+        LocalDateTime deadline,
         Integer timeSpentSeconds,
         Double finalScore,
         SimulationStatus status,

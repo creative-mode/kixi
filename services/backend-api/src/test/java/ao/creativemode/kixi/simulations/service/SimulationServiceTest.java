@@ -31,6 +31,7 @@ class SimulationServiceTest {
     private AccountRepository accountRepository;
     private SchoolYearRepository schoolYearRepository;
     private StatementRepository statementRepository;
+    private SimulationDeadlineService deadlineService;
     private SimulationService service;
 
     @BeforeEach
@@ -39,7 +40,9 @@ class SimulationServiceTest {
         accountRepository = mock(AccountRepository.class);
         schoolYearRepository = mock(SchoolYearRepository.class);
         statementRepository = mock(StatementRepository.class);
-        service = new SimulationService(repository, accountRepository, schoolYearRepository, statementRepository);
+        deadlineService = mock(SimulationDeadlineService.class);
+        service = new SimulationService(repository, accountRepository, schoolYearRepository,
+                statementRepository, deadlineService);
 
         when(accountRepository.findById(1L)).thenReturn(Mono.just(account(1L)));
         when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));

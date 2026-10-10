@@ -29,17 +29,20 @@ public class SimulationService {
     private final AccountRepository accountRepository;
     private final SchoolYearRepository schoolYearRepository;
     private final StatementRepository statementRepository;
+    private final SimulationDeadlineService deadlineService;
 
     public SimulationService(
             SimulationRepository repository,
             AccountRepository accountRepository,
             SchoolYearRepository schoolYearRepository,
-            StatementRepository statementRepository
+            StatementRepository statementRepository,
+            SimulationDeadlineService deadlineService
     ) {
         this.repository = repository;
         this.accountRepository = accountRepository;
         this.schoolYearRepository = schoolYearRepository;
         this.statementRepository = statementRepository;
+        this.deadlineService = deadlineService;
     }
 
     public Flux<SimulationResponse> findAllActive() {
@@ -169,15 +172,13 @@ public class SimulationService {
     }
 
     private Mono<SimulationResponse> toResponse(Simulation simulation) {
-        Mono<AccountBasicResponse> accountMono = accountRepository.findById(simulation.getAccountId())
-                .map(this::toAccountResponse)
-                .switchIfEmpty(Mono.just(new AccountBasicResponse(simulation.getAccountId(), null, null)));
+        Mono<Account> accountMono = accountRepository.findById(simulation.getAccountId())
+                .switchIfEmpty(Mono.fromSupplier(() -> accountWithIdOnly(simulation.getAccountId())));
 
-        Mono<StatementBasicResponse> statementMono = simulation.getStatementId() != null
+        Mono<Statement> statementMono = simulation.getStatementId() != null
                 ? statementRepository.findById(simulation.getStatementId())
-                    .map(this::toStatementResponse)
-                    .switchIfEmpty(Mono.just(new StatementBasicResponse(null, null, null, null, null, null)))
-                : Mono.just(new StatementBasicResponse(null, null, null, null, null, null));
+                    .defaultIfEmpty(new Statement())
+                : Mono.just(new Statement());
 
         Mono<SchoolYearResponse> schoolYearMono = simulation.getSchoolYearId() != null
                 ? schoolYearRepository.findById(simulation.getSchoolYearId())
@@ -186,20 +187,37 @@ public class SimulationService {
                 : Mono.just(new SchoolYearResponse(null, null, null, null, null, null));
 
         return Mono.zip(accountMono, statementMono, schoolYearMono)
-                .map(tuple -> new SimulationResponse(
+                .map(tuple -> {
+                    Account account = tuple.getT1();
+                    Statement statement = tuple.getT2();
+                    // The account and the statement are already loaded above, so the
+                    // deadline reuses their pure arithmetic instead of querying again.
+                    boolean extraTime = Boolean.TRUE.equals(account.getAccessibilityExtraTime());
+                    return new SimulationResponse(
                         simulation.getId(),
-                        tuple.getT1(),
-                        tuple.getT2(),
+                        toAccountResponse(account),
+                        toStatementResponse(statement),
                         tuple.getT3(),
                         simulation.getStartedAt(),
                         simulation.getFinishedAt(),
+                        deadlineService.deadlineFor(
+                            simulation.getStartedAt(),
+                            statement.getDurationMinutes(),
+                            extraTime),
                         simulation.getTimeSpentSeconds(),
                         simulation.getFinalScore(),
                         simulation.getStatus(),
                         simulation.getCreatedAt(),
                         simulation.getUpdatedAt(),
                         simulation.getDeletedAt()
-                ));
+                    );
+                });
+    }
+
+    private Account accountWithIdOnly(Long accountId) {
+        Account account = new Account();
+        account.setId(accountId);
+        return account;
     }
 
     private AccountBasicResponse toAccountResponse(Account account) {
