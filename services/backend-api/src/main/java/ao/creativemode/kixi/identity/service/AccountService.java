@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.identity.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.identity.model.Account;
@@ -102,6 +103,23 @@ public class AccountService {
                 .map(this::toResponse);
     }
 
+    /**
+     * Issue #107: turns the accessibility extra time of an account on or off
+     * without touching anything else about it. The flag only changes how long
+     * the server lets a simulation run, so it is deliberately not part of the
+     * full account update, which would re-encode the password.
+     */
+    public Mono<AccountResponse> updateAccessibility(Long id, AccountAccessibilityRequest dto) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
+                .flatMap(entity -> {
+                    entity.setAccessibilityExtraTime(dto.accessibilityExtraTime());
+                    entity.setUpdatedAt(LocalDateTime.now());
+                    return repository.save(entity);
+                })
+                .map(this::toResponse);
+    }
+
     public Mono<Void> softDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
@@ -147,6 +165,7 @@ public class AccountService {
             entity.getEmail(),
             entity.getEmailVerified(),
             entity.getActive(),
+            entity.getAccessibilityExtraTime(),
             entity.getLastLogin(),
             entity.getCreatedAt(),
             entity.getUpdatedAt(),

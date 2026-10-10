@@ -133,7 +133,8 @@ class EnrollmentSecurityTest {
                 List.of("STUDENT"),
                 new MeResponse.SchoolInfo(11L, "ITEL", "ITEL"),
                 new MeResponse.CourseInfo(3L, "INFO", "Informática"),
-                new MeResponse.ClassInfo(7L, "10A", 10, 2024L, "2024/2025"));
+                new MeResponse.ClassInfo(7L, "10A", 10, 2024L, "2024/2025"),
+                false);
     }
 
     private static WebTestClientConfigurer studentJwt() {
