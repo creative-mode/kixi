@@ -17,6 +17,13 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Flux<Simulation> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNull(Long id);
     Mono<Simulation> findByIdAndAccountIdAndDeletedAtIsNull(Long id, Long accountId);
+    Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
+
+    @Modifying
+    @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
+            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, CURRENT_TIMESTAMP, 'IN_PROGRESS') "
+            + "ON CONFLICT (exam_room_id, account_id) DO NOTHING RETURNING *")
+    Mono<Simulation> insertExamRoomSimulation(Long accountId, Long statementId, Long roomId, Integer durationMinutes);
     Mono<Simulation> findByIdAndDeletedAtIsNotNull(Long id);
 
     /** The simulations the expiration job sweeps on every poll. */

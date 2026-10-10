@@ -4,10 +4,12 @@ import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.simulations.config.SimulationTimeLimitProperties;
 import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 
 import java.time.LocalDateTime;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import reactor.core.publisher.Mono;
 
@@ -33,14 +35,23 @@ public class SimulationDeadlineService {
     private final StatementRepository statements;
     private final AccountRepository accounts;
     private final SimulationTimeLimitProperties properties;
+    private final ExamRoomAccess examRoomAccess;
 
+    @Autowired
     public SimulationDeadlineService(
             StatementRepository statements,
             AccountRepository accounts,
-            SimulationTimeLimitProperties properties) {
+            SimulationTimeLimitProperties properties,
+            ExamRoomAccess examRoomAccess) {
         this.statements = statements;
         this.accounts = accounts;
         this.properties = properties;
+        this.examRoomAccess = examRoomAccess;
+    }
+
+    public SimulationDeadlineService(StatementRepository statements, AccountRepository accounts,
+            SimulationTimeLimitProperties properties) {
+        this(statements, accounts, properties, null);
     }
 
     /**
@@ -55,8 +66,8 @@ public class SimulationDeadlineService {
         }
         if (simulation.getExamRoomDurationMinutes() != null) {
             return hasExtraTime(simulation.getAccountId())
-                    .flatMap(extraTime -> Mono.justOrEmpty(effectiveDeadlineFor(
-                            startedAt, simulation.getExamRoomDurationMinutes(), extraTime)));
+                    .flatMap(extraTime -> withRoomEnd(simulation,
+                            effectiveDeadlineFor(startedAt, simulation.getExamRoomDurationMinutes(), extraTime)));
         }
         return statements.findById(statementId)
                 // No duration means no deadline to extend, so the account is not read.
@@ -73,9 +84,8 @@ public class SimulationDeadlineService {
      * @param now the server clock, passed in so the caller decides when it is read
      */
     public Mono<Boolean> expired(Simulation simulation, LocalDateTime now) {
-        return deadline(simulation)
-                .map(deadline -> now.isAfter(deadline))
-                .defaultIfEmpty(false);
+        if (simulation.getStartedAt() != null && now.isBefore(simulation.getStartedAt())) return Mono.just(true);
+        return deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false);
     }
 
     /**
@@ -83,6 +93,11 @@ public class SimulationDeadlineService {
      */
     public Mono<Boolean> acceptsAnswers(Simulation simulation, LocalDateTime now) {
         return expired(simulation, now).map(expired -> !expired);
+    }
+
+    private Mono<LocalDateTime> withRoomEnd(Simulation simulation, LocalDateTime deadline) {
+        if (examRoomAccess == null || simulation.getExamRoomId() == null) return Mono.justOrEmpty(deadline);
+        return examRoomAccess.effectiveRoomDeadline(simulation.getExamRoomId(), deadline);
     }
 
     /**

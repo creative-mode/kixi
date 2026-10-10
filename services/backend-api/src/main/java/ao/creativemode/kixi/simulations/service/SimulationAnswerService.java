@@ -11,6 +11,7 @@ import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -25,21 +26,50 @@ public class SimulationAnswerService {
     private final SimulationRepository simulationRepository;
     private final QuestionRepository questionRepository;
     private final SimulationDeadlineService deadlineService;
+    private final SimulationService simulationService;
 
+    @Autowired
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
         QuestionRepository questionRepository,
-        SimulationDeadlineService deadlineService
+        SimulationDeadlineService deadlineService,
+        SimulationService simulationService
     ) {
         this.repository = repository;
         this.simulationRepository = simulationRepository;
         this.questionRepository = questionRepository;
         this.deadlineService = deadlineService;
+        this.simulationService = simulationService;
+    }
+
+    public SimulationAnswerService(
+        SimulationAnswerRepository repository, SimulationRepository simulationRepository,
+        QuestionRepository questionRepository, SimulationDeadlineService deadlineService) {
+        this(repository, simulationRepository, questionRepository, deadlineService, null);
+    }
+
+    public Mono<Void> authorizeAnswer(Long answerId, Long accountId, boolean admin, boolean teacher) {
+        return repository.findById(answerId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
+            .flatMap(answer -> authorizeSimulation(answer.getSimulationId(), accountId, admin, teacher));
+    }
+
+    public Mono<Void> authorizeSimulation(Long simulationId, Long accountId, boolean admin, boolean teacher) {
+        return simulationService == null ? Mono.empty()
+            : simulationService.authorize(simulationId, accountId, admin, teacher).then();
     }
 
     public Flux<SimulationAnswerResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull().map(this::toResponse);
+    }
+
+    public Flux<SimulationAnswerResponse> findAllActiveForStaff(Long accountId, boolean admin) {
+        return repository.findAllByDeletedAtIsNull()
+            .flatMap(answer -> admin || simulationService == null
+                ? Mono.just(toResponse(answer))
+                : simulationService.authorize(answer.getSimulationId(), accountId, false, true)
+                    .map(ignored -> toResponse(answer)));
     }
 
     public Flux<SimulationAnswerResponse> findAllActiveForAccount(Long accountId) {

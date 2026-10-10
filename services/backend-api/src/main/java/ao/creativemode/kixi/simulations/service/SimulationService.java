@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import java.time.LocalDateTime;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
@@ -18,6 +19,7 @@ import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -30,19 +32,31 @@ public class SimulationService {
     private final SchoolYearRepository schoolYearRepository;
     private final StatementRepository statementRepository;
     private final SimulationDeadlineService deadlineService;
+    private final ExamRoomAccess examRoomAccess;
 
+    @Autowired
     public SimulationService(
             SimulationRepository repository,
             AccountRepository accountRepository,
             SchoolYearRepository schoolYearRepository,
             StatementRepository statementRepository,
-            SimulationDeadlineService deadlineService
+            SimulationDeadlineService deadlineService,
+            ExamRoomAccess examRoomAccess
     ) {
         this.repository = repository;
         this.accountRepository = accountRepository;
         this.schoolYearRepository = schoolYearRepository;
         this.statementRepository = statementRepository;
         this.deadlineService = deadlineService;
+        this.examRoomAccess = examRoomAccess;
+    }
+
+    public SimulationService(
+            SimulationRepository repository, AccountRepository accountRepository,
+            SchoolYearRepository schoolYearRepository, StatementRepository statementRepository,
+            SimulationDeadlineService deadlineService) {
+        this(repository, accountRepository, schoolYearRepository, statementRepository,
+                deadlineService, null);
     }
 
     public Flux<SimulationResponse> findAllActive() {
@@ -68,6 +82,44 @@ public class SimulationService {
     public Mono<SimulationResponse> findByIdForAccount(Long id, Long accountId) {
         return repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId)
                 .flatMap(this::toResponse);
+    }
+
+    public Mono<Simulation> authorize(Long id, Long accountId, boolean admin, boolean teacher) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
+                .flatMap(simulation -> {
+                    if (admin || (simulation.getExamRoomId() == null && teacher)
+                            || (simulation.getExamRoomId() == null && accountId.equals(simulation.getAccountId()))) {
+                        return Mono.just(simulation);
+                    }
+                    if (examRoomAccess == null) {
+                        return Mono.error(ApiException.notFound("Simulation not found: " + id));
+                    }
+                    return examRoomAccess.canAccessSimulation(simulation.getExamRoomId(), simulation.getId(),
+                                    simulation.getAccountId(), accountId, admin, teacher)
+                            .flatMap(allowed -> allowed ? Mono.just(simulation)
+                                    : Mono.error(ApiException.notFound("Simulation not found: " + id)));
+                });
+    }
+
+    public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
+        return repository.findByDeletedAtIsNull()
+                .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
+                        .flatMap(this::toResponse));
+    }
+
+    public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
+        return repository.findByDeletedAtIsNotNull()
+                .flatMap(simulation -> {
+                    if (admin || (simulation.getExamRoomId() == null
+                            && (teacher || accountId.equals(simulation.getAccountId())))) {
+                        return toResponse(simulation);
+                    }
+                    if (examRoomAccess == null || simulation.getExamRoomId() == null) return Mono.empty();
+                    return examRoomAccess.canAccessSimulation(simulation.getExamRoomId(), simulation.getId(),
+                            simulation.getAccountId(), accountId, false, teacher)
+                            .filter(Boolean::booleanValue).flatMap(ignored -> toResponse(simulation));
+                });
     }
 
     public Mono<SimulationResponse> create(SimulationRequest dto) {
