@@ -38,6 +38,14 @@ public record LeaderboardResponse(
      * One row of the window. Names are masked on the way out: a ranking that named
      * classmates whole would republish data the student never consented to share.
      */
+    /**
+     * One row of the window. Names are masked on the way out: a ranking that named
+     * classmates whole would republish data the student never consented to share.
+     *
+     * @param accountId the caller's own id, and null for everyone else. A colleague's
+     *                  account id would turn a masked label back into a person, since
+     *                  the same id answers half a dozen other endpoints.
+     */
     public record Entry(
             int position,
             Long accountId,

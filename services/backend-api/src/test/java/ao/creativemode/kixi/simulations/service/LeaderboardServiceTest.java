@@ -6,11 +6,14 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
+import ao.creativemode.kixi.institutions.model.Enrollment;
+import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
@@ -39,14 +42,48 @@ class LeaderboardServiceTest {
     private static final Long SCHOOL_ID = 1L;
 
     private MeService meService;
+    private EnrollmentRepository enrollments;
     private LeaderboardRepository repository;
     private LeaderboardService service;
 
     @BeforeEach
     void setUp() {
         meService = mock(MeService.class);
+        enrollments = mock(EnrollmentRepository.class);
         repository = mock(LeaderboardRepository.class);
-        service = new LeaderboardService(meService, repository);
+        service = new LeaderboardService(meService, enrollments, repository);
+        when(meService.classInstitutionId(CLASS_ID)).thenReturn(Mono.just(SCHOOL_ID));
+    }
+
+    /** Every account in these tests holds a seat, unless a test takes it away. */
+    @BeforeEach
+    void everyoneHasASeat() {
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenAnswer(call -> Flux.just(enrollment(
+                        call.<Long>getArgument(0), CLASS_ID, SCHOOL_ID, false)));
+    }
+
+    private static Enrollment enrollment(
+            Long accountId, Long classId, Long institutionId, boolean cancelled) {
+        Enrollment enrollment = new Enrollment();
+        enrollment.setAccountId(accountId);
+        enrollment.setClassId(classId);
+        enrollment.setSchoolYearId(1L);
+        if (cancelled) {
+            enrollment.markAsDeleted();
+        }
+        return enrollment;
+    }
+
+    /** A cancelled enrollment: the seat is gone, the profile does not know it. */
+    private void cancelledEnrollment() {
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong()))
+                .thenReturn(Flux.just(enrollment(ACCOUNT_ID, CLASS_ID, SCHOOL_ID, true)));
+    }
+
+    /** No enrollment at all: linked to the school, seated nowhere. */
+    private void noEnrollment() {
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(anyLong())).thenReturn(Flux.empty());
     }
 
     // ── The cohort ──────────────────────────────────────────────────────────
@@ -74,6 +111,75 @@ class LeaderboardServiceTest {
                 .verifyComplete();
 
         verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID);
+    }
+
+    // ── Membership is proved, not assumed ───────────────────────────────────
+
+    @Test
+    void aCancelledEnrollmentDoesNotBuyTheRankingOfTheClassItLeft() {
+        // /me still reports the class and the school: it picks the most recent enrollment
+        // without asking whether it is active, so on its own it would say yes.
+        cancelledEnrollment();
+        enrolled(CLASS_ID);
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(error).hasMessageContaining("No active enrollment");
+                })
+                .verify();
+
+        verify(repository, never()).findAverages(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void anInstitutionalLinkIsNotASeatInAnyClass() {
+        // Linked to the school, but with no enrollment anywhere inside it: the school
+        // ranking counts ACTIVE students only, and this account is not one of them.
+        enrolled(CLASS_ID);
+        noEnrollment();
+        cohortOf(List.of(score(101L, 90.0)), 20);
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(error).hasMessageContaining("No active enrollment");
+                })
+                .verify();
+
+        verify(repository, never()).findAverages(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void anActiveSeatOpensTheRankingOfThatSchool() {
+        enrolled(CLASS_ID);
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+                .expectNextCount(1)
+                .verifyComplete();
+    }
+
+    // ── Privacy ─────────────────────────────────────────────────────────────
+
+    @Test
+    void doesNotHandOutTheAccountIdOfAColleague() {
+        enrolled(CLASS_ID);
+        cohortOf(withCaller(descending(12), 4), 12);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.entries())
+                .filteredOn(entry -> entry.me())
+                .isNotEmpty()
+                .allSatisfy(entry -> assertThat(entry.accountId()).isEqualTo(ACCOUNT_ID));
+        // The masked name without the id is all the client needs to render a row, and the
+        // id is what would let someone match a row back to a person across the API.
+        assertThat(response.entries())
+                .filteredOn(entry -> !entry.me())
+                .isNotEmpty()
+                .allSatisfy(entry -> assertThat(entry.accountId()).isNull());
     }
 
     @Test

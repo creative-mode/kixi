@@ -74,4 +74,15 @@ public class Enrollment {
     public boolean isDeleted() {
         return deletedAt != null;
     }
+
+    /**
+     * Whether this enrollment still seats the student.
+     *
+     * <p>A cancelled enrollment is not a seat, whatever the query that fetched it
+     * filtered on. Issue #117 ranks a cohort over ACTIVE students only, so the code that
+     * decides whether the caller belongs has to ask this rather than assume.</p>
+     */
+    public boolean isActive() {
+        return STATUS_ACTIVE.equals(status) && deletedAt == null;
+    }
 }

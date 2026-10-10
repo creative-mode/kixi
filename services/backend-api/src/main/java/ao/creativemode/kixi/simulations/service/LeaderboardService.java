@@ -1,5 +1,8 @@
 package ao.creativemode.kixi.simulations.service;
 
+import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
+import ao.creativemode.kixi.institutions.model.Enrollment;
+import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
@@ -27,11 +30,17 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * The relative leaderboard of issue #117.
  *
- * <p>Three rules shape it:</p>
+ * <p>Four rules shape it:</p>
  * <ol>
  *   <li><b>The caller decides the cohort.</b> {@code scope=class} and {@code school}
  *       resolve through {@code /me}, never from a parameter, so nobody can ask for a
  *       group they do not belong to.</li>
+ *   <li><b>Membership is proved, not assumed.</b> {@code /me} is not proof of belonging:
+ *       it answers with the most recent enrollment whether or not it is active, and its
+ *       school can also come from an institutional link that has no enrollment behind it.
+ *       Both are read here as a starting point and then confirmed against an ACTIVE
+ *       enrollment, so neither a cancelled seat nor a bare affiliation can buy a ranking
+ *       that is counted over active students alone.</li>
  *   <li><b>The cache holds the cohort, the answer does not.</b> A ranking is cached per
  *       cohort because every member reads the same rows; the window that comes back is
  *       built per request. Caching the response instead would hand one caller somebody
@@ -40,6 +49,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *       name who is last, which is the exposure the issue asks to avoid. The caller
  *       still sees their own position and immediate neighbours.</li>
  * </ol>
+ *
+ * <p>A colleague appears as a masked label and no identifier: a stable account id in a
+ * response meant to hide who somebody is is a correlation handle waiting to be used
+ * against the endpoints that do name people.</p>
  *
  * <p>{@code scope=friends} is not implemented here: friendships are issue #121, and the
  * ranking is what that issue integrates into, not what it waits for.</p>
@@ -63,12 +76,17 @@ public class LeaderboardService {
     private static final int MAX_CACHED_COHORTS = 500;
 
     private final MeService meService;
+    private final EnrollmentRepository enrollments;
     private final LeaderboardRepository repository;
 
     private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
-    public LeaderboardService(MeService meService, LeaderboardRepository repository) {
+    public LeaderboardService(
+            MeService meService,
+            EnrollmentRepository enrollments,
+            LeaderboardRepository repository) {
         this.meService = meService;
+        this.enrollments = enrollments;
         this.repository = repository;
     }
 
@@ -90,28 +108,72 @@ public class LeaderboardService {
             }
 
             return cohortOf(accountId, resolved)
-                    .flatMap(groupId -> ranking(resolved, groupId, statementId, window)
-                            .flatMap(ranked -> windowAround(accountId, ranked, resolved, groupId, statementId, window)));
+                    .flatMap(cohort -> ranking(resolved, cohort.id(), statementId, window)
+                            .flatMap(ranked -> windowAround(
+                                    accountId, ranked, resolved, cohort.id(), statementId, window)));
         });
     }
 
-    /** The class or the school the caller actually belongs to. */
-    private Mono<Long> cohortOf(Long accountId, Scope scope) {
-        return meService.getMe(accountId)
-                .flatMap(me -> switch (scope) {
-                    case CLASS -> me.currentClass() != null
-                            ? Mono.just(me.currentClass().id())
-                            : Mono.error(ApiException.forbidden(
-                                    "A class ranking needs an enrollment; this account has none"));
-                    case SCHOOL -> me.school() != null
-                            ? Mono.just(me.school().id())
-                            : Mono.error(ApiException.forbidden(
-                                    "A school ranking needs an affiliation; this account has none"));
-                });
+    /**
+     * The class or school to rank, together with the proof that the caller sits in it.
+     *
+     * <p>{@code /me} proposes; this confirms. Its enrollment is the most recent one
+     * whatever its status, and its school may come from an institutional link that has no
+     * enrollment behind it — neither is a reason to hand out a ranking counted over
+     * ACTIVE students.</p>
+     */
+    private Mono<Cohort> cohortOf(Long accountId, Scope scope) {
+        return meService.getMe(accountId).flatMap(me -> switch (scope) {
+            case CLASS -> classCohort(accountId, me);
+            case SCHOOL -> schoolCohort(accountId, me);
+        });
     }
 
-    /** The whole cohort, ordered. Every member reads the same rows, which is exactly why
-     * it — and not the response — is what gets cached. */
+    private Mono<Cohort> classCohort(Long accountId, MeResponse me) {
+        if (me.currentClass() == null) {
+            return Mono.error(ApiException.forbidden(
+                    "A class ranking needs an enrollment; this account has none"));
+        }
+        Long classId = me.currentClass().id();
+        return activeEnrollmentIn(accountId, classId)
+                .switchIfEmpty(Mono.error(ApiException.forbidden(
+                        "No active enrollment in that class")))
+                .map(enrollment -> new Cohort(classId, enrollment.getSchoolYearId()));
+    }
+
+    private Mono<Cohort> schoolCohort(Long accountId, MeResponse me) {
+        if (me.school() == null) {
+            return Mono.error(ApiException.forbidden(
+                    "A school ranking needs an affiliation; this account has none"));
+        }
+        Long institutionId = me.school().id();
+        // An institutional link is not a seat in a class, so on its own it cannot open the
+        // ranking: at least one ACTIVE enrollment inside that school is required. Resolved
+        // without blocking, because reading the school of an enrollment is itself a query.
+        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
+                .filter(Enrollment::isActive)
+                .filter(enrollment -> enrollment.getClassId() != null)
+                .concatMap(enrollment -> meService.classInstitutionId(enrollment.getClassId())
+                        .filter(institutionId::equals)
+                        .map(school -> enrollment))
+                .next()
+                .switchIfEmpty(Mono.error(ApiException.forbidden(
+                        "No active enrollment in that school")))
+                .map(enrollment -> new Cohort(institutionId, enrollment.getSchoolYearId()));
+    }
+
+    /** The caller's ACTIVE enrollment in the class they are asking about. */
+    private Mono<Enrollment> activeEnrollmentIn(Long accountId, Long classId) {
+        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
+                .filter(Enrollment::isActive)
+                .filter(enrollment -> classId.equals(enrollment.getClassId()))
+                .next();
+    }
+
+    /**
+     * The whole cohort, ordered. Every member reads the same rows, which is exactly why
+     * it — and not the response — is what gets cached.
+     */
     private Mono<Ranking> ranking(Scope scope, Long groupId, Long statementId, Period period) {
         CacheKey key = new CacheKey(scope, groupId, statementId, period);
 
@@ -237,12 +299,18 @@ public class LeaderboardService {
         names.forEach(name -> labels.put(name.accountId(), mask(name.firstName(), name.lastName())));
 
         List<LeaderboardResponse.Entry> entries = visible.stream()
-                .map(entry -> new LeaderboardResponse.Entry(
-                        entry.position(),
-                        entry.accountId(),
-                        labels.getOrDefault(entry.accountId(), "Aluno"),
-                        entry.average(),
-                        entry.accountId().equals(accountId)))
+                .map(entry -> {
+                    boolean caller = entry.accountId().equals(accountId);
+                    return new LeaderboardResponse.Entry(
+                            entry.position(),
+                            // The caller's own id is their own. A colleague's would turn a
+                            // masked label back into a person, since the same id answers
+                            // half a dozen other endpoints.
+                            caller ? accountId : null,
+                            labels.getOrDefault(entry.accountId(), "Aluno"),
+                            entry.average(),
+                            caller);
+                })
                 .toList();
 
         return new LeaderboardResponse(
@@ -269,6 +337,9 @@ public class LeaderboardService {
         String masked = (first + " " + initial).trim();
         return masked.isEmpty() ? "Aluno" : masked;
     }
+
+    /** The group being ranked and the year the caller's seat in it belongs to. */
+    record Cohort(Long id, Long schoolYearId) { }
 
     /** The time window a ranking covers. */
     enum Period {
