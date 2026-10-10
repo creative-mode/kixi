@@ -159,8 +159,18 @@ public class SimulationSubmissionService {
         }
         return statements.findByIdAndDeletedAtIsNull(question.getStatementId())
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
-            .flatMap(statement -> teachingAuthorizer.requireAssignedTo(
-                    accountId, false, statement.getClassId(), statement.getSubjectId()));
+            .flatMap(statement -> {
+                if (statement.getClassId() != null) {
+                    return teachingAuthorizer.requireAssignedTo(
+                        accountId, false, statement.getClassId(), statement.getSubjectId());
+                }
+                if (statement.getInstitutionId() != null) {
+                    return teachingAuthorizer.requireCanAuthor(
+                        accountId, false, statement.getInstitutionId(), statement.getSubjectId());
+                }
+                return Mono.error(ApiException.forbidden(
+                    "Only administrators can grade statements without a class or institution"));
+            });
     }
 
     private Mono<Void> refreshFinalScore(Long simulationId) {

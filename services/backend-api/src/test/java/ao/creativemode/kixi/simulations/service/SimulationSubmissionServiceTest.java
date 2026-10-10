@@ -178,6 +178,52 @@ class SimulationSubmissionServiceTest {
     }
 
     @Test
+    void requiresInstitutionAccessToGradeAStatementWithoutAClass() {
+        SimulationAnswer pending = pendingAnswer();
+        Question question = question(2L, 5);
+        question.setStatementId(20L);
+        Statement schoolStatement = statement();
+        schoolStatement.setClassId(null);
+        schoolStatement.setInstitutionId(8L);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(statements.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(schoolStatement));
+        when(teachingAuthorizer.requireCanAuthor(7L, false, 8L, 4L)).thenReturn(Mono.empty());
+        when(answers.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(simulations.findByIdAndDeletedAtIsNull(10L)).thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L))).thenReturn(Flux.just(pending));
+        when(simulations.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.grade(30L, 4.5, 7L, false))
+            .assertNext(response -> assertThat(response.reviewStatus()).isEqualTo(SimulationAnswerStatus.GRADED))
+            .verifyComplete();
+
+        verify(teachingAuthorizer).requireCanAuthor(7L, false, 8L, 4L);
+        verify(teachingAuthorizer, never()).requireAssignedTo(any(), org.mockito.ArgumentMatchers.anyBoolean(),
+            any(), any());
+    }
+
+    @Test
+    void rejectsNonAdminGradingWhenStatementHasNoClassOrInstitution() {
+        SimulationAnswer pending = pendingAnswer();
+        Question question = question(2L, 5);
+        question.setStatementId(20L);
+        Statement unscopedStatement = statement();
+        unscopedStatement.setClassId(null);
+        unscopedStatement.setInstitutionId(null);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(statements.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(unscopedStatement));
+
+        StepVerifier.create(service.grade(30L, 4.5, 7L, false))
+            .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+            .verify();
+
+        verifyNoInteractions(teachingAuthorizer);
+        verify(answers, never()).save(any());
+    }
+
+    @Test
     void administratorsCanGradeWithoutAClassAssignment() {
         SimulationAnswer pending = pendingAnswer();
         Question question = question(2L, 5);

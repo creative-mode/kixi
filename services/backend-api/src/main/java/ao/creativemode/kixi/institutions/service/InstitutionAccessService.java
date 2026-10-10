@@ -76,6 +76,7 @@ public class InstitutionAccessService implements TeachingAssignmentAuthorizer {
      * {@code institutionId}; fails otherwise. The institution must exist and
      * teach the subject; a non-administrator must be a teacher affiliated with it.
      */
+    @Override
     public Mono<Void> requireCanAuthor(Long accountId, boolean admin, Long institutionId, Long subjectId) {
         Mono<Void> institution = institutionRepository
             .findByIdAndDeletedAtIsNull(institutionId)
