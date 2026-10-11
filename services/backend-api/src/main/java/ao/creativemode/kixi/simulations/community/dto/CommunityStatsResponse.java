@@ -7,8 +7,9 @@ import java.util.List;
  * How the community did on one statement, with the caller's own attempt for
  * the "you vs. the average" comparison (issue #119).
  *
- * <p>Only finished simulations with a grade count ({@code finalScore IS NOT
- * NULL}); answers still waiting for review stay out of the per-question
+ * <p>Only finished simulations with a final grade count
+ * ({@code finalScore IS NOT NULL} and no answer still awaiting review);
+ * answers still waiting for review stay out of the per-question
  * denominators instead of counting as wrong. Scores are bucketed relative to
  * the statement's {@code totalMaxScore} so papers of any scale render.
  */

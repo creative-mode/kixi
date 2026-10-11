@@ -7,9 +7,10 @@ import java.util.List;
  * One resolution a student chose to share (issue #119).
  *
  * <p>Only consented shares are ever rendered, and an anonymous share carries
- * no name at all — the account behind it is never exposed, not even its id.
- * There is no answer key here either: {@code selectedLabel} is what the
- * author chose, never which option is right.
+ * neither a name nor a school — in a small school, school plus grade plus
+ * timing plus free text could re-identify the author. The account behind it
+ * is never exposed, not even its id. There is no answer key here either:
+ * {@code selectedLabel} is what the author chose, never which option is right.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SharedSolutionResponse(

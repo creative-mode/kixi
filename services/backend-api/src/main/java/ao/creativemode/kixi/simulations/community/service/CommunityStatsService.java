@@ -4,8 +4,11 @@ import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse;
 import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse.MineAnswer;
 import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse.MineSummary;
@@ -13,6 +16,7 @@ import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse.Que
 import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse.ScoreBucket;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.SimulationAnswerStatus;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
@@ -20,8 +24,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -30,11 +36,13 @@ import reactor.core.publisher.Mono;
  * (issue #119): grade distribution, per-question hit rate, average time, and
  * the caller's own attempt for the "you vs. the average" comparison.
  *
- * <p>The population is finished simulations with a grade
- * ({@code finalScore IS NOT NULL}) on a visible statement. Per-question
- * denominators only count answers that can answer the question being asked:
- * known outcomes for the hit rate, graded answers for the average score.
- * Pending review is "not yet known", never "wrong".
+ * <p>The population is finished simulations with a final grade
+ * ({@code finalScore IS NOT NULL} and no answer still awaiting review, whose
+ * grade is partial until the review lands) on a visible statement, excluding
+ * deleted accounts. Per-question denominators only count answers that can
+ * answer the question being asked: known outcomes for the hit rate, graded
+ * answers for the average score. Pending review is "not yet known", never
+ * "wrong".
  */
 @Service
 public class CommunityStatsService {
@@ -46,6 +54,8 @@ public class CommunityStatsService {
     private final SimulationRepository simulations;
     private final SimulationAnswerRepository answers;
     private final MeService meService;
+    private final AccountRepository accounts;
+    private final ExamRoomAccess examRooms;
 
     public CommunityStatsService(
             StatementRepository statements,
@@ -54,15 +64,31 @@ public class CommunityStatsService {
             SimulationAnswerRepository answers,
             MeService meService
     ) {
+        this(statements, questions, simulations, answers, meService, null, null);
+    }
+
+    @Autowired
+    public CommunityStatsService(
+            StatementRepository statements,
+            QuestionRepository questions,
+            SimulationRepository simulations,
+            SimulationAnswerRepository answers,
+            MeService meService,
+            AccountRepository accounts,
+            ExamRoomAccess examRooms
+    ) {
         this.statements = statements;
         this.questions = questions;
         this.simulations = simulations;
         this.answers = answers;
         this.meService = meService;
+        this.accounts = accounts;
+        this.examRooms = examRooms;
     }
 
     public Mono<CommunityStatsResponse> findCommunity(Long statementId, Long accountId) {
         return readAccess(statementId, accountId)
+                .flatMap(statement -> requireNoOpenRoom(statementId).thenReturn(statement))
                 .flatMap(statement -> Mono.zip(
                         questions.findAllByStatementIdOrderedByOrderIndex(statementId).collectList(),
                         simulations.findAllByStatementIdAndStatusAndDeletedAtIsNull(
@@ -96,28 +122,79 @@ public class CommunityStatsService {
         }).then();
     }
 
+    /**
+     * The exam-room answer-key rule, shared with the solutions listing: while a
+     * room for this statement is not closed, community figures would leak the
+     * key to students still sitting the paper (hit rates and scores reveal the
+     * right options), so the routes answer 409 — the same status a result that
+     * has not been earned yet gets. Null-safe like
+     * {@code SimulationResultService}: without rooms wired in, everything is visible.
+     */
+    static Mono<Void> requireNoOpenRoom(ExamRoomAccess examRooms, Long statementId) {
+        if (examRooms == null) {
+            return Mono.empty();
+        }
+        Mono<Boolean> open = examRooms.hasNonClosedRoom(statementId);
+        return (open == null ? Mono.just(false) : open)
+                .defaultIfEmpty(false)
+                .flatMap(hasOpen -> hasOpen
+                        ? Mono.error(ApiException.conflict(
+                                "The community is only available once the exam rooms for this "
+                                        + "statement are closed"))
+                        : Mono.empty());
+    }
+
+    private Mono<Void> requireNoOpenRoom(Long statementId) {
+        return requireNoOpenRoom(examRooms, statementId);
+    }
+
     private Mono<CommunityStatsResponse> withAnswers(
             Statement statement,
             List<Question> paper,
             List<Simulation> finished,
             Long accountId
     ) {
-        List<Long> simulationIds = finished.stream().map(Simulation::getId).toList();
-        Mono<List<SimulationAnswer>> allAnswers = simulationIds.isEmpty()
-                ? Mono.just(List.of())
-                : answers.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds).collectList();
-        Mono<Simulation> mine = simulations
-                .findFirstByStatementIdAndAccountIdAndStatusAndDeletedAtIsNullOrderByIdDesc(
-                        statement.getId(), accountId, SimulationStatus.FINISHED)
-                .defaultIfEmpty(new Simulation());
-        return Mono.zip(allAnswers, mine).flatMap(tuple -> {
-            Simulation mineOrEmpty = tuple.getT2().getId() == null ? null : tuple.getT2();
-            Mono<List<SimulationAnswer>> mineAnswers = mineOrEmpty == null
+        return withoutDeletedAccounts(finished).flatMap(kept -> {
+            List<Long> simulationIds = kept.stream().map(Simulation::getId).toList();
+            Mono<List<SimulationAnswer>> allAnswers = simulationIds.isEmpty()
                     ? Mono.just(List.of())
-                    : answers.findAllBySimulationIdAndDeletedAtIsNull(mineOrEmpty.getId()).collectList();
-            return mineAnswers.map(mineList -> assemble(statement, paper, finished, tuple.getT1(),
-                    mineOrEmpty, mineList));
+                    : answers.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds).collectList();
+            Mono<Simulation> mine = simulations
+                    .findFirstByStatementIdAndAccountIdAndStatusAndDeletedAtIsNullOrderByIdDesc(
+                            statement.getId(), accountId, SimulationStatus.FINISHED)
+                    .defaultIfEmpty(new Simulation());
+            return Mono.zip(allAnswers, mine).flatMap(tuple -> {
+                Simulation mineOrEmpty = tuple.getT2().getId() == null ? null : tuple.getT2();
+                Mono<List<SimulationAnswer>> mineAnswers = mineOrEmpty == null
+                        ? Mono.just(List.of())
+                        : answers.findAllBySimulationIdAndDeletedAtIsNull(mineOrEmpty.getId()).collectList();
+                return mineAnswers.map(mineList -> assemble(statement, paper, kept, tuple.getT1(),
+                        mineOrEmpty, mineList));
+            });
         });
+    }
+
+    /**
+     * Grades and resolutions of deleted accounts stay out of the community:
+     * leaving is leaving, everywhere. Without accounts wired in (unit tests
+     * for the maths) there is nothing to check against.
+     */
+    private Mono<List<Simulation>> withoutDeletedAccounts(List<Simulation> finished) {
+        if (accounts == null || finished.isEmpty()) {
+            return Mono.just(finished);
+        }
+        List<Long> accountIds = finished.stream()
+                .map(Simulation::getAccountId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        return accounts.findAllById(accountIds)
+                .filter(account -> account.getDeletedAt() == null)
+                .map(Account::getId)
+                .collect(Collectors.toSet())
+                .map(active -> finished.stream()
+                        .filter(simulation -> active.contains(simulation.getAccountId()))
+                        .toList());
     }
 
     /**
@@ -132,8 +209,17 @@ public class CommunityStatsService {
             Simulation mine,
             List<SimulationAnswer> mineAnswers
     ) {
+        // Awaiting review means partially graded: finish() writes the sum of
+        // what is corrected so far and grade() refreshes it later, so these
+        // papers sit out the distribution until their grade is final instead
+        // of dragging the mean down. Their decided answers still count below.
+        Set<Long> pendingSimulations = allAnswers.stream()
+                .filter(answer -> SimulationAnswerStatus.PENDING_REVIEW == answer.getReviewStatus())
+                .map(SimulationAnswer::getSimulationId)
+                .collect(Collectors.toSet());
         List<Simulation> graded = finished.stream()
-                .filter(simulation -> simulation.getFinalScore() != null)
+                .filter(simulation -> simulation.getFinalScore() != null
+                        && !pendingSimulations.contains(simulation.getId()))
                 .toList();
         List<Double> scores = graded.stream()
                 .map(Simulation::getFinalScore)

@@ -6,6 +6,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.dto.PageResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.community.dto.ShareSolutionRequest;
 import ao.creativemode.kixi.simulations.community.dto.SharedSolutionResponse;
 import ao.creativemode.kixi.simulations.community.dto.SharedSolutionResponse.InstitutionRef;
@@ -25,8 +26,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -53,6 +54,7 @@ public class SolutionSharingService {
     private final InstitutionRepository institutions;
     private final MeService meService;
     private final CommunityStatsService community;
+    private final ExamRoomAccess examRooms;
 
     public SolutionSharingService(
             SolutionShareRepository shares,
@@ -64,6 +66,22 @@ public class SolutionSharingService {
             MeService meService,
             CommunityStatsService community
     ) {
+        this(shares, simulations, answers, questions, options, institutions, meService, community,
+                null);
+    }
+
+    @Autowired
+    public SolutionSharingService(
+            SolutionShareRepository shares,
+            SimulationRepository simulations,
+            SimulationAnswerRepository answers,
+            QuestionRepository questions,
+            QuestionOptionRepository options,
+            InstitutionRepository institutions,
+            MeService meService,
+            CommunityStatsService community,
+            ExamRoomAccess examRooms
+    ) {
         this.shares = shares;
         this.simulations = simulations;
         this.answers = answers;
@@ -72,14 +90,20 @@ public class SolutionSharingService {
         this.institutions = institutions;
         this.meService = meService;
         this.community = community;
+        this.examRooms = examRooms;
     }
 
     /**
      * Opt in: mark the caller's finished simulation as shared. Sharing twice
      * refreshes the consent instead of duplicating it.
+     *
+     * <p>An exam-room attempt shares only once its room's key is visible
+     * (room closed): sharing early would hand the paper to students still
+     * sitting it through the solutions listing.
      */
     public Mono<SolutionShareResponse> share(Long simulationId, Long accountId, ShareSolutionRequest request) {
         return ownedFinished(simulationId, accountId)
+                .flatMap(simulation -> requireShareableKey(simulation).thenReturn(simulation))
                 .flatMap(simulation -> snapshotInstitution(accountId)
                         .flatMap(institutionId -> upsert(simulation, validated(request), institutionId)));
     }
@@ -101,24 +125,33 @@ public class SolutionSharingService {
      * Shared resolutions for one statement, newest first. An
      * {@code institutionId} narrows the listing to that school (which must
      * exist); without it the listing spans schools, the point of the issue.
+     *
+     * <p>Like the aggregates, the listing stays shut while an exam room for
+     * the statement is not closed: labels, free text and scores would
+     * otherwise reveal the key mid-exam. Viewing without having finished is
+     * otherwise allowed on purpose — a consented share is a public study
+     * artifact, like a forum post, not a second answer key.
      */
     public Mono<PageResponse<SharedSolutionResponse>> listSolutions(
             Long statementId, Long institutionId, int page, int size, Long accountId
     ) {
         validatePaging(page, size);
         return community.readAccess(statementId, accountId)
+                .flatMap(statement -> CommunityStatsService.requireNoOpenRoom(examRooms,
+                                statement.getId())
+                        .thenReturn(statement))
                 .flatMap(statement -> institutionExists(institutionId)
                         .then(Mono.defer(() -> {
-                            PageRequest paging = PageRequest.of(page, size,
-                                    Sort.by(Sort.Direction.DESC, "created_at"));
+                            long offset = (long) page * size;
                             Mono<List<SolutionShare>> pageContent = institutionId == null
-                                    ? shares.findAllByStatementIdAndDeletedAtIsNull(
-                                            statement.getId(), paging).collectList()
-                                    : shares.findAllByStatementIdAndInstitutionIdAndDeletedAtIsNull(
-                                            statement.getId(), institutionId, paging).collectList();
+                                    ? shares.findPageByStatement(statement.getId(), size, offset)
+                                            .collectList()
+                                    : shares.findPageByStatementAndInstitution(
+                                            statement.getId(), institutionId, size, offset)
+                                            .collectList();
                             Mono<Long> total = institutionId == null
-                                    ? shares.countByStatementIdAndDeletedAtIsNull(statement.getId())
-                                    : shares.countByStatementIdAndInstitutionIdAndDeletedAtIsNull(
+                                    ? shares.countPageByStatement(statement.getId())
+                                    : shares.countPageByStatementAndInstitution(
                                             statement.getId(), institutionId);
                             return Mono.zip(pageContent, total);
                         }))
@@ -130,6 +163,9 @@ public class SolutionSharingService {
      * The caller's simulation and nobody else's — anyone else's id reads as
      * not found — and only once it is finished. There is no result to share
      * while the paper is still running.
+     *
+     * <p>Revoking goes through here too, deliberately without the key check
+     * below: taking a share back must never be blocked.
      */
     private Mono<Simulation> ownedFinished(Long simulationId, Long accountId) {
         return simulations.findByIdAndAccountIdAndDeletedAtIsNull(simulationId, accountId)
@@ -142,6 +178,26 @@ public class SolutionSharingService {
     }
 
     /**
+     * An exam-room attempt shares only once its room's key is visible, the
+     * same rule {@code SimulationResultService} applies to results. Practice
+     * simulations (no room) are always shareable by their owner: the listing
+     * itself stays shut while any room for the statement is open.
+     */
+    private Mono<Void> requireShareableKey(Simulation simulation) {
+        if (simulation.getExamRoomId() == null || examRooms == null) {
+            return Mono.empty();
+        }
+        Mono<Boolean> visible = examRooms.answerKeyVisible(simulation.getExamRoomId());
+        return (visible == null ? Mono.just(false) : visible)
+                .defaultIfEmpty(false)
+                .flatMap(keyVisible -> keyVisible
+                        ? Mono.empty()
+                        : Mono.error(ApiException.conflict(
+                                "This simulation ran in an exam room whose answer key is not "
+                                        + "visible yet; it can be shared once the room closes")));
+    }
+
+    /**
      * The school snapshot frozen onto the share. Empty when the student has no
      * school to freeze — the share then simply carries none.
      */
@@ -151,20 +207,33 @@ public class SolutionSharingService {
                         me.school() == null ? null : me.school().id()));
     }
 
+    /**
+     * Find-then-save under the partial unique index: two concurrent shares
+     * race to the insert and the loser gets a constraint violation instead of
+     * a 500 — it re-reads the winner and refreshes the consent on it.
+     */
     private Mono<SolutionShareResponse> upsert(
             Simulation simulation, Consent consent, Optional<Long> institutionId
     ) {
-        return shares.findBySimulationIdAndDeletedAtIsNull(simulation.getId())
+        Mono<SolutionShareResponse> attempt = shares
+                .findBySimulationIdAndDeletedAtIsNull(simulation.getId())
                 .defaultIfEmpty(newShare(simulation, institutionId))
-                .flatMap(share -> {
-                    share.setAnonymous(consent.anonymous());
-                    share.setDisplayName(consent.displayName());
-                    share.setConsentAt(LocalDateTime.now());
-                    share.setUpdatedAt(LocalDateTime.now());
-                    return shares.save(share);
-                })
-                .map(share -> new SolutionShareResponse(share.getId(), share.getSimulationId(),
-                        share.getAnonymous(), share.getDisplayName(), share.getConsentAt()));
+                .flatMap(share -> applyConsent(share, consent));
+        return attempt.onErrorResume(DataIntegrityViolationException.class, duplicate ->
+                shares.findBySimulationIdAndDeletedAtIsNull(simulation.getId())
+                        .switchIfEmpty(Mono.error(ApiException.conflict(
+                                "The share changed concurrently; please try again")))
+                        .flatMap(existing -> applyConsent(existing, consent)));
+    }
+
+    private Mono<SolutionShareResponse> applyConsent(SolutionShare share, Consent consent) {
+        share.setAnonymous(consent.anonymous());
+        share.setDisplayName(consent.displayName());
+        share.setConsentAt(LocalDateTime.now());
+        share.setUpdatedAt(LocalDateTime.now());
+        return shares.save(share)
+                .map(saved -> new SolutionShareResponse(saved.getId(), saved.getSimulationId(),
+                        saved.getAnonymous(), saved.getDisplayName(), saved.getConsentAt()));
     }
 
     private static SolutionShare newShare(Simulation simulation, Optional<Long> institutionId) {
@@ -228,16 +297,26 @@ public class SolutionSharingService {
     /**
      * One batched read per table, then assembly in memory — the same shape as
      * {@code SimulationResultService}, minus the answer key, which never
-     * leaves the owner's own result route.
+     * leaves the owner's own result route. The page itself already only holds
+     * shares of finished, active simulations of active accounts (see the
+     * repository queries); the filters below are belt and braces for the race
+     * between the page read and these reads.
      */
     private Mono<List<SharedSolutionResponse>> render(Long statementId, List<SolutionShare> page) {
         if (page.isEmpty()) {
             return Mono.just(List.of());
         }
         List<Long> simulationIds = page.stream().map(SolutionShare::getSimulationId).toList();
+        // An empty IN () is a syntax error in SQL, not an empty result.
+        Mono<List<Simulation>> simulationsMono = simulationIds.isEmpty()
+                ? Mono.just(List.of())
+                : simulations.findAllById(simulationIds).collectList();
+        Mono<List<SimulationAnswer>> answersMono = simulationIds.isEmpty()
+                ? Mono.just(List.of())
+                : answers.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds).collectList();
         return Mono.zip(
-                        simulations.findAllById(simulationIds).collectList(),
-                        answers.findAllBySimulationIdInAndDeletedAtIsNull(simulationIds).collectList(),
+                        simulationsMono,
+                        answersMono,
                         questions.findAllByStatementIdOrderedByOrderIndex(statementId).collectList())
                 .flatMap(tuple -> {
                     Map<Long, Simulation> simulationById = tuple.getT1().stream()
@@ -308,7 +387,8 @@ public class SolutionSharingService {
                 .sorted(Comparator.comparing(SharedAnswer::number,
                         Comparator.nullsLast(Integer::compareTo)))
                 .toList();
-        InstitutionRef institution = share.getInstitutionId() == null ? null
+        InstitutionRef institution = Boolean.TRUE.equals(share.getAnonymous())
+                || share.getInstitutionId() == null ? null
                 : new InstitutionRef(share.getInstitutionId(),
                         codeByInstitutionId.get(share.getInstitutionId()));
         return new SharedSolutionResponse(share.getId(), institution,
