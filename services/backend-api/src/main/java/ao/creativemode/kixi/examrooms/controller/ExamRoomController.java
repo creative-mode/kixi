@@ -9,6 +9,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantRequest;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomInvitationResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomRequest;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomResponse;
@@ -48,7 +49,7 @@ public class ExamRoomController {
     }
 
     @GetMapping("/mine")
-    public Mono<ResponseEntity<List<ExamRoomParticipantResponse>>> mine() {
+    public Mono<ResponseEntity<List<ExamRoomInvitationResponse>>> mine() {
         return current.requiredAccountId().flatMap(id -> service.mineAsStudent(id).collectList())
                 .map(ResponseEntity::ok);
     }
