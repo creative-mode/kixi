@@ -7,11 +7,13 @@ import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import reactor.core.publisher.Mono;
 
@@ -38,16 +40,28 @@ public class SimulationExpirationJob {
     private final SimulationDeadlineService deadlineService;
     private final SimulationSubmissionService submissionService;
     private final SimulationTimeLimitProperties properties;
+    private final Clock clock;
 
     public SimulationExpirationJob(
             SimulationRepository simulations,
             SimulationDeadlineService deadlineService,
             SimulationSubmissionService submissionService,
             SimulationTimeLimitProperties properties) {
+        this(simulations, deadlineService, submissionService, properties, Clock.systemDefaultZone());
+    }
+
+    @Autowired
+    public SimulationExpirationJob(
+            SimulationRepository simulations,
+            SimulationDeadlineService deadlineService,
+            SimulationSubmissionService submissionService,
+            SimulationTimeLimitProperties properties,
+            Clock clock) {
         this.simulations = simulations;
         this.deadlineService = deadlineService;
         this.submissionService = submissionService;
         this.properties = properties;
+        this.clock = clock;
     }
 
     /**
@@ -62,7 +76,7 @@ public class SimulationExpirationJob {
         }
         // One reading of the server clock for the whole sweep, so a long run
         // cannot close a simulation that expired halfway through it.
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(clock);
         simulations.findByStatusAndDeletedAtIsNull(SimulationStatus.IN_PROGRESS)
                 .concatMap(simulation -> closeIfExpired(simulation, now))
                 .then()
