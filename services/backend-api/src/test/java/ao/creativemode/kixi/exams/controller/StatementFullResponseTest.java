@@ -73,6 +73,17 @@ class StatementFullResponseTest {
     @MockBean
     private ManualStatementService manualStatementService;
 
+    /** #174: a teacher's reads go through their scope. None of these tests is about it. */
+    @MockBean
+    private ao.creativemode.kixi.exams.service.StatementReadAccessService statementReadAccess;
+
+    @org.junit.jupiter.api.BeforeEach
+    void teachersReadTheStatementsNoClassOwns() {
+        when(statementReadAccess.teacherScope(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(reactor.core.publisher.Mono.just(
+                        ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
+    }
+
     private Statement statement;
 
     @BeforeEach
