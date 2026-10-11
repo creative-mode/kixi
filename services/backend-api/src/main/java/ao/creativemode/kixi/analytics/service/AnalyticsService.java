@@ -57,11 +57,16 @@ public class AnalyticsService {
     private final AnalyticsRepository repository;
     private final Clock clock;
 
+    /**
+     * The clock is a constructor argument rather than a call to {@code now()} so the
+     * activity window can be tested without waiting for it. That leaves two constructors,
+     * and Spring does not guess between them: this is the one it uses.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public AnalyticsService(DashboardScopeResolver scopes, AnalyticsRepository repository) {
         this(scopes, repository, Clock.systemUTC());
     }
 
-    /** The clock is injected so the activity window can be tested without waiting. */
     public AnalyticsService(
             DashboardScopeResolver scopes, AnalyticsRepository repository, Clock clock) {
         this.scopes = scopes;
