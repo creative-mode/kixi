@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.simulations.service;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -53,6 +54,12 @@ class LeaderboardServiceTest {
         seats = mock(EnrollmentSeatReader.class);
         repository = mock(LeaderboardRepository.class);
         service = new LeaderboardService(seats, repository);
+
+        // Every statement the ranking is asked about exists, unless a test says otherwise.
+        // The service looks the id up before it becomes a cache key, so a test that does
+        // not stub this gets a null back and a NullPointerException that says nothing
+        // about what it was testing.
+        when(repository.statementExists(anyLong())).thenReturn(Mono.just(true));
     }
 
     /** Every account in these tests holds a seat, unless a test takes it away. */
@@ -494,6 +501,27 @@ class LeaderboardServiceTest {
 
         assertThat(response.statementId()).isEqualTo(42L);
         assertThat(response.period()).isEqualTo("month");
+    }
+
+    /**
+     * A statement id that names nothing is a 404, and never reaches the database twice.
+     *
+     * <p>It has to be checked before the id becomes a cache key: otherwise a caller varying
+     * the id takes a slot out of a cache shared with every real cohort, and gets an empty
+     * ranking remembered for the whole TTL.</p>
+     */
+    @Test
+    void aStatementThatDoesNotExistIsNotFoundAndTakesNoCacheSlot() {
+        when(repository.statementExists(99L)).thenReturn(Mono.just(false));
+
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "month")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+
+        // Nothing was ranked, so nothing was cached and no averages were computed.
+        verify(repository, never()).findAverages(
+                any(), any(), any(), any(), any(), any());
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

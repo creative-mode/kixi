@@ -11,6 +11,7 @@ import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.simulations.config.SimulationTimeLimitProperties;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 
 import java.time.LocalDateTime;
 
@@ -33,6 +34,7 @@ class SimulationDeadlineServiceTest {
     private StatementRepository statements;
     private AccountRepository accounts;
     private SimulationDeadlineService service;
+    private ExamRoomAccess examRooms;
 
     private final LocalDateTime now = LocalDateTime.of(2026, 3, 1, 10, 0, 0);
 
@@ -40,8 +42,9 @@ class SimulationDeadlineServiceTest {
     void setUp() {
         statements = mock(StatementRepository.class);
         accounts = mock(AccountRepository.class);
+        examRooms = mock(ExamRoomAccess.class);
         service = new SimulationDeadlineService(
-                statements, accounts, new SimulationTimeLimitProperties());
+                statements, accounts, new SimulationTimeLimitProperties(), examRooms);
     }
 
     @Test
@@ -112,6 +115,22 @@ class SimulationDeadlineServiceTest {
     }
 
     @Test
+    void closedRoomExpiresInternallyWhileKeepingItsRealPublicDeadline() {
+        Simulation simulation = started(now.minusMinutes(5));
+        simulation.setExamRoomId(77L);
+        simulation.setExamRoomDurationMinutes(30);
+        LocalDateTime roomEndsAt = now.plusMinutes(25);
+        givenStatement(30);
+        givenAccount(null);
+        when(examRooms.roomClosed(77L)).thenReturn(Mono.just(true));
+        when(examRooms.effectiveRoomDeadline(77L, now.plusMinutes(25).plusSeconds(10)))
+                .thenReturn(Mono.just(roomEndsAt));
+
+        StepVerifier.create(service.deadline(simulation)).expectNext(roomEndsAt).verifyComplete();
+        StepVerifier.create(service.expired(simulation, now)).expectNext(true).verifyComplete();
+    }
+
+    @Test
     void toleranceKeepsTheSimulationOpenRightAfterTheDeadline() {
         Simulation simulation = started(now.minusSeconds(30 * 60L + 5));
         givenStatement(30);
@@ -171,6 +190,17 @@ class SimulationDeadlineServiceTest {
 
         StepVerifier.create(service.deadline(simulation))
                 .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(10))
+                .verifyComplete();
+    }
+
+    @Test
+    void aFutureStartedAtDoesNotExpireAnOtherwiseNewSimulation() {
+        Simulation simulation = started(now.plusSeconds(2));
+        givenStatement(30);
+        givenAccount(null);
+
+        StepVerifier.create(service.expired(simulation, now))
+                .expectNext(false)
                 .verifyComplete();
     }
 

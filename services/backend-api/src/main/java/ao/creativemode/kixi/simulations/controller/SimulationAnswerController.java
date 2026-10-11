@@ -42,10 +42,11 @@ public class SimulationAnswerController {
         ResponseEntity<List<SimulationAnswerResponse>>
     > listAllActive() {
         return currentAccountService.requiredAccountId()
-            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMapMany(tuple -> tuple.getT2()
-                ? service.findAllActive()
-                : service.findAllActiveForAccount(tuple.getT1()))
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMapMany(tuple -> tuple.getT1().getT2() || tuple.getT2()
+                ? service.findAllActiveForStaff(tuple.getT1().getT1(), tuple.getT1().getT2())
+                : service.findAllActiveForAccount(tuple.getT1().getT1()))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -55,7 +56,13 @@ public class SimulationAnswerController {
      */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<SimulationAnswerResponse>>> listTrashed() {
-        return service.findAllDeleted().collectList().map(ResponseEntity::ok);
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMapMany(tuple -> tuple.getT1().getT2() || tuple.getT2()
+                ? service.findAllDeletedForStaff(tuple.getT1().getT1(), tuple.getT1().getT2())
+                : service.findAllDeletedForAccount(tuple.getT1().getT1()))
+            .collectList().map(ResponseEntity::ok);
     }
 
     /**
@@ -67,9 +74,9 @@ public class SimulationAnswerController {
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> tuple.getT2()
+            .flatMap(tuple -> authorize(id).then(tuple.getT2()
                 ? service.findByIdActive(id)
-                : service.findByIdActiveForAccount(id, tuple.getT1()))
+                : service.findByIdActiveForAccount(id, tuple.getT1())))
             .map(ResponseEntity::ok);
     }
 
@@ -83,9 +90,9 @@ public class SimulationAnswerController {
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> tuple.getT2()
+            .flatMap(tuple -> authorizeSimulation(request.simulationId()).then(tuple.getT2()
                 ? service.create(request)
-                : service.createForAccount(request, tuple.getT1()))
+                : service.createForAccount(request, tuple.getT1())))
             .map(created -> {
                 URI location = uriBuilder
                     .path("/api/v1/simulation-answers/{id}")
@@ -106,9 +113,9 @@ public class SimulationAnswerController {
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> tuple.getT2()
+            .flatMap(tuple -> authorize(id).then(tuple.getT2()
                 ? service.update(id, request)
-                : service.updateForAccount(id, request, tuple.getT1()))
+                : service.updateForAccount(id, request, tuple.getT1())))
             .map(ResponseEntity::ok);
     }
 
@@ -128,8 +135,7 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return service
-            .softDelete(id)
+        return staffLifecycleContext(id, false).then(Mono.defer(() -> service.softDelete(id)))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -138,7 +144,8 @@ public class SimulationAnswerController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return service.restore(id).thenReturn(ResponseEntity.noContent().build());
+        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.restore(id)))
+            .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
@@ -146,8 +153,42 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return service
-            .hardDelete(id)
+        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.hardDelete(id)))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
+    }
+
+    private Mono<Void> staffLifecycleContext(Long answerId, boolean includeDeleted) {
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> {
+                boolean admin = tuple.getT1().getT2();
+                boolean teacher = tuple.getT2();
+                if (!admin && !teacher) {
+                    return Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden(
+                        "Only ADMIN or an assigned teacher can manage simulation answers"));
+                }
+                return service.authorizeAnswer(answerId, tuple.getT1().getT1(), admin, teacher, includeDeleted);
+            });
+    }
+
+    private Mono<Void> authorize(Long answerId) {
+        return authorize(answerId, false);
+    }
+
+    private Mono<Void> authorize(Long answerId, boolean includeDeleted) {
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> service.authorizeAnswer(answerId, tuple.getT1().getT1(),
+                    tuple.getT1().getT2(), tuple.getT2(), includeDeleted));
+    }
+
+    private Mono<Void> authorizeSimulation(Long simulationId) {
+        return currentAccountService.requiredAccountId()
+            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> service.authorizeSimulation(simulationId, tuple.getT1().getT1(),
+                    tuple.getT1().getT2(), tuple.getT2()));
     }
 }

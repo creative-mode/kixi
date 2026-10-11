@@ -40,10 +40,14 @@ public class LeaderboardRepository {
     /**
      * The enrollment every ranked account has to hold, for the requested group and year.
      *
-     * <p>The school year is not optional. A student who moves from school A to school B
+     * <p>The year is not optional. A student who moves from school A to school B
      * keeps their A row ACTIVE forever — the state only ever goes to CANCELLED — so
      * without the year filter they would go on being ranked in A, with the marks they
      * took in B, under their own name.</p>
+     *
+     * <p>Left open on purpose: {@link #averagesSql} appends the group and the year
+     * <em>inside</em> the parentheses, where they narrow this subquery rather than the
+     * outer one. {@link #membershipSql} closes it.</p>
      */
     private static final String MEMBERSHIP = """
             EXISTS (SELECT 1
@@ -56,26 +60,53 @@ public class LeaderboardRepository {
                        AND a.deleted_at IS NULL AND a.active = TRUE
             """;
 
+    /** {@link #MEMBERSHIP} with the group's own conditions inside the parentheses. */
+    private static String membershipSql(Scope scope, Long groupId) {
+        return MEMBERSHIP + " AND " + groupPredicate(scope, groupId, "e", "cl")
+                + " AND e.school_year_id = :schoolYearId)";
+    }
+
     /**
      * A simulation whose open questions are still waiting for a teacher does not score.
      *
      * <p>Since #169 an open question is {@code PENDING_REVIEW} and {@code final_score}
      * only adds up what has been marked. Ranking that number against the whole
      * {@code total_max_score} would park a student below their peers until the teacher
-     * got round to them, and the class would see it happen.</p>
+     * took round to them, and the class would see it happen.</p>
+     *
+     * <p>Self-contained, so it closes its own parentheses.</p>
      */
     private static final String FULLY_MARKED = """
             NOT EXISTS (SELECT 1
                           FROM simulation_answers sa
                          WHERE sa.simulation_id = s.id
                            AND sa.deleted_at IS NULL
-                           AND sa.review_status = 'PENDING_REVIEW'
+                           AND sa.review_status = 'PENDING_REVIEW')
             """;
 
     private final DatabaseClient databaseClient;
 
     public LeaderboardRepository(DatabaseClient databaseClient) {
         this.databaseClient = databaseClient;
+    }
+
+    /**
+     * Whether the statement is there to be ranked.
+     *
+     * <p>Counted rather than read, so the answer carries no data — this runs before the
+     * id reaches a cache key.</p>
+     */
+    public Mono<Boolean> statementExists(Long statementId) {
+        return databaseClient.sql("""
+                        SELECT COUNT(*) AS total
+                          FROM statements st
+                         WHERE st.id = :statementId
+                           AND st.deleted_at IS NULL
+                        """)
+                .bind("statementId", statementId)
+                .map((row, metadata) -> ((Number) row.get("total")).longValue() > 0)
+                .one()
+                .defaultIfEmpty(false);
     }
 
     /** One average percentage per account that has a computable score in the group. */
@@ -158,8 +189,7 @@ public class LeaderboardRepository {
         // average is not this year's result.
         where.add("s.school_year_id = :schoolYearId");
         where.add(FULLY_MARKED);
-        where.add(MEMBERSHIP + " AND " + groupPredicate(scope, groupId, "e", "cl")
-                + " AND e.school_year_id = :schoolYearId");
+        where.add(membershipSql(scope, groupId));
 
         binds.put("schoolYearId", schoolYearId);
         if (statementId != null) {
@@ -175,13 +205,15 @@ public class LeaderboardRepository {
             binds.put("to", to);
         }
 
-        String statement = """
+        // The newline matters: a text block strips trailing spaces, so "WHERE " alone
+                // would arrive as "WHERE" and weld itself to the first condition.
+String statement = """
                 SELECT s.account_id AS account_id,
                        AVG(s.final_score * 100.0 / st.total_max_score) AS average
                   FROM simulations s
                   JOIN statements st ON st.id = s.statement_id
-                WHERE """
-                + String.join("\n  AND ", where)
+                 WHERE """
+                + "\n  " + String.join("\n  AND ", where)
                 + "\n GROUP BY s.account_id"
                 // Ties break on the id so the same group always yields the same order,
                 // which matters once the result is cached and shared.

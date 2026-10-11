@@ -33,6 +33,9 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
      */
     Mono<Statement> findByIdAndDeletedAtIsNull(Long id);
 
+    @Query("SELECT * FROM statements WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
+    Mono<Statement> lockForUpdate(Long id);
+
     /**
      * Find a visible active statement by ID.
      */

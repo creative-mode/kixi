@@ -54,6 +54,63 @@ class LeaderboardRepositoryTest {
     }
 
     /**
+ * No keyword ends up welded to the token after it.
+     *
+     * <p>A text block strips trailing spaces, so a {@code "WHERE "} on its own line
+     * arrives as {@code "WHERE"} and joins the first condition into {@code WHEREs...}.
+     * Balanced parentheses and all.</p>
+     */
+    @Test
+    void theStatementDoesNotWeldTheWhereToTheFirstCondition() {
+        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null);
+
+        assertThat(sql.statement()).containsPattern("WHERE\\s+\\S");
+        assertThat(sql.statement())
+                .as("a keyword welded to the next token")
+                .doesNotContainPattern("\\b(WHERE|AND|FROM|JOIN|ON|SET|GROUP BY|ORDER BY)\\S");
+    }
+
+    /** The statement has to be something PostgreSQL will parse.
+     *
+     * <p>{@code MEMBERSHIP} and {@code FULLY_MARKED} both open an {@code EXISTS} and are
+     * concatenated with more conditions, so a parenthesis forgotten at either end leaves
+     * the endpoint failing on every single request. The string assertions elsewhere in
+     * this class are all satisfied by a statement that will not run; this one is not.
+     */
+    @Test
+    void theStatementHasBalancedParentheses() {
+        for (Scope scope : Scope.values()) {
+            for (Long statementId : new Long[] {null, 7L}) {
+                for (boolean window : new boolean[] {false, true}) {
+                    Sql sql = LeaderboardRepository.averagesSql(
+                            scope, 7L, 3L, statementId,
+                            window ? LocalDateTime.now() : null,
+                            window ? LocalDateTime.now().plusDays(7) : null);
+
+                    assertThat(balance(sql.statement()))
+                            .as("unbalanced parentheses for scope=%s statementId=%s window=%s:%n%s",
+                                    scope, statementId, window, sql.statement())
+                            .isZero();
+                }
+            }
+        }
+    }
+
+    /** Opens minus closes, ignoring anything inside a string literal. */
+    private static int balance(String statement) {
+        String stripped = statement.replaceAll("'(?:[^']|'')*'", "''");
+        int opens = 0;
+        for (char c : stripped.toCharArray()) {
+            if (c == '(') {
+                opens++;
+            } else if (c == ')') {
+                opens--;
+            }
+        }
+        return opens;
+    }
+
+    /**
      * The count carries the year too.
      *
      * <p>This one went missing once with the bind left in place and no placeholder in the

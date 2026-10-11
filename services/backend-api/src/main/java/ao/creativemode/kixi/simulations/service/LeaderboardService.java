@@ -104,9 +104,12 @@ public class LeaderboardService {
             }
 
             return cohortOf(accountId, resolved)
-                    .flatMap(cohort -> ranking(resolved, cohort.id(), cohort.schoolYearId(), statementId, window)
-                            .flatMap(ranked -> windowAround(
-                                    accountId, ranked, resolved, cohort.id(), statementId, window)));
+                    .flatMap(cohort -> checkStatementExists(statementId)
+                            .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
+                                    statementId, window)
+                                    .flatMap(ranked -> windowAround(
+                                            accountId, ranked, resolved, cohort.id(),
+                                            statementId, window))));
         });
     }
 
@@ -128,6 +131,24 @@ public class LeaderboardService {
                 .map(seat -> new Cohort(
                         scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
                         seat.schoolYearId()));
+    }
+
+    /**
+     * The statement is looked up before it becomes part of a cache key.
+     *
+     * <p>Without this a caller could vary {@code statementId} over ids that do not exist
+     * and take a cache slot each — bounded, but the bound is shared with everybody, and a
+     * caller varying the id can push real cohorts out of it. An id that names no statement
+     * is also an empty ranking, which is not worth remembering for 45 seconds.</p>
+     */
+    private Mono<Void> checkStatementExists(Long statementId) {
+        if (statementId == null) {
+            return Mono.empty();
+        }
+        return repository.statementExists(statementId)
+                .flatMap(exists -> exists
+                        ? Mono.<Void>empty()
+                        : Mono.error(ApiException.notFound("No statement with id " + statementId)));
     }
 
     /**
@@ -238,10 +259,9 @@ public class LeaderboardService {
                 indexes.add(i);
             }
             // The window walks into the bottom of the table otherwise: sixth of eight would
-            // show seventh and eighth. Those places are withheld from everybody, the
-            // The bottom of the table is withheld from the other rows. The caller's own
-            // place stays: they already know where they stand, and learning it from
-            // somebody else's ranking is the part that hurts.
+            // show seventh and eighth. Those places are withheld from the other rows.
+            // The caller's own place stays: they already know where they stand, and
+            // learning it from somebody else's ranking is the part that hurts.
             if (smallGroup) {
                 // Drawn from the rows actually ranked, not from the enrolment count: with
                 // five of eight marked, a floor of six protects nothing.
