@@ -11,6 +11,7 @@ import java.time.Clock;
 
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 
 import reactor.core.publisher.Mono;
 
@@ -52,7 +53,7 @@ public class SimulationDeadlineService {
             StatementRepository statements,
             AccountRepository accounts,
             SimulationTimeLimitProperties properties,
-            ExamRoomAccess examRoomAccess,
+            @Lazy ExamRoomAccess examRoomAccess,
             Clock clock) {
         this.statements = statements;
         this.accounts = accounts;
