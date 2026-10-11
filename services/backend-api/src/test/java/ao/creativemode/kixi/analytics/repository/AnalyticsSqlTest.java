@@ -51,6 +51,16 @@ class AnalyticsSqlTest {
     }
 
     @Test
+    void aCancelledEnrollmentOrADeletedStudentNeverCounts() {
+        for (String sql : List.of(AnalyticsSql.overview(), AnalyticsSql.institutions(),
+                AnalyticsSql.classes(), AnalyticsSql.classStudents())) {
+            assertThat(sql).contains("e.status = 'ACTIVE'");
+        }
+        assertThat(AnalyticsSql.SCOPE).contains("sa.deleted_at IS NULL");
+        assertThat(AnalyticsSql.classStudents()).contains("a.deleted_at IS NULL");
+    }
+
+    @Test
     void concatenatedPiecesKeepTheirSpaces() {
         // A text block drops the space before its closing quotes: "WHERE " + "EXISTS"
         // came out as WHEREEXISTS once already.

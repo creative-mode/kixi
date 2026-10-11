@@ -60,6 +60,7 @@ public final class AnalyticsSql {
                                      WHERE q.statement_id = ss.id AND q.deleted_at IS NULL)) AS max_score
                 ) m ON TRUE
                 WHERE sim.deleted_at IS NULL
+                  AND EXISTS (SELECT 1 FROM accounts sa WHERE sa.id = sim.account_id AND sa.deleted_at IS NULL)
             )
             """;
 
@@ -86,7 +87,7 @@ public final class AnalyticsSql {
                        JOIN roles r ON r.id = ar.role_id AND r.name = 'STUDENT' AND r.deleted_at IS NULL
                        WHERE a.deleted_at IS NULL)
                     ELSE (SELECT COUNT(DISTINCT e.account_id) FROM enrollments e
-                          WHERE e.deleted_at IS NULL AND e.class_id IN (SELECT id FROM scoped_classes)) END) AS students,
+                          WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE' AND e.class_id IN (SELECT id FROM scoped_classes)) END) AS students,
                   (SELECT CASE WHEN :admin THEN (SELECT COUNT(*) FROM teachers t WHERE t.deleted_at IS NULL)
                     ELSE (SELECT COUNT(DISTINCT ta.teacher_id) FROM teaching_assignments ta
                           WHERE ta.deleted_at IS NULL AND ta.class_id IN (SELECT id FROM scoped_classes)) END) AS teachers,
@@ -136,7 +137,7 @@ public final class AnalyticsSql {
                   (SELECT COUNT(*) FROM scoped_classes c WHERE c.institution_id = i.id) AS classes,
                   (SELECT COUNT(DISTINCT e.account_id) FROM enrollments e
                       JOIN scoped_classes c ON c.id = e.class_id
-                      WHERE e.deleted_at IS NULL AND c.institution_id = i.id) AS students,
+                      WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE' AND c.institution_id = i.id) AS students,
                   (SELECT COUNT(*) FROM scored sc
                       WHERE sc.owner_institution_id = i.id AND sc.status = 'FINISHED') AS finished,
                   (SELECT ROUND(AVG(sc.pct), 1) FROM scored sc WHERE sc.owner_institution_id = i.id) AS average_pct,
@@ -153,7 +154,7 @@ public final class AnalyticsSql {
         return SCOPE + """
                 SELECT c.id, c.code, c.grade, co.name AS course, i.name AS institution,
                   (SELECT COUNT(DISTINCT e.account_id) FROM enrollments e
-                      WHERE e.class_id = c.id AND e.deleted_at IS NULL) AS students,
+                      WHERE e.class_id = c.id AND e.deleted_at IS NULL AND e.status = 'ACTIVE') AS students,
                   (SELECT COUNT(DISTINCT ta.teacher_id) FROM teaching_assignments ta
                       WHERE ta.class_id = c.id AND ta.deleted_at IS NULL) AS teachers,
                   (SELECT COUNT(*) FROM scoped_statements ss WHERE ss.class_id = c.id) AS statements,
@@ -239,7 +240,7 @@ public final class AnalyticsSql {
         return SCOPE + """
                 , roster AS (
                     SELECT DISTINCT e.account_id FROM enrollments e
-                    WHERE e.class_id = :classId AND e.deleted_at IS NULL
+                    WHERE e.class_id = :classId AND e.deleted_at IS NULL AND e.status = 'ACTIVE'
                 )
                 SELECT r.account_id,
                   COALESCE(NULLIF(BTRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), a.username) AS name,
@@ -247,7 +248,7 @@ public final class AnalyticsSql {
                   ROUND(AVG(sc.pct), 1) AS average_pct,
                   MAX(sc.finished_at) AS last_finished_at
                 FROM roster r
-                JOIN accounts a ON a.id = r.account_id
+                JOIN accounts a ON a.id = r.account_id AND a.deleted_at IS NULL
                 LEFT JOIN users u ON u.account_id = r.account_id AND u.deleted_at IS NULL
                 LEFT JOIN scored sc ON sc.account_id = r.account_id AND sc.class_id = :classId
                 GROUP BY r.account_id, u.first_name, u.last_name, a.username
