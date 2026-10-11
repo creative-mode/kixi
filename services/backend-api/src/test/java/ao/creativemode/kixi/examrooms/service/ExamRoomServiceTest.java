@@ -61,7 +61,8 @@ class ExamRoomServiceTest {
         simulations = mock(SimulationRepository.class);
         deadlineService = mock(SimulationDeadlineService.class);
         when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class)))
-                .thenReturn(Mono.just(true));
+                .thenAnswer(invocation -> Mono.just(
+                        invocation.getArgument(0, Simulation.class).getStatus() == SimulationStatus.IN_PROGRESS));
         accounts = mock(AccountRepository.class);
         statements = mock(StatementRepository.class);
         classes = mock(ClassRepository.class);
@@ -222,7 +223,6 @@ class ExamRoomServiceTest {
         Simulation finished = simulation(80L);
         finished.setStatus(SimulationStatus.FINISHED);
         when(simulations.findById(80L)).thenReturn(Mono.just(finished));
-        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(false));
 
         StepVerifier.create(service.studentView(20L, 42L))
                 .expectErrorMatches(error -> error instanceof ApiException api
