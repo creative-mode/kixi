@@ -21,6 +21,7 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> findByIdAndAccountIdAndDeletedAtIsNull(Long id, Long accountId);
     Mono<Simulation> findByIdAndAccountId(Long id, Long accountId);
     Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
+    Flux<Simulation> findByExamRoomIdAndDeletedAtIsNull(Long examRoomId);
 
     @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
             + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, :startedAt, 'IN_PROGRESS') "

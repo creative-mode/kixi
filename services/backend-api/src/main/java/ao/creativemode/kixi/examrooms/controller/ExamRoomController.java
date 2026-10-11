@@ -4,6 +4,8 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantRequest;
@@ -12,19 +14,26 @@ import ao.creativemode.kixi.examrooms.dto.ExamRoomRequest;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomResponse;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
+import ao.creativemode.kixi.examrooms.service.ExamRoomMonitoringService;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomGradeResponse;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 
 @RestController
 @RequestMapping({"/api/v1/exam-rooms", "/api/exam-rooms"})
 public class ExamRoomController {
     private final ExamRoomService service;
     private final CurrentAccountService current;
+    private final ExamRoomMonitoringService monitoring;
 
-    public ExamRoomController(ExamRoomService service, CurrentAccountService current) {
+    public ExamRoomController(ExamRoomService service, CurrentAccountService current,
+            ExamRoomMonitoringService monitoring) {
         this.service = service;
         this.current = current;
+        this.monitoring = monitoring;
     }
 
     @PostMapping
@@ -90,6 +99,58 @@ public class ExamRoomController {
         return current.requiredAccountId().flatMap(accountId -> service.studentView(id, accountId))
                 .map(ResponseEntity::ok);
     }
+
+    @GetMapping(value = "/{id}/live", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Mono<ResponseEntity<Flux<ServerSentEvent<ExamRoomLiveResponse>>>> live(@PathVariable Long id) {
+        return staffContext().flatMap(context -> monitoring.live(id, context.accountId(), context.admin())
+                .thenReturn(ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
+                        .body(monitoring.stream(id, context.accountId(), context.admin())
+                                .map(snapshot -> ServerSentEvent.<ExamRoomLiveResponse>builder()
+                                        .event("progress").data(snapshot).build()))));
+    }
+
+    @GetMapping("/{id}/grades")
+    public Mono<ResponseEntity<List<ExamRoomGradeResponse>>> grades(@PathVariable Long id) {
+        return staffContext().flatMap(context -> monitoring.grades(id, context.accountId(), context.admin()))
+                .map(ResponseEntity::ok);
+    }
+
+    @GetMapping(value = "/{id}/grades.csv", produces = "text/csv")
+    public Mono<ResponseEntity<String>> gradesCsv(@PathVariable Long id) {
+        return staffContext().flatMap(context -> monitoring.grades(id, context.accountId(), context.admin()))
+                .map(this::toCsv)
+                .map(csv -> ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
+                        .header("Content-Disposition", "attachment; filename=exam-room-" + id + "-grades.csv")
+                        .body(csv));
+    }
+
+    private Mono<StaffContext> staffContext() {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .zipWith(current.hasAnyRole("TEACHER"))
+                .flatMap(tuple -> tuple.getT1().getT2() || tuple.getT2()
+                        ? Mono.just(new StaffContext(tuple.getT1().getT1(), tuple.getT1().getT2()))
+                        : Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden(
+                                "Only teachers or ADMIN can view exam room progress")));
+    }
+
+    private String toCsv(List<ExamRoomGradeResponse> grades) {
+        StringBuilder csv = new StringBuilder("accountId,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\n");
+        grades.forEach(grade -> csv.append(grade.accountId()).append(',')
+                .append(value(grade.simulationId())).append(',')
+                .append(value(grade.status())).append(',')
+                .append(value(grade.finalScore())).append(',')
+                .append(value(grade.correctAnswers())).append(',')
+                .append(value(grade.totalQuestions())).append(',')
+                .append(value(grade.pendingReviewCount())).append(',')
+                .append(value(grade.finishedAt())).append('\n'));
+        return csv.toString();
+    }
+
+    private String value(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private record StaffContext(Long accountId, boolean admin) { }
 
     private Mono<ResponseEntity<ExamRoomResponse>> transition(Long id, ExamRoomStatus status) {
         return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))

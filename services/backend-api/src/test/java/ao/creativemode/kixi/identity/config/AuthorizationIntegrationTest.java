@@ -134,6 +134,20 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void protectsExamRoomLiveStreamFromAnonymousAndStudents() {
+        client.get()
+                .uri("/api/v1/exam-rooms/1/live")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/exam-rooms/1/live")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
     void rejectsStudentPatchingAccountAccessibility() {
         client.mutateWith(studentJwt())
                 .patch()
