@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.institutions.repository;
 
 import ao.creativemode.kixi.institutions.model.TeachingAssignment;
+import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -20,6 +21,31 @@ public interface TeachingAssignmentRepository extends ReactiveCrudRepository<Tea
 
     /** Any state (active or trashed), so a removed assignment is restored instead of duplicated. */
     Mono<TeachingAssignment> findFirstByTeacherIdAndClassIdAndSubjectIdAndSchoolYearId(
+        Long teacherId,
+        Long classId,
+        Long subjectId,
+        Long schoolYearId
+    );
+
+    /**
+     * The assignment that gives one teacher the class, subject and year they teach,
+     * and only while it is active.
+     *
+     * <p>Distinct from {@link #findFirstByTeacherIdAndClassIdAndSubjectIdAndSchoolYearId},
+     * which looks at trashed rows on purpose so a removed assignment can be restored
+     * rather than duplicated. A withdrawn assignment has withdrawn its tutor style with
+     * it, so this one filters them out (issue #116).</p>
+     */
+    @Query("""
+        SELECT * FROM teaching_assignments
+         WHERE teacher_id = :teacherId
+           AND class_id = :classId
+           AND subject_id = :subjectId
+           AND school_year_id = :schoolYearId
+           AND deleted_at IS NULL
+         LIMIT 1
+        """)
+    Mono<TeachingAssignment> findFirstActiveForTeaching(
         Long teacherId,
         Long classId,
         Long subjectId,

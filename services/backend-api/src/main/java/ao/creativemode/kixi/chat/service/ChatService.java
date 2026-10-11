@@ -13,6 +13,7 @@ import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.StatementService;
+import ao.creativemode.kixi.exams.service.TutorStyleService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.exception.ApiException;
 
@@ -56,33 +57,25 @@ public class ChatService {
     /** Recent turns sent back to the model; older ones fall out of the prompt. */
     static final int HISTORY_LIMIT = 20;
 
-    static final String SYSTEM_PROMPT = """
-            És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
-            Responde sempre em português, usando APENAS o enunciado e as questões
-            fornecidos abaixo como material de trabalho.
-            Se a pergunta não puder ser respondida com esse material, recusa
-            educadamente e explica que só acompanhás o enunciado desta sessão —
-            não inventes conteúdo nem respondas sobre outros assuntos.
-            Não digas qual é a opção correcta: explica o raciocínio passo a passo
-            e deixa a escolha ao aluno.
-            """;
-
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final StatementService statementService;
     private final ChatRateLimiter rateLimiter;
     private final GroqClient groqClient;
+    private final TutorStyleService tutorStyles;
 
     public ChatService(ChatSessionRepository sessionRepository,
                        ChatMessageRepository messageRepository,
                        StatementService statementService,
                        ChatRateLimiter rateLimiter,
-                       GroqClient groqClient) {
+                       GroqClient groqClient,
+                       TutorStyleService tutorStyles) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.statementService = statementService;
         this.rateLimiter = rateLimiter;
         this.groqClient = groqClient;
+        this.tutorStyles = tutorStyles;
     }
 
     /**
@@ -130,8 +123,17 @@ public class ChatService {
             ChatSession session, String content) {
         return messageRepository.save(new ChatMessage(session.getId(), ChatRole.USER, content))
                 .then(statementService.findByIdWithQuestionsVisible(session.getStatementId()))
-                .flatMap(withQuestions -> historyOf(session)
-                        .map(history -> stream(session, contextOf(withQuestions), history)));
+                .flatMap(withQuestions -> tutorStyles.styleOf(withQuestions.statement())
+                        .defaultIfEmpty("")
+                        // A style that cannot be read must not take the tutor down with it:
+                        // the prompt without a voice is still a working tutor.
+                        .onErrorResume(error -> Mono.just(""))
+                        .flatMap(style -> historyOf(session)
+                                .map(history -> stream(
+                                        session,
+                                        TutorSystemPrompt.compose(style),
+                                        contextOf(withQuestions),
+                                        history))));
     }
 
     private Mono<List<GroqMessage>> historyOf(ChatSession session) {
@@ -148,9 +150,9 @@ public class ChatService {
     }
 
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(
-            ChatSession session, String context, List<GroqMessage> history) {
+            ChatSession session, String systemPrompt, String context, List<GroqMessage> history) {
         List<GroqMessage> prompt = new ArrayList<>();
-        prompt.add(new GroqMessage("system", SYSTEM_PROMPT + "\n\n" + context));
+        prompt.add(new GroqMessage("system", systemPrompt + "\n\n" + context));
         prompt.addAll(history);
 
         StringBuilder answer = new StringBuilder();

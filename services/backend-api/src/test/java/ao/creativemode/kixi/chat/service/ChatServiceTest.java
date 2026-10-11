@@ -20,7 +20,9 @@ import ao.creativemode.kixi.chat.repository.ChatSessionRepository;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.StatementService;
+import ao.creativemode.kixi.exams.service.TutorStyleService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.exception.ApiException;
 
@@ -42,6 +44,7 @@ class ChatServiceTest {
     private StatementService statementService;
     private ChatRateLimiter rateLimiter;
     private GroqClient groqClient;
+    private TutorStyleService tutorStyles;
     private ChatService service;
 
     @BeforeEach
@@ -51,8 +54,12 @@ class ChatServiceTest {
         statementService = mock(StatementService.class);
         rateLimiter = mock(ChatRateLimiter.class);
         groqClient = mock(GroqClient.class);
+        tutorStyles = mock(TutorStyleService.class);
+        // No author, no style: the prompt stays exactly as it was before issue #116.
+        when(tutorStyles.styleOf(any(Statement.class))).thenReturn(Mono.just(""));
         service = new ChatService(
-                sessionRepository, messageRepository, statementService, rateLimiter, groqClient);
+                sessionRepository, messageRepository, statementService, rateLimiter,
+                groqClient, tutorStyles);
     }
 
     // === createSession ====================================================
