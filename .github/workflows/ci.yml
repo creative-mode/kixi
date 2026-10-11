@@ -42,6 +42,20 @@ jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kixi_exam_room_it
+          POSTGRES_USER: kixi
+          POSTGRES_PASSWORD: kixi_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kixi -d kixi_exam_room_it"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: services/backend-api
@@ -57,6 +71,13 @@ jobs:
           cache: maven
 
       - name: Run Maven tests
+        env:
+          KIXI_POSTGRES_TESTS: 'true'
+          KIXI_POSTGRES_HOST: localhost
+          KIXI_POSTGRES_PORT: '5432'
+          KIXI_POSTGRES_DATABASE: kixi_exam_room_it
+          KIXI_POSTGRES_USER: kixi
+          KIXI_POSTGRES_PASSWORD: kixi_secret
         run: ./mvnw -B test
 
   ocr:
