@@ -71,7 +71,7 @@ public class AnalyticsService {
     public Flux<QuestionStats> statementQuestions(long statementId) {
         return scope().flatMapMany(scope -> repository.statementAccess(scope, statementId)
                 .flatMapMany(access -> require(access, "Statement")
-                        .thenMany(repository.statementQuestions(scope, statementId))));
+                        .thenMany(Flux.defer(() -> repository.statementQuestions(scope, statementId)))));
     }
 
     public Flux<ClassStudentStats> classStudents(long classId) {
@@ -90,7 +90,7 @@ public class AnalyticsService {
 
     private <T> Flux<T> inClass(long classId, java.util.function.Function<AnalyticsScope, Flux<T>> query) {
         return scope().flatMapMany(scope -> repository.classAccess(scope, classId)
-                .flatMapMany(access -> require(access, "Class").thenMany(query.apply(scope))));
+                .flatMapMany(access -> require(access, "Class").thenMany(Flux.defer(() -> query.apply(scope)))));
     }
 
     private Mono<AnalyticsScope> scope() {
