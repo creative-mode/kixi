@@ -122,14 +122,21 @@ public class SimulationService {
         return repository.findByDeletedAtIsNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
                         .flatMap(this::toResponse)
-                        .onErrorResume(ignored -> Mono.empty()));
+                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                                ? Mono.empty() : Mono.error(error)));
     }
 
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNotNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher, true)
                         .flatMap(this::toResponse)
-                        .onErrorResume(ignored -> Mono.empty()));
+                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                                ? Mono.empty() : Mono.error(error)));
+    }
+
+    private boolean isAuthorizationNotFound(Throwable error) {
+        return error instanceof ApiException
+                && ((ApiException) error).getStatusCode() == 404;
     }
 
     @Transactional

@@ -164,6 +164,51 @@ class SimulationServiceTest {
     }
 
     @Test
+    void findAllAuthorizedOmitsUnauthorizedSimulation() {
+        Simulation existing = simulation(1L, SimulationStatus.IN_PROGRESS);
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.just(existing));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.findAllAuthorized(2L, false, false))
+                .verifyComplete();
+    }
+
+    @Test
+    void findAllTrashedAuthorizedOmitsUnauthorizedSimulation() {
+        Simulation deleted = simulation(1L, SimulationStatus.CANCELLED);
+        deleted.markAsDelete();
+        when(repository.findByDeletedAtIsNotNull()).thenReturn(Flux.just(deleted));
+        when(repository.findById(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.findAllTrashedAuthorized(2L, false, false))
+                .verifyComplete();
+    }
+
+    @Test
+    void findAllAuthorizedPropagatesRepositoryFailure() {
+        RuntimeException failure = new RuntimeException("database unavailable");
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.error(failure));
+
+        StepVerifier.create(service.findAllAuthorized(1L, false, false))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
+                .verify();
+    }
+
+    @Test
+    void findAllTrashedAuthorizedPropagatesEnrichmentFailure() {
+        Simulation deleted = simulation(1L, SimulationStatus.CANCELLED);
+        deleted.markAsDelete();
+        RuntimeException failure = new RuntimeException("account service unavailable");
+        when(repository.findByDeletedAtIsNotNull()).thenReturn(Flux.just(deleted));
+        when(repository.findById(1L)).thenReturn(Mono.just(deleted));
+        when(accountRepository.findById(1L)).thenReturn(Mono.error(failure));
+
+        StepVerifier.create(service.findAllTrashedAuthorized(1L, false, false))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
+                .verify();
+    }
+
+    @Test
     void createRejectsMissingAccountWithoutSaving() {
         when(accountRepository.findById(9999L)).thenReturn(Mono.empty());
 
