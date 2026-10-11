@@ -135,7 +135,7 @@ public class ExamRoomController {
 
     private String toCsv(List<ExamRoomGradeResponse> grades) {
         StringBuilder csv = new StringBuilder("accountId,name,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\n");
-        grades.forEach(grade -> csv.append(grade.accountId()).append(',').append(value(grade.displayName())).append(',')
+        grades.forEach(grade -> csv.append(value(grade.accountId())).append(',').append(value(grade.displayName())).append(',')
                 .append(value(grade.simulationId())).append(',')
                 .append(value(grade.status())).append(',')
                 .append(value(grade.finalScore())).append(',')
@@ -147,7 +147,17 @@ public class ExamRoomController {
     }
 
     private String value(Object value) {
-        return value == null ? "" : String.valueOf(value);
+        if (value == null) {
+            return "";
+        }
+        String text = String.valueOf(value);
+        if (value instanceof String && !text.isEmpty() && "=+-@".indexOf(text.charAt(0)) >= 0) {
+            text = "'" + text;
+        }
+        return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf('\r') >= 0
+                || text.indexOf('\n') >= 0
+                ? '"' + text.replace("\"", "\"\"") + '"'
+                : text;
     }
 
     private record StaffContext(Long accountId, boolean admin) { }
