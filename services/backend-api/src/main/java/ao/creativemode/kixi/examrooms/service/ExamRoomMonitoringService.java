@@ -69,18 +69,43 @@ public class ExamRoomMonitoringService {
         return managedRoom(roomId, caller, admin).flatMap(this::snapshot);
     }
 
+    /**
+     * The grades of every participant (#188). The simulations, their answers and
+     * the question count are loaded in batch for the whole room and the grades
+     * worked out in memory: before, each participant cost a simulation lookup, an
+     * answer query and a question count of their own.
+     */
     public Mono<List<ExamRoomGradeResponse>> grades(Long roomId, Long caller, boolean admin) {
         return managedRoom(roomId, caller, admin)
                 .then(participants.findByExamRoomId(roomId).collectList())
-                .flatMap(rows -> displayNames(rows)
-                        .flatMap(names -> Flux.fromIterable(rows).flatMap(participant -> grade(participant, names))
-                                .collectList()));
+                .flatMap(rows -> Mono.zip(displayNames(rows), gradingData(rows))
+                        .map(tuple -> rows.stream()
+                                .map(participant -> grade(participant, tuple.getT1(), tuple.getT2()))
+                                .toList()));
+    }
+
+    /**
+     * Checks that the caller may watch the room, without building a snapshot:
+     * the live endpoint authorizes with this before it starts the stream, and the
+     * stream builds the first snapshot itself (#188).
+     */
+    public Mono<ExamRoom> authorize(Long roomId, Long caller, boolean admin) {
+        return managedRoom(roomId, caller, admin);
     }
 
     public Flux<ExamRoomLiveResponse> stream(Long roomId, Long caller, boolean admin) {
+        return authorize(roomId, caller, admin).flatMapMany(room -> stream(room, caller, admin));
+    }
+
+    /**
+     * The live stream of a room already authorized by {@link #authorize}. The
+     * first tick snapshots that room; the following ones reload it, so a change
+     * of owner or status still reaches the stream.
+     */
+    public Flux<ExamRoomLiveResponse> stream(ExamRoom authorized, Long caller, boolean admin) {
         return Flux.interval(Duration.ZERO, Duration.ofSeconds(2))
                 .onBackpressureLatest()
-                .concatMap(ignored -> live(roomId, caller, admin))
+                .concatMap(tick -> tick == 0 ? snapshot(authorized) : live(authorized.getId(), caller, admin))
                 .takeUntil(value -> value.status() == ExamRoomStatus.CLOSED)
                 .doOnSubscribe(ignored -> activeStreams.incrementAndGet())
                 .doFinally(ignored -> activeStreams.decrementAndGet());
@@ -139,27 +164,56 @@ public class ExamRoomMonitoringService {
                 remaining, progress.size(), (int) joined, (int) submitted, percentage, progress);
     }
 
-    private Mono<ExamRoomGradeResponse> grade(ExamRoomParticipant participant, Map<Long, String> names) {
-        if (participant.getSimulationId() == null) {
-            return Mono.just(new ExamRoomGradeResponse(participant.getAccountId(), names.get(participant.getAccountId()), null,
-                    "NOT_STARTED",
-                    null, 0, 0, 0, null));
+    /** What {@link #grades} needs for every participant at once. */
+    private record GradingData(Map<Long, Simulation> simulations, Map<Long, List<SimulationAnswer>> answers,
+            Map<Long, Long> questionCounts) {
+        static final GradingData EMPTY = new GradingData(Map.of(), Map.of(), Map.of());
+    }
+
+    private Mono<GradingData> gradingData(List<ExamRoomParticipant> rows) {
+        List<Long> ids = rows.stream().map(ExamRoomParticipant::getSimulationId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Mono.just(GradingData.EMPTY);
         }
-        return simulations.findByIdAndDeletedAtIsNull(participant.getSimulationId())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
-                .flatMap(simulation -> Mono.zip(
-                        answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId())).collectList(),
-                        questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).count())
-                        .map(tuple -> {
-                            List<SimulationAnswer> rows = tuple.getT1();
-                            int correct = (int) rows.stream().filter(answer -> Boolean.TRUE.equals(answer.getIsCorrect())).count();
-                            int pending = (int) rows.stream().filter(answer -> answer.getReviewStatus() != null
-                                    && answer.getReviewStatus().name().equals("PENDING_REVIEW")).count();
-                            return new ExamRoomGradeResponse(participant.getAccountId(), names.get(participant.getAccountId()),
-                                    simulation.getId(),
-                                    simulation.getStatus().name(), simulation.getFinalScore(), correct,
-                                    tuple.getT2().intValue(), pending, simulation.getFinishedAt());
-                        }));
+        return simulations.findAllById(ids)
+                .filter(simulation -> simulation.getDeletedAt() == null)
+                .collectMap(Simulation::getId, Function.identity())
+                .flatMap(byId -> {
+                    if (byId.size() < ids.size()) {
+                        // As before: a participant pointing at a missing simulation fails the call.
+                        return Mono.error(ApiException.notFound("Simulation not found"));
+                    }
+                    List<Long> statementIds = byId.values().stream().map(Simulation::getStatementId)
+                            .filter(java.util.Objects::nonNull).distinct().toList();
+                    return Mono.zip(
+                            answers.findAllBySimulationIdInAndDeletedAtIsNull(ids)
+                                    .collect(Collectors.groupingBy(SimulationAnswer::getSimulationId)),
+                            Flux.fromIterable(statementIds)
+                                    .concatMap(statementId -> questions.findAllByStatementIdAndDeletedAtIsNull(statementId)
+                                            .count()
+                                            .map(count -> Map.entry(statementId, count)))
+                                    .collectMap(Map.Entry::getKey, Map.Entry::getValue))
+                            .map(tuple -> new GradingData(byId, tuple.getT1(), tuple.getT2()));
+                });
+    }
+
+    private ExamRoomGradeResponse grade(ExamRoomParticipant participant, Map<Long, String> names, GradingData data) {
+        if (participant.getSimulationId() == null) {
+            return new ExamRoomGradeResponse(participant.getAccountId(), names.get(participant.getAccountId()), null,
+                    "NOT_STARTED",
+                    null, 0, 0, 0, null);
+        }
+        Simulation simulation = data.simulations().get(participant.getSimulationId());
+        List<SimulationAnswer> rows = data.answers().getOrDefault(simulation.getId(), List.of());
+        int correct = (int) rows.stream().filter(answer -> Boolean.TRUE.equals(answer.getIsCorrect())).count();
+        int pending = (int) rows.stream().filter(answer -> answer.getReviewStatus() != null
+                && answer.getReviewStatus().name().equals("PENDING_REVIEW")).count();
+        int totalQuestions = data.questionCounts().getOrDefault(simulation.getStatementId(), 0L).intValue();
+        return new ExamRoomGradeResponse(participant.getAccountId(), names.get(participant.getAccountId()),
+                simulation.getId(),
+                simulation.getStatus().name(), simulation.getFinalScore(), correct,
+                totalQuestions, pending, simulation.getFinishedAt());
     }
 
     private Mono<Map<Long, String>> displayNames(List<ExamRoomParticipant> rows) {
