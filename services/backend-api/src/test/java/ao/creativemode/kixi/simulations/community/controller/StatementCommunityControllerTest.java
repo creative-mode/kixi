@@ -101,7 +101,7 @@ class StatementCommunityControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.totalElements").isEqualTo(1)
-                .jsonPath("$.content[0].authorName").doesNotExist()
+                .jsonPath("$.content[0].authorName").isEqualTo("Ana")
                 .jsonPath("$.content[0].institution.code").isEqualTo("ITEL");
 
         verify(solutionSharingService).listSolutions(STATEMENT_ID, null, 0, 20, STUDENT_ID);
@@ -135,7 +135,7 @@ class StatementCommunityControllerTest {
 
     private static SharedSolutionResponse solution() {
         return new SharedSolutionResponse(1L,
-                new SharedSolutionResponse.InstitutionRef(5L, "ITEL"), null, 14.0, 900,
+                new SharedSolutionResponse.InstitutionRef(5L, "ITEL"), "Ana", 14.0, 900,
                 List.of(new SharedSolutionResponse.SharedAnswer(20L, 1, "B", null, 5.0f)));
     }
 

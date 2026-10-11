@@ -245,9 +245,13 @@ curl -s -X DELETE $HOST/api/v1/simulations/$SIM/share \
   -H "Authorization: Bearer $TOKEN" -o /dev/null -w '%{http_code}\n'
 ```
 
-Só simulações `FINISHED` com nota entram no agregado; respostas ainda em
+Só simulações `FINISHED` com nota final entram no agregado (as que ainda têm
+respostas em revisão ficam de fora até a correção terminar); respostas ainda em
 revisão não contam como erro. A listagem lê apenas consentimentos ativos e
-nunca expõe o gabarito nem a conta por trás de uma partilha anónima.
+nunca expõe o gabarito, a conta por trás de uma partilha anónima — nem a escola
+dela. Enquanto houver uma sala de exame não fechada para o enunciado, as duas
+rotas de comunidade respondem `409`, pela mesma regra que esconde o gabarito
+nos resultados; uma tentativa de sala só se partilha depois de a sala fechar.
 
 ---
 

@@ -53,6 +53,7 @@ class SolutionShareControllerTest {
 
     private static final Long SIMULATION_ID = 50L;
     private static final Long STUDENT_ID = 12L;
+    private static final Long TEACHER_ID = 7L;
 
     @Autowired
     private WebTestClient client;
@@ -100,6 +101,19 @@ class SolutionShareControllerTest {
     }
 
     @Test
+    void aTeacherReachesTheRouteButOnlyForTheirOwnSimulation() {
+        // Ownership lives in the service, not the role: the route lets staff
+        // through and the service decides whose simulation it is.
+        client.mutateWith(teacherJwt())
+                .delete()
+                .uri("/api/v1/simulations/" + SIMULATION_ID + "/share")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(solutionSharingService).unshare(SIMULATION_ID, TEACHER_ID);
+    }
+
+    @Test
     void nobodyFlipsTheSwitchWithoutASession() {
         client.post()
                 .uri("/api/v1/simulations/" + SIMULATION_ID + "/share")
@@ -128,5 +142,12 @@ class SolutionShareControllerTest {
                 String.valueOf(STUDENT_ID),
                 null,
                 List.of(new SimpleGrantedAuthority("ROLE_STUDENT"))));
+    }
+
+    private static WebTestClientConfigurer teacherJwt() {
+        return mockAuthentication(new UsernamePasswordAuthenticationToken(
+                String.valueOf(TEACHER_ID),
+                null,
+                List.of(new SimpleGrantedAuthority("ROLE_TEACHER"))));
     }
 }

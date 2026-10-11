@@ -10,12 +10,16 @@ import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.community.dto.CommunityStatsResponse;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.SimulationAnswerStatus;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
@@ -31,6 +35,7 @@ class CommunityStatsServiceTest {
 
     private static final Long STATEMENT_ID = 10L;
     private static final Long ACCOUNT_ID = 12L;
+    private static final Long OTHER_ACCOUNT_ID = 99L;
     private static final Long SCHOOL_ID = 5L;
 
     private StatementRepository statements;
@@ -38,7 +43,10 @@ class CommunityStatsServiceTest {
     private SimulationRepository simulations;
     private SimulationAnswerRepository answers;
     private MeService meService;
+    private AccountRepository accounts;
+    private ExamRoomAccess examRooms;
     private CommunityStatsService service;
+    private CommunityStatsService guardedService;
 
     @BeforeEach
     void setUp() {
@@ -47,7 +55,11 @@ class CommunityStatsServiceTest {
         simulations = mock(SimulationRepository.class);
         answers = mock(SimulationAnswerRepository.class);
         meService = mock(MeService.class);
+        accounts = mock(AccountRepository.class);
+        examRooms = mock(ExamRoomAccess.class);
         service = new CommunityStatsService(statements, questions, simulations, answers, meService);
+        guardedService = new CommunityStatsService(statements, questions, simulations, answers,
+                meService, accounts, examRooms);
     }
 
     // ── Pure assembly ─────────────────────────────────────────────────────
@@ -196,6 +208,90 @@ class CommunityStatsServiceTest {
         StepVerifier.create(service.findCommunity(STATEMENT_ID, ACCOUNT_ID))
                 .expectNextCount(1)
                 .verifyComplete();
+    }
+
+    // ── Exam rooms: the answer-key rule ───────────────────────────────────
+
+    @Test
+    void openRoomShutsTheCommunityWithConflict() {
+        givenVisibleStatement();
+        when(statements.findEffectiveInstitutionId(STATEMENT_ID)).thenReturn(Mono.empty());
+        when(examRooms.hasNonClosedRoom(STATEMENT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(guardedService.findCommunity(STATEMENT_ID, ACCOUNT_ID))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(error.getMessage()).contains("exam rooms");
+                })
+                .verify();
+
+        // No figure is computed while a room is open — not even a sample size.
+        verifyNoInteractions(questions, simulations, answers);
+    }
+
+    @Test
+    void closedRoomsLetTheCommunityThrough() {
+        givenVisibleStatement();
+        when(statements.findEffectiveInstitutionId(STATEMENT_ID)).thenReturn(Mono.empty());
+        when(examRooms.hasNonClosedRoom(STATEMENT_ID)).thenReturn(Mono.just(false));
+        givenEmptyPaper();
+
+        StepVerifier.create(guardedService.findCommunity(STATEMENT_ID, ACCOUNT_ID))
+                .expectNextCount(1)
+                .verifyComplete();
+    }
+
+    // ── Deleted accounts and partial grades ───────────────────────────────
+
+    @Test
+    void simulationsOfDeletedAccountsLeaveTheCommunity() {
+        givenVisibleStatement();
+        when(statements.findEffectiveInstitutionId(STATEMENT_ID)).thenReturn(Mono.empty());
+        when(examRooms.hasNonClosedRoom(STATEMENT_ID)).thenReturn(Mono.just(false));
+        Simulation kept = simulation(1L, 10.0, 600);
+        kept.setAccountId(ACCOUNT_ID);
+        Simulation gone = simulation(2L, 20.0, 600);
+        gone.setAccountId(OTHER_ACCOUNT_ID);
+        when(simulations.findAllByStatementIdAndStatusAndDeletedAtIsNull(
+                        eq(STATEMENT_ID), eq(SimulationStatus.FINISHED)))
+                .thenReturn(Flux.just(kept, gone));
+        Account active = new Account();
+        active.setId(ACCOUNT_ID);
+        when(accounts.findAllById(List.of(ACCOUNT_ID, OTHER_ACCOUNT_ID)))
+                .thenReturn(Flux.just(active));
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
+                .thenReturn(Flux.empty());
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(1L)))
+                .thenReturn(Flux.empty());
+        when(simulations.findFirstByStatementIdAndAccountIdAndStatusAndDeletedAtIsNullOrderByIdDesc(
+                        eq(STATEMENT_ID), eq(ACCOUNT_ID), eq(SimulationStatus.FINISHED)))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(guardedService.findCommunity(STATEMENT_ID, ACCOUNT_ID))
+                .expectNextMatches(response -> response.sampleSize() == 1
+                        && response.meanScore() == 10.0)
+                .verifyComplete();
+    }
+
+    @Test
+    void simulationsAwaitingReviewSitOutTheDistributionButNotTheQuestions() {
+        Question question = question(20L, 1, 10.0);
+        Simulation partial = simulation(1L, 6.0, 600);
+        SimulationAnswer decided = answer(1L, 20L, true, 6.0f);
+        decided.setReviewStatus(SimulationAnswerStatus.AUTO_GRADED);
+        SimulationAnswer pending = answer(1L, 21L, null, null);
+        pending.setReviewStatus(SimulationAnswerStatus.PENDING_REVIEW);
+
+        CommunityStatsResponse response = CommunityStatsService.assemble(
+                statement(20.0), List.of(question), List.of(partial),
+                List.of(decided, pending), null, List.of());
+
+        // The grade is partial until the review lands: out of the figures…
+        assertThat(response.sampleSize()).isZero();
+        assertThat(response.meanScore()).isNull();
+        // …but the decided answer still teaches the per-question rate.
+        assertThat(response.questions().get(0).attempts()).isEqualTo(1);
+        assertThat(response.questions().get(0).pctCorrect()).isEqualTo(100.0);
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────
