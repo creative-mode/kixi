@@ -38,6 +38,7 @@ import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
+import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -57,6 +58,7 @@ public class ExamRoomService implements ExamRoomAccess {
     private final QuestionOptionRepository options;
     private final Clock clock;
     private final SimulationSubmissionService submissionService;
+    private final SimulationDeadlineService simulationDeadlineService;
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
@@ -64,7 +66,16 @@ public class ExamRoomService implements ExamRoomAccess {
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
             QuestionOptionRepository options) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
-                accountRoles, roles, questions, options, Clock.systemDefaultZone(), null);
+                accountRoles, roles, questions, options, Clock.systemDefaultZone(), (SimulationSubmissionService) null);
+    }
+
+    public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
+            SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
+            ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options, Clock clock, @Lazy SimulationSubmissionService submissionService) {
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
+                accountRoles, roles, questions, options, clock, null, submissionService);
     }
 
     @Autowired
@@ -72,7 +83,8 @@ public class ExamRoomService implements ExamRoomAccess {
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
-            QuestionOptionRepository options, Clock clock, @Lazy SimulationSubmissionService submissionService) {
+            QuestionOptionRepository options, Clock clock, SimulationDeadlineService simulationDeadlineService,
+            @Lazy SimulationSubmissionService submissionService) {
         this.rooms = rooms;
         this.participants = participants;
         this.simulations = simulations;
@@ -87,6 +99,7 @@ public class ExamRoomService implements ExamRoomAccess {
         this.options = options;
         this.clock = clock;
         this.submissionService = submissionService;
+        this.simulationDeadlineService = simulationDeadlineService;
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
@@ -95,14 +108,23 @@ public class ExamRoomService implements ExamRoomAccess {
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
             QuestionOptionRepository options, Clock clock) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
-                accountRoles, roles, questions, options, clock, null);
+                accountRoles, roles, questions, options, clock, null, null);
+    }
+
+    public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
+            SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
+            ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options, Clock clock, SimulationDeadlineService simulationDeadlineService) {
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
+                accountRoles, roles, questions, options, clock, simulationDeadlineService, null);
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments,
-                null, null, null, null, null, Clock.systemDefaultZone(), null);
+                null, null, null, null, null, Clock.systemDefaultZone(), null, null);
     }
 
     public Mono<ExamRoomResponse> create(ExamRoomRequest data, Long teacherAccountId) {
@@ -289,7 +311,25 @@ public class ExamRoomService implements ExamRoomAccess {
                 .flatMap(room -> participants.findByExamRoomIdAndAccountId(roomId, accountId)
                         .filter(participant -> participant.getSimulationId() != null)
                         .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")))
-                        .flatMap(participant -> questions.findAllByStatementIdOrderedByOrderIndex(room.getStatementId())
+                        .flatMap(participant -> simulations.findById(participant.getSimulationId())
+                                .filter(simulation -> simulation.getDeletedAt() == null)
+                                .switchIfEmpty(Mono.error(ApiException.conflict(
+                                        "The room invitation points to a missing or deleted simulation")))
+                                .flatMap(simulation -> {
+                                    if (simulationDeadlineService == null) {
+                                        return Mono.error(ApiException.conflict(
+                                                "Simulation availability could not be validated"));
+                                    }
+                                    Mono<Boolean> accepts = simulationDeadlineService.acceptsAnswers(
+                                            simulation, LocalDateTime.now(clock));
+                                    return (accepts == null ? Mono.just(false) : accepts)
+                                            .defaultIfEmpty(false)
+                                            .filter(Boolean::booleanValue)
+                                            .switchIfEmpty(Mono.error(ApiException.conflict(
+                                                    "The simulation is no longer accepting answers")))
+                                            .thenReturn(simulation);
+                                })
+                                .flatMap(simulation -> questions.findAllByStatementIdOrderedByOrderIndex(room.getStatementId())
                                  .flatMapSequential(question -> options.findAllByQuestionIdOrderedByOrderIndex(question.getId())
                                         .map(option -> new QuestionOptionResponse(option.getId(), option.getQuestionId(),
                                                 option.getOptionLabel(), option.getOptionText(), null,
@@ -302,7 +342,7 @@ public class ExamRoomService implements ExamRoomAccess {
                                                 question.getUpdatedAt())))
                                 .collectList()
                                 .map(items -> new ExamRoomStudentResponse(roomId, participant.getSimulationId(),
-                                        room.getStatus(), room.getStartsAt(), room.getEndsAt(), room.getDurationMinutes(), items))));
+                                        room.getStatus(), room.getStartsAt(), room.getEndsAt(), room.getDurationMinutes(), items)))));
     }
 
     @Override

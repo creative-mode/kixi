@@ -33,6 +33,8 @@ import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
+import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import reactor.core.publisher.Flux;
@@ -43,6 +45,7 @@ class ExamRoomServiceTest {
     private ExamRoomRepository rooms;
     private ExamRoomParticipantRepository participants;
     private SimulationRepository simulations;
+    private SimulationDeadlineService deadlineService;
     private AccountRepository accounts;
     private StatementRepository statements;
     private ClassRepository classes;
@@ -57,6 +60,10 @@ class ExamRoomServiceTest {
         rooms = mock(ExamRoomRepository.class);
         participants = mock(ExamRoomParticipantRepository.class);
         simulations = mock(SimulationRepository.class);
+        deadlineService = mock(SimulationDeadlineService.class);
+        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class)))
+                .thenAnswer(invocation -> Mono.just(
+                        invocation.getArgument(0, Simulation.class).getStatus() == SimulationStatus.IN_PROGRESS));
         accounts = mock(AccountRepository.class);
         statements = mock(StatementRepository.class);
         classes = mock(ClassRepository.class);
@@ -64,7 +71,7 @@ class ExamRoomServiceTest {
         options = mock(QuestionOptionRepository.class);
         questions = mock(QuestionRepository.class);
         service = new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
-                null, null, null, questions, options);
+                null, null, null, questions, options, Clock.systemDefaultZone(), deadlineService);
     }
 
     @Test
@@ -171,6 +178,8 @@ class ExamRoomServiceTest {
         ExamRoomParticipant participant = participant(20L, 42L);
         participant.setSimulationId(80L);
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
+        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(true));
         Question question = new Question();
         question.setId(12L);
         question.setStatementId(5L);
@@ -189,11 +198,48 @@ class ExamRoomServiceTest {
     }
 
     @Test
+    void studentViewRejectsExpiredIndividualSimulationDeadline() {
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
+        ExamRoomParticipant participant = participant(20L, 42L);
+        participant.setSimulationId(80L);
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        Simulation inProgress = simulation(80L);
+        inProgress.setStatus(SimulationStatus.IN_PROGRESS);
+        when(simulations.findById(80L)).thenReturn(Mono.just(inProgress));
+        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.studentView(20L, 42L))
+                .expectErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.CONFLICT)
+                .verify();
+        verifyNoInteractions(questions, options);
+    }
+
+    @Test
+    void studentViewRejectsTerminalSimulation() {
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
+        ExamRoomParticipant participant = participant(20L, 42L);
+        participant.setSimulationId(80L);
+        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        Simulation finished = simulation(80L);
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(simulations.findById(80L)).thenReturn(Mono.just(finished));
+
+        StepVerifier.create(service.studentView(20L, 42L))
+                .expectErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.CONFLICT)
+                .verify();
+        verifyNoInteractions(questions, options);
+    }
+
+    @Test
     void studentViewPreservesQuestionAndOptionOrder() {
         when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
         ExamRoomParticipant participant = participant(20L, 42L);
         participant.setSimulationId(80L);
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
+        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
+        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(true));
         Question first = question(12L, 2);
         Question second = question(11L, 1);
         when(questions.findAllByStatementIdOrderedByOrderIndex(5L)).thenReturn(Flux.just(second, first));
@@ -233,6 +279,49 @@ class ExamRoomServiceTest {
         order.verify(submission).submit(81L, null, true);
         order.verify(submission).submit(82L, null, true);
         order.verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
+    }
+
+    @Test
+    void closingRoomDoesNotResubmitFinishedSimulations() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        Simulation inProgress = simulation(81L);
+        Simulation finished = simulation(82L);
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress, finished));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress, finished));
+        when(submission.submit(81L, null, true)).thenReturn(Mono.just(inProgress));
+        when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(closingService.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectNextCount(1).verifyComplete();
+        verify(submission).submit(81L, null, true);
+        verify(submission, never()).submit(82L, null, true);
+        verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
+    }
+
+    @Test
+    void closingRoomDoesNotTransitionWhenAutomaticSubmissionFails() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        Simulation inProgress = simulation(81L);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress));
+        when(submission.submit(81L, null, true)).thenReturn(Mono.error(new IllegalStateException("submission failed")));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(closingService.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectErrorMessage("submission failed").verify();
+        verify(rooms, never()).transition(anyLong(), any(), eq(ExamRoomStatus.CLOSED));
     }
 
     @Test
@@ -383,6 +472,8 @@ class ExamRoomServiceTest {
         ExamRoomParticipant joined = participant(20L, 42L);
         joined.setSimulationId(80L);
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(joined));
+        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
+        when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(true));
         when(questions.findAllByStatementIdOrderedByOrderIndex(5L)).thenReturn(Flux.empty());
         StepVerifier.create(boundaryService(starts).studentView(20L, 42L))
                 .expectNextCount(1).verifyComplete();
@@ -393,7 +484,7 @@ class ExamRoomServiceTest {
     private ExamRoomService boundaryService(LocalDateTime now) {
         return new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
                 null, null, null, questions, options,
-                Clock.fixed(now.toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
+                Clock.fixed(now.toInstant(ZoneOffset.UTC), ZoneOffset.UTC), deadlineService);
     }
 
     @Test
@@ -488,6 +579,12 @@ class ExamRoomServiceTest {
         Simulation simulation = new Simulation();
         simulation.setId(id);
         simulation.setDeletedAt(null);
+        simulation.setStatus(SimulationStatus.IN_PROGRESS);
+        simulation.setStartedAt(LocalDateTime.now().minusMinutes(1));
+        simulation.setStatementId(5L);
+        simulation.setAccountId(42L);
+        simulation.setExamRoomId(20L);
+        simulation.setExamRoomDurationMinutes(90);
         return simulation;
     }
 }
