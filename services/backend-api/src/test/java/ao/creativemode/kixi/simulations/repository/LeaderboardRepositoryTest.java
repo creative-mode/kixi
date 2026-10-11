@@ -53,6 +53,37 @@ class LeaderboardRepositoryTest {
         assertThat(sql.binds()).containsEntry("schoolYearId", 3L);
     }
 
+    /**
+     * The count carries the year too.
+     *
+     * <p>This one went missing once with the bind left in place and no placeholder in the
+     * statement: {@code DatabaseClient} ignores an unmatched bind without a word, so the
+     * count kept summing every year and {@code totalStudents} came out inflated while
+     * every test stayed green.</p>
+     */
+    @Test
+    void theMemberCountIsPinnedToTheSchoolYearToo() {
+        String classScope = LeaderboardRepository.membersSql(Scope.CLASS, 7L);
+        String schoolScope = LeaderboardRepository.membersSql(Scope.SCHOOL, 1L);
+
+        assertThat(classScope)
+                .contains("e.school_year_id = :schoolYearId")
+                .contains("e.class_id = :groupId");
+        assertThat(schoolScope)
+                .contains("e.school_year_id = :schoolYearId")
+                .contains("cl.institution_id = :groupId");
+    }
+
+    @Test
+    void theMemberCountExcludesCancelledEnrollmentsAndInactiveAccounts() {
+        String sql = LeaderboardRepository.membersSql(Scope.CLASS, 7L);
+
+        assertThat(sql)
+                .contains("e.status = 'ACTIVE'")
+                .contains("a.active = TRUE")
+                .contains("a.deleted_at IS NULL");
+    }
+
     @Test
     void aSimulationWithQuestionsStillWaitingDoesNotScore() {
         // Since #169 an open question is PENDING_REVIEW and final_score only adds up what

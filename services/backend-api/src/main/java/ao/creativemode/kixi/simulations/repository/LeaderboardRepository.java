@@ -92,20 +92,32 @@ public class LeaderboardRepository {
 
     /** How many students belong to the group and year, ranked or not. */
     public Mono<Long> countMembers(Scope scope, Long groupId, Long schoolYearId) {
-        String where = groupPredicate(scope, groupId, "e", "cl");
-        return databaseClient.sql("""
-                        SELECT COUNT(DISTINCT e.account_id) AS total
-                          FROM enrollments e
-                          JOIN classes cl ON cl.id = e.class_id AND cl.deleted_at IS NULL
-                          JOIN accounts a ON a.id = e.account_id
-                        WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE'
-                          AND a.deleted_at IS NULL AND a.active = TRUE AND """
-                        + where)
+        return databaseClient.sql(membersSql(scope, groupId))
                 .bind("groupId", groupId)
                 .bind("schoolYearId", schoolYearId)
                 .map((row, metadata) -> ((Number) row.get("total")).longValue())
                 .one()
                 .defaultIfEmpty(0L);
+    }
+
+    /**
+     * The membership count, over the group and the school year.
+     *
+     * <p>Built pure and separately so the year can be checked without a database. It was
+     * missing from here once, with {@code :schoolYearId} bound and never mentioned in the
+     * statement: {@code DatabaseClient} ignores a bind with no placeholder in the SQL, so
+     * the count silently went on adding up every year.</p>
+     */
+    static String membersSql(Scope scope, Long groupId) {
+        return """
+                SELECT COUNT(DISTINCT e.account_id) AS total
+                  FROM enrollments e
+                  JOIN classes cl ON cl.id = e.class_id AND cl.deleted_at IS NULL
+                  JOIN accounts a ON a.id = e.account_id
+                 WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE'
+                   AND a.deleted_at IS NULL AND a.active = TRUE
+                   AND e.school_year_id = :schoolYearId AND """
+                + groupPredicate(scope, groupId, "e", "cl");
     }
 
     /** Names for the handful of accounts a caller is allowed to see. */

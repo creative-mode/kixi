@@ -239,8 +239,9 @@ public class LeaderboardService {
             }
             // The window walks into the bottom of the table otherwise: sixth of eight would
             // show seventh and eighth. Those places are withheld from everybody, the
-            // caller's own included — they already know where they stand, and learning it
-            // from somebody else's ranking is the part that hurts.
+            // The bottom of the table is withheld from the other rows. The caller's own
+            // place stays: they already know where they stand, and learning it from
+            // somebody else's ranking is the part that hurts.
             if (smallGroup) {
                 // Drawn from the rows actually ranked, not from the enrolment count: with
                 // five of eight marked, a floor of six protects nothing.
