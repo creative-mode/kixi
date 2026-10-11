@@ -121,17 +121,17 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
-                        .flatMap(this::toResponse)
                         .onErrorResume(error -> isAuthorizationNotFound(error)
-                                ? Mono.empty() : Mono.error(error)));
+                                ? Mono.empty() : Mono.error(error))
+                        .flatMap(this::toResponse));
     }
 
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNotNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher, true)
-                        .flatMap(this::toResponse)
                         .onErrorResume(error -> isAuthorizationNotFound(error)
-                                ? Mono.empty() : Mono.error(error)));
+                                ? Mono.empty() : Mono.error(error))
+                        .flatMap(this::toResponse));
     }
 
     private boolean isAuthorizationNotFound(Throwable error) {

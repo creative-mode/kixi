@@ -209,6 +209,43 @@ class SimulationServiceTest {
     }
 
     @Test
+    void findAllAuthorizedPropagatesEnrichmentNotFound() {
+        Simulation existing = simulation(1L, SimulationStatus.IN_PROGRESS);
+        ApiException failure = ApiException.notFound("Account not found");
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.just(existing));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(accountRepository.findById(1L)).thenReturn(Mono.error(failure));
+
+        StepVerifier.create(service.findAllAuthorized(1L, false, false))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
+                .verify();
+    }
+
+    @Test
+    void findAllTrashedAuthorizedPropagatesRepositoryFailure() {
+        RuntimeException failure = new RuntimeException("database unavailable");
+        when(repository.findByDeletedAtIsNotNull()).thenReturn(Flux.error(failure));
+
+        StepVerifier.create(service.findAllTrashedAuthorized(1L, false, false))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
+                .verify();
+    }
+
+    @Test
+    void findAllTrashedAuthorizedPropagatesEnrichmentNotFound() {
+        Simulation deleted = simulation(1L, SimulationStatus.CANCELLED);
+        deleted.markAsDelete();
+        ApiException failure = ApiException.notFound("Account not found");
+        when(repository.findByDeletedAtIsNotNull()).thenReturn(Flux.just(deleted));
+        when(repository.findById(1L)).thenReturn(Mono.just(deleted));
+        when(accountRepository.findById(1L)).thenReturn(Mono.error(failure));
+
+        StepVerifier.create(service.findAllTrashedAuthorized(1L, false, false))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(failure))
+                .verify();
+    }
+
+    @Test
     void createRejectsMissingAccountWithoutSaving() {
         when(accountRepository.findById(9999L)).thenReturn(Mono.empty());
 
