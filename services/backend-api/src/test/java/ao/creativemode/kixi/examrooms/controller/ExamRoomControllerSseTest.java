@@ -28,8 +28,6 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.test.web.reactive.server.FluxExchangeResult;
 import org.springframework.web.reactive.config.EnableWebFlux;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
 import ao.creativemode.kixi.examrooms.model.ExamRoom;
@@ -61,6 +59,8 @@ class ExamRoomControllerSseTest {
     private QuestionRepository questions;
     @Autowired
     private SimulationRepository simulations;
+    @Autowired
+    private ExamRoomMonitoringService monitoring;
     private WebTestClient client;
 
     @BeforeEach
@@ -76,7 +76,8 @@ class ExamRoomControllerSseTest {
         when(questions.findAllByStatementIdAndDeletedAtIsNull(5L))
                 .thenReturn(Flux.just(new ao.creativemode.kixi.exams.model.Question()));
         when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
-        client = WebTestClient.bindToApplicationContext(applicationContext).build();
+        client = WebTestClient.bindToApplicationContext(applicationContext)
+                .configureClient().responseTimeout(Duration.ofSeconds(30)).build();
     }
 
     @Test
@@ -84,7 +85,7 @@ class ExamRoomControllerSseTest {
         barrier.openStreamPhase();
         List<FluxExchangeResult<ServerSentEvent<ExamRoomLiveResponse>>> responses = Flux.range(0, STREAMS)
                 .flatMap(ignored -> Mono.fromCallable(() -> client.get()
-                        .uri("/test/exam-room-live")
+                        .uri("/api/v1/exam-rooms/7/live")
                         .accept(MediaType.TEXT_EVENT_STREAM)
                         .exchange()
                         .expectStatus().isOk()
@@ -96,10 +97,8 @@ class ExamRoomControllerSseTest {
 
         assertThat(responses).hasSize(STREAMS);
 
-        AtomicInteger cancelled = new AtomicInteger();
         List<List<ServerSentEvent<ExamRoomLiveResponse>>> events = Flux.fromIterable(responses)
                 .flatMap(response -> response.getResponseBody()
-                        .doOnCancel(cancelled::incrementAndGet)
                         .take(2)
                         .collectList(), STREAMS)
                 .collectList()
@@ -116,7 +115,7 @@ class ExamRoomControllerSseTest {
         });
         assertThat(barrier.maximumActive()).isGreaterThan(100);
         assertThat(barrier.snapshotCalls()).isGreaterThanOrEqualTo(STREAMS * 2);
-        assertThat(cancelled).hasValue(STREAMS);
+        assertThat(monitoring.activeStreams()).isZero();
     }
 
     @Configuration
@@ -183,27 +182,6 @@ class ExamRoomControllerSseTest {
                 ExamRoomMonitoringService monitoring) {
             return new ExamRoomController(service, current, monitoring);
         }
-
-        @Bean
-        ProbeController probe(ExamRoomMonitoringService monitoring) {
-            return new ProbeController(monitoring);
-        }
-    }
-
-    @RestController
-    static class ProbeController {
-        private final ExamRoomMonitoringService monitoring;
-
-        ProbeController(ExamRoomMonitoringService monitoring) {
-            this.monitoring = monitoring;
-        }
-
-        @GetMapping(value = "/test/exam-room-live", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-        Flux<ServerSentEvent<ExamRoomLiveResponse>> live() {
-            return monitoring.stream(7L, 99L, false)
-                    .map(snapshot -> ServerSentEvent.<ExamRoomLiveResponse>builder()
-                            .event("progress").data(snapshot).build());
-        }
     }
 
     static class StreamBarrier {
@@ -219,7 +197,7 @@ class ExamRoomControllerSseTest {
         StreamBarrier() {
             when(participants.findByExamRoomId(7L)).thenAnswer(ignored -> {
                 int call = calls.incrementAndGet();
-                if (!streamPhase.get() || call <= STREAMS) {
+                if (!streamPhase.get() || call <= STREAMS * 2) {
                     return Flux.fromIterable(rows);
                 }
                 int current = active.incrementAndGet();

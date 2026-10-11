@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -35,6 +36,7 @@ public class ExamRoomMonitoringService {
     private final SimulationAnswerRepository answers;
     private final QuestionRepository questions;
     private final Clock clock;
+    private final AtomicInteger activeStreams = new AtomicInteger();
 
     public ExamRoomMonitoringService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, SimulationAnswerRepository answers, QuestionRepository questions,
@@ -63,7 +65,13 @@ public class ExamRoomMonitoringService {
         return Flux.interval(Duration.ZERO, Duration.ofSeconds(2))
                 .onBackpressureLatest()
                 .concatMap(ignored -> live(roomId, caller, admin))
-                .takeUntil(value -> value.status() == ExamRoomStatus.CLOSED);
+                .takeUntil(value -> value.status() == ExamRoomStatus.CLOSED)
+                .doOnSubscribe(ignored -> activeStreams.incrementAndGet())
+                .doFinally(ignored -> activeStreams.decrementAndGet());
+    }
+
+    public int activeStreams() {
+        return activeStreams.get();
     }
 
     private Mono<ExamRoomLiveResponse> snapshot(ExamRoom room) {
