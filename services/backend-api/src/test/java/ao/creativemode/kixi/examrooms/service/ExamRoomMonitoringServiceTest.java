@@ -19,10 +19,15 @@ import org.junit.jupiter.api.Test;
 import ao.creativemode.kixi.examrooms.model.ExamRoom;
 import ao.creativemode.kixi.examrooms.model.ExamRoomParticipant;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.model.User;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
+import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
@@ -38,6 +43,8 @@ class ExamRoomMonitoringServiceTest {
     private SimulationRepository simulations;
     private SimulationAnswerRepository answers;
     private QuestionRepository questions;
+    private AccountRepository accounts;
+    private UserRepository users;
     private ExamRoomMonitoringService service;
     private final LocalDateTime now = LocalDateTime.of(2026, 10, 11, 14, 0);
 
@@ -48,8 +55,12 @@ class ExamRoomMonitoringServiceTest {
         simulations = mock(SimulationRepository.class);
         answers = mock(SimulationAnswerRepository.class);
         questions = mock(QuestionRepository.class);
+        accounts = mock(AccountRepository.class);
+        users = mock(UserRepository.class);
+        when(accounts.findAllByIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
+        when(users.findByAccountIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
         service = new ExamRoomMonitoringService(rooms, participants, simulations, answers, questions,
-                Clock.fixed(Instant.parse("2026-10-11T13:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-10-11T13:00:00Z"), ZoneOffset.UTC), accounts, users);
     }
 
     @Test
@@ -111,6 +122,30 @@ class ExamRoomMonitoringServiceTest {
                     assertThat(snapshot.participants().get(0).answeredQuestions()).isEqualTo(1);
                     assertThat(snapshot.progressPercentage()).isEqualTo(50d);
                 })
+                .verifyComplete();
+    }
+
+    @Test
+    void exposesProfileNameAndFallsBackToUsernameInLiveProgress() {
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.RUNNING);
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(participant(1L, 1L, true), participant(2L, 2L, true)));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenReturn(Flux.empty());
+        Account named = new Account();
+        named.setId(1L);
+        named.setUsername("named-user");
+        Account fallback = new Account();
+        fallback.setId(2L);
+        fallback.setUsername("fallback-user");
+        User profile = new User(1L, "Ana", "Silva");
+        when(accounts.findAllByIdInAndDeletedAtIsNull(any())).thenReturn(Flux.just(named, fallback));
+        when(users.findByAccountIdInAndDeletedAtIsNull(any())).thenReturn(Flux.just(profile));
+
+        StepVerifier.create(service.live(7L, 99L, false))
+                .assertNext(snapshot -> assertThat(snapshot.participants())
+                        .extracting(ExamRoomLiveResponse.ParticipantProgress::displayName)
+                        .containsExactly("Ana Silva", "fallback-user"))
                 .verifyComplete();
     }
 

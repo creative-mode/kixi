@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 public record ExamRoomGradeResponse(
         Long accountId,
+        String displayName,
         Long simulationId,
         String status,
         Double finalScore,

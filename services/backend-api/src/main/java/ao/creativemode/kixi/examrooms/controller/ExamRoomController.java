@@ -134,8 +134,8 @@ public class ExamRoomController {
     }
 
     private String toCsv(List<ExamRoomGradeResponse> grades) {
-        StringBuilder csv = new StringBuilder("accountId,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\n");
-        grades.forEach(grade -> csv.append(grade.accountId()).append(',')
+        StringBuilder csv = new StringBuilder("accountId,name,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\n");
+        grades.forEach(grade -> csv.append(grade.accountId()).append(',').append(value(grade.displayName())).append(',')
                 .append(value(grade.simulationId())).append(',')
                 .append(value(grade.status())).append(',')
                 .append(value(grade.finalScore())).append(',')

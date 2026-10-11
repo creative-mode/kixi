@@ -20,6 +20,7 @@ public record ExamRoomLiveResponse(
 ) {
     public record ParticipantProgress(
             Long accountId,
+            String displayName,
             Long simulationId,
             LocalDateTime joinedAt,
             String status,
