@@ -35,8 +35,6 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
-import ao.creativemode.kixi.simulations.model.SimulationStatus;
-import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -65,7 +63,6 @@ class ExamRoomServiceTest {
         deadlineService = mock(SimulationDeadlineService.class);
         when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class)))
                 .thenReturn(Mono.just(true));
-        deadlineService = mock(SimulationDeadlineService.class);
         accounts = mock(AccountRepository.class);
         statements = mock(StatementRepository.class);
         classes = mock(ClassRepository.class);
@@ -205,7 +202,9 @@ class ExamRoomServiceTest {
         ExamRoomParticipant participant = participant(20L, 42L);
         participant.setSimulationId(80L);
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
-        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
+        Simulation inProgress = simulation(80L);
+        inProgress.setStatus(SimulationStatus.IN_PROGRESS);
+        when(simulations.findById(80L)).thenReturn(Mono.just(inProgress));
         when(deadlineService.acceptsAnswers(any(Simulation.class), any(LocalDateTime.class))).thenReturn(Mono.just(false));
 
         StepVerifier.create(service.studentView(20L, 42L))
@@ -229,42 +228,6 @@ class ExamRoomServiceTest {
         StepVerifier.create(service.studentView(20L, 42L))
                 .expectErrorMatches(error -> error instanceof ApiException api
                         && api.getStatus() == HttpStatus.CONFLICT)
-                .verify();
-        verifyNoInteractions(questions, options);
-    }
-
-    @Test
-    void studentViewRejectsExpiredIndividualSimulationBeforeLoadingQuestions() {
-        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
-        ExamRoomParticipant participant = participant(20L, 42L);
-        participant.setSimulationId(80L);
-        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
-        Simulation simulation = simulation(80L);
-        simulation.setStatus(SimulationStatus.IN_PROGRESS);
-        when(simulations.findById(80L)).thenReturn(Mono.just(simulation));
-        when(deadlineService.acceptsAnswers(eq(simulation), any(LocalDateTime.class))).thenReturn(Mono.just(false));
-
-        StepVerifier.create(service.studentView(20L, 42L))
-                .expectErrorMatches(error -> error instanceof ApiException api
-                        && api.getStatusCode() == 409)
-                .verify();
-        verifyNoInteractions(questions, options);
-    }
-
-    @Test
-    void studentViewRejectsTerminalSimulationBeforeLoadingQuestions() {
-        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
-        ExamRoomParticipant participant = participant(20L, 42L);
-        participant.setSimulationId(80L);
-        when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant));
-        Simulation simulation = simulation(80L);
-        simulation.setStatus(SimulationStatus.FINISHED);
-        when(simulations.findById(80L)).thenReturn(Mono.just(simulation));
-        when(deadlineService.acceptsAnswers(eq(simulation), any(LocalDateTime.class))).thenReturn(Mono.just(false));
-
-        StepVerifier.create(service.studentView(20L, 42L))
-                .expectErrorMatches(error -> error instanceof ApiException api
-                        && api.getStatusCode() == 409)
                 .verify();
         verifyNoInteractions(questions, options);
     }
