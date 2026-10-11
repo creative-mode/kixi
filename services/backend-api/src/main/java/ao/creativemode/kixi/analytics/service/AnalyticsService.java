@@ -47,25 +47,62 @@ public class AnalyticsService {
     }
 
     public Mono<Overview> overview() {
-        return scope().flatMap(repository::overview);
+        return overview(Filters.NONE);
+    }
+
+    public Mono<Overview> overview(Filters filters) {
+        return scope(filters).flatMap(repository::overview);
     }
 
     public Flux<ActivityPoint> activity(Integer days) {
+        return activity(days, Filters.NONE);
+    }
+
+    public Flux<ActivityPoint> activity(Integer days, Filters filters) {
         int n = within("days", days, DEFAULT_DAYS, MAX_DAYS);
-        return scope().flatMapMany(scope -> repository.activity(scope, n));
+        return scope(filters).flatMapMany(scope -> repository.activity(scope, n));
     }
 
     public Flux<InstitutionStats> institutions() {
-        return scope().flatMapMany(repository::institutions);
+        return institutions(Filters.NONE);
+    }
+
+    public Flux<InstitutionStats> institutions(Filters filters) {
+        return scope(filters).flatMapMany(repository::institutions);
     }
 
     public Flux<ClassStats> classes() {
-        return scope().flatMapMany(repository::classes);
+        return classes(Filters.NONE);
+    }
+
+    public Flux<ClassStats> classes(Filters filters) {
+        return scope(filters).flatMapMany(repository::classes);
     }
 
     public Flux<StatementStats> statements(Integer limit) {
+        return statements(limit, Filters.NONE);
+    }
+
+    public Flux<StatementStats> statements(Integer limit, Filters filters) {
         int n = within("limit", limit, DEFAULT_STATEMENTS, MAX_STATEMENTS);
-        return scope().flatMapMany(scope -> repository.statements(scope, n));
+        return scope(filters).flatMapMany(scope -> repository.statements(scope, n));
+    }
+
+    /**
+     * Optional narrowing by school and class. A filter outside the caller's scope is
+     * not an error: it simply leaves nothing to count, because the scope still applies.
+     */
+    public record Filters(Long institutionId, Long classId) {
+        public static final Filters NONE = new Filters(null, null);
+
+        public Filters {
+            if (institutionId != null && institutionId < 1) {
+                throw ApiException.badRequest("institutionId must be a positive id");
+            }
+            if (classId != null && classId < 1) {
+                throw ApiException.badRequest("classId must be a positive id");
+            }
+        }
     }
 
     public Flux<QuestionStats> statementQuestions(long statementId) {
@@ -94,9 +131,14 @@ public class AnalyticsService {
     }
 
     private Mono<AnalyticsScope> scope() {
+        return scope(Filters.NONE);
+    }
+
+    private Mono<AnalyticsScope> scope(Filters filters) {
         return current.requiredAccountId()
                 .zipWith(current.hasAnyRole("ADMIN"))
-                .map(tuple -> new AnalyticsScope(tuple.getT1(), tuple.getT2()));
+                .map(tuple -> new AnalyticsScope(tuple.getT1(), tuple.getT2())
+                        .filtered(filters.institutionId(), filters.classId()));
     }
 
     private static Mono<Void> require(Access access, String what) {

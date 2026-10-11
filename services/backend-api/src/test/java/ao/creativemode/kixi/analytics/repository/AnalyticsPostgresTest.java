@@ -209,6 +209,20 @@ class AnalyticsPostgresTest {
         assertThat(analytics.activity(admin, 7).collectList().block(Duration.ofSeconds(10))).hasSize(7);
     }
 
+    @Test
+    void aFilterNarrowsButNeverWidensTheScope() {
+        AnalyticsScope admin = new AnalyticsScope(ADMIN, true).filtered(null, CLASS_B);
+        assertThat(analytics.statements(admin, 50).collectList().block(Duration.ofSeconds(10)))
+                .extracting(StatementStats::id).containsExactly(SO_B);
+        assertThat(analytics.overview(admin).block(Duration.ofSeconds(10)).students()).isEqualTo(2);
+
+        // Teacher A asking for B's class gets nothing, not B's numbers.
+        AnalyticsScope a = new AnalyticsScope(TEACHER_A, false).filtered(null, CLASS_B);
+        Overview overview = analytics.overview(a).block(Duration.ofSeconds(10));
+        assertThat(overview.statements().total()).isZero();
+        assertThat(overview.averageScorePercent()).isNull();
+    }
+
     private void sql(String statement) {
         database.sql(statement).fetch().rowsUpdated().block(Duration.ofSeconds(10));
     }

@@ -10,6 +10,7 @@ import ao.creativemode.kixi.analytics.dto.QuestionStats;
 import ao.creativemode.kixi.analytics.dto.StatementStats;
 import ao.creativemode.kixi.analytics.dto.WeeklyPoint;
 import ao.creativemode.kixi.analytics.service.AnalyticsService;
+import ao.creativemode.kixi.analytics.service.AnalyticsService.Filters;
 import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,28 +36,37 @@ public class AnalyticsController {
     }
 
     @GetMapping("/overview")
-    public Mono<ResponseEntity<Overview>> overview() {
-        return service.overview().map(ResponseEntity::ok);
+    public Mono<ResponseEntity<Overview>> overview(
+            @RequestParam(required = false) Long institutionId, @RequestParam(required = false) Long classId) {
+        return Mono.defer(() -> service.overview(new Filters(institutionId, classId))).map(ResponseEntity::ok);
     }
 
     @GetMapping("/activity")
-    public Mono<ResponseEntity<List<ActivityPoint>>> activity(@RequestParam(required = false) Integer days) {
-        return Mono.defer(() -> service.activity(days).collectList()).map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<ActivityPoint>>> activity(@RequestParam(required = false) Integer days,
+            @RequestParam(required = false) Long institutionId, @RequestParam(required = false) Long classId) {
+        return Mono.defer(() -> service.activity(days, new Filters(institutionId, classId)).collectList())
+                .map(ResponseEntity::ok);
     }
 
     @GetMapping("/institutions")
-    public Mono<ResponseEntity<List<InstitutionStats>>> institutions() {
-        return service.institutions().collectList().map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<InstitutionStats>>> institutions(
+            @RequestParam(required = false) Long institutionId, @RequestParam(required = false) Long classId) {
+        return Mono.defer(() -> service.institutions(new Filters(institutionId, classId)).collectList())
+                .map(ResponseEntity::ok);
     }
 
     @GetMapping("/classes")
-    public Mono<ResponseEntity<List<ClassStats>>> classes() {
-        return service.classes().collectList().map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<ClassStats>>> classes(
+            @RequestParam(required = false) Long institutionId, @RequestParam(required = false) Long classId) {
+        return Mono.defer(() -> service.classes(new Filters(institutionId, classId)).collectList())
+                .map(ResponseEntity::ok);
     }
 
     @GetMapping("/statements")
-    public Mono<ResponseEntity<List<StatementStats>>> statements(@RequestParam(required = false) Integer limit) {
-        return Mono.defer(() -> service.statements(limit).collectList()).map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<StatementStats>>> statements(@RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) Long institutionId, @RequestParam(required = false) Long classId) {
+        return Mono.defer(() -> service.statements(limit, new Filters(institutionId, classId)).collectList())
+                .map(ResponseEntity::ok);
     }
 
     @GetMapping("/statements/{id}/questions")
