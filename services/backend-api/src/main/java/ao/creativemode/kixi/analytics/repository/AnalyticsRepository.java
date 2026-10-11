@@ -54,10 +54,29 @@ public class AnalyticsRepository {
             + " WHERE qo.question_id = q.id AND qo.deleted_at IS NULL AND qo.is_correct = TRUE)"
             + " AND (q.model_answer IS NULL OR btrim(q.model_answer) = ''))";
 
-    /** A simulation counts towards a class when the student holds a seat in it. */
-    private static final String STUDENTS_OF_CLASS =
-            "s.account_id IN (SELECT e2.account_id FROM enrollments e2"
-            + " WHERE e2.class_id = cl.id AND e2.deleted_at IS NULL AND e2.status = 'ACTIVE')";
+    /**
+     * The finished, scorable simulations of every class, aggregated once.
+     *
+     * <p>A derived table rather than four more joins: the score needs
+     * {@code statements} for its maximum, and pulling that table into the outer query
+     * means referencing it before it appears in the FROM clause — or multiplying a
+     * school's simulations by every class and student they pass through to get there.</p>
+     */
+    private static final String CLASS_SCORES =
+            "LEFT JOIN ("
+            + " SELECT e.class_id,"
+            + "  COUNT(DISTINCT s.id) AS finished_simulations,"
+            + "  AVG(" + PERCENT + ") AS average_score,"
+            + "  AVG(s.time_spent_seconds) AS average_time"
+            + " FROM enrollments e"
+            // statements first: a percentage cannot be computed without the maximum, and
+            // a join may only use what is already in the FROM clause.
+            + " JOIN statements st ON st.deleted_at IS NULL"
+            + "   AND st.total_max_score IS NOT NULL AND st.total_max_score > 0"
+            + " JOIN simulations s ON s.statement_id = st.id AND s.account_id = e.account_id"
+            + "   AND s.deleted_at IS NULL AND " + FINISHED + " AND s.final_score IS NOT NULL"
+            + " WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE'"
+            + " GROUP BY e.class_id) sc ON sc.class_id = cl.id";
 
     /** The finished simulations of one statement, reused by the per-question counts. */
     private static final String FINISHED_OF_STATEMENT =
@@ -150,7 +169,11 @@ public class AnalyticsRepository {
                 "WHERE " + LIVE_STATEMENT,
                 "  AND " + FINISHED + " AND " + SCORABLE,
                 "  AND s.finished_at >= :from AND s.finished_at < :to",
-                seatedIn(classIds)))
+                seatedIn(classIds),
+                // Grouped on the day, ordered by it: a chart is read left to right and the
+                // database is free to return the days in any order it likes.
+                "GROUP BY 1",
+                "ORDER BY 1"))
                 .bind("from", from)
                 .bind("to", to),
                 classIds,
@@ -167,18 +190,20 @@ public class AnalyticsRepository {
                 "  COUNT(DISTINCT co.id) AS courses,",
                 "  COUNT(DISTINCT cl.id) AS classes,",
                 "  COUNT(DISTINCT e.account_id) AS students,",
-                "  COUNT(DISTINCT s.id) AS finished_simulations,",
-                "  AVG(" + PERCENT + ") AS average_score,",
-                "  AVG(s.time_spent_seconds) AS average_time",
+                "  COALESCE(SUM(sc.finished_simulations), 0) AS finished_simulations,",
+                // Weighted by how many simulations each class contributed, so a class of
+                // two does not swing the average of a school of four hundred.
+                "  SUM(sc.average_score * sc.finished_simulations)",
+                "    / NULLIF(SUM(sc.finished_simulations), 0) AS average_score,",
+                "  SUM(sc.average_time * sc.finished_simulations)",
+                "    / NULLIF(SUM(sc.finished_simulations), 0) AS average_time",
                 "FROM institutions i",
                 "LEFT JOIN classes cl ON cl.institution_id = i.id AND cl.deleted_at IS NULL",
                 in("cl.id", classIds),
                 "LEFT JOIN courses co ON co.institution_id = i.id AND co.deleted_at IS NULL",
                 "LEFT JOIN enrollments e ON e.class_id = cl.id",
                 "  AND e.deleted_at IS NULL AND e.status = 'ACTIVE'",
-                "LEFT JOIN simulations s ON s.deleted_at IS NULL AND " + FINISHED,
-                "  AND " + SCORABLE + " AND " + STUDENTS_OF_CLASS,
-                "LEFT JOIN statements st ON st.id = s.statement_id AND st.deleted_at IS NULL",
+                CLASS_SCORES,
                 "WHERE i.deleted_at IS NULL",
                 "GROUP BY i.id, i.code, i.name",
                 "ORDER BY i.name")),
@@ -196,9 +221,12 @@ public class AnalyticsRepository {
                 "  COUNT(DISTINCT e.account_id) AS students,",
                 "  COUNT(DISTINCT ta.teacher_id) AS teachers,",
                 "  COUNT(DISTINCT stx.id) AS statements,",
-                "  COUNT(DISTINCT s.id) AS finished_simulations,",
-                "  AVG(" + PERCENT + ") AS average_score,",
-                "  AVG(s.time_spent_seconds) AS average_time",
+                // One row per class in sc, so MAX is the value itself rather than an
+                // aggregate over anything: PostgreSQL cannot see that sc is determined
+                // by cl.id when the group is the rest of the class row.
+                "  COALESCE(MAX(sc.finished_simulations), 0) AS finished_simulations,",
+                "  MAX(sc.average_score) AS average_score,",
+                "  MAX(sc.average_time) AS average_time",
                 "FROM classes cl",
                 "LEFT JOIN courses co ON co.id = cl.course_id AND co.deleted_at IS NULL",
                 "LEFT JOIN institutions i ON i.id = cl.institution_id AND i.deleted_at IS NULL",
@@ -206,9 +234,7 @@ public class AnalyticsRepository {
                 "  AND e.deleted_at IS NULL AND e.status = 'ACTIVE'",
                 "LEFT JOIN teaching_assignments ta ON ta.class_id = cl.id AND ta.deleted_at IS NULL",
                 "LEFT JOIN statements stx ON stx.class_id = cl.id AND stx.deleted_at IS NULL",
-                "LEFT JOIN simulations s ON s.deleted_at IS NULL AND " + FINISHED,
-                "  AND " + SCORABLE + " AND " + STUDENTS_OF_CLASS,
-                "LEFT JOIN statements st ON st.id = s.statement_id AND st.deleted_at IS NULL",
+                CLASS_SCORES,
                 "WHERE cl.deleted_at IS NULL",
                 in("cl.id", classIds),
                 "GROUP BY cl.id, cl.code, cl.grade, co.name, i.name",
