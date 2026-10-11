@@ -207,11 +207,19 @@ public class AnalyticsRepository {
     }
 
     private DatabaseClient.GenericExecuteSpec query(String sql, AnalyticsScope scope, Map<String, Object> binds) {
-        DatabaseClient.GenericExecuteSpec spec = database.sql(sql)
-                .bind("accountId", scope.accountId())
-                .bind("admin", scope.admin());
-        for (Map.Entry<String, Object> bind : binds.entrySet()) {
-            spec = spec.bind(bind.getKey(), bind.getValue());
+        Map<String, Object> all = new java.util.LinkedHashMap<>();
+        all.put("accountId", scope.accountId());
+        all.put("admin", scope.admin());
+        all.put("wide", scope.wide());
+        all.put("filterInstitution", scope.institutionId());
+        all.put("filterClass", scope.classId());
+        all.putAll(binds);
+        DatabaseClient.GenericExecuteSpec spec = database.sql(sql);
+        for (Map.Entry<String, Object> bind : all.entrySet()) {
+            // Only the binds the statement names: not every query uses :wide.
+            if (sql.contains(":" + bind.getKey())) {
+                spec = spec.bind(bind.getKey(), bind.getValue());
+            }
         }
         return spec;
     }

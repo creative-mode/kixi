@@ -12,7 +12,13 @@ package ao.creativemode.kixi.analytics.repository;
  * write a statement. Simulations follow their statement. A statement without a
  * class belongs to no teacher's numbers.</p>
  *
- * <p>Binds: {@code :accountId} (Long) and {@code :admin} (Boolean) on every query,
+ * <p>Optional filters narrow the scope further, never widen it:
+ * {@code :filterInstitution} and {@code :filterClass} (Long, 0 for "all"). {@code :wide}
+ * (Boolean) is an ADMIN with no filter: the only case where school-wide counts that do
+ * not go through a class (students by role, every teacher) apply.</p>
+ *
+ * <p>Binds: {@code :accountId} (Long), {@code :admin}, {@code :wide} (Boolean) and the
+ * two filters on every query,
  * plus the ones each query names.</p>
  */
 public final class AnalyticsSql {
@@ -37,6 +43,8 @@ public final class AnalyticsSql {
                 FROM classes c
                 WHERE c.deleted_at IS NULL
                   AND (:admin OR c.id IN (SELECT class_id FROM scope_pairs))
+                  AND (CAST(:filterInstitution AS bigint) = 0 OR c.institution_id = :filterInstitution)
+                  AND (CAST(:filterClass AS bigint) = 0 OR c.id = :filterClass)
             ),
             scoped_statements AS (
                 SELECT s.*, COALESCE(s.institution_id, cl.institution_id) AS owner_institution_id
@@ -46,6 +54,9 @@ public final class AnalyticsSql {
                   AND (:admin OR EXISTS (
                       SELECT 1 FROM scope_pairs p
                       WHERE p.class_id = s.class_id AND p.subject_id = s.subject_id))
+                  AND (CAST(:filterInstitution AS bigint) = 0
+                       OR COALESCE(s.institution_id, cl.institution_id) = :filterInstitution)
+                  AND (CAST(:filterClass AS bigint) = 0 OR s.class_id = :filterClass)
             ),
             scored AS (
                 SELECT sim.id, sim.account_id, sim.statement_id, sim.status, sim.finished_at,
@@ -79,16 +90,16 @@ public final class AnalyticsSql {
         return SCOPE + """
                 SELECT
                   (SELECT COUNT(*) FROM institutions i WHERE i.deleted_at IS NULL
-                      AND (:admin OR i.id IN (SELECT institution_id FROM scoped_classes))) AS institutions,
+                      AND (:wide OR i.id IN (SELECT institution_id FROM scoped_classes))) AS institutions,
                   (SELECT COUNT(*) FROM scoped_classes) AS classes,
-                  (SELECT CASE WHEN :admin THEN
+                  (SELECT CASE WHEN :wide THEN
                       (SELECT COUNT(DISTINCT a.id) FROM accounts a
                        JOIN account_roles ar ON ar.account_id = a.id AND ar.deleted_at IS NULL
                        JOIN roles r ON r.id = ar.role_id AND r.name = 'STUDENT' AND r.deleted_at IS NULL
                        WHERE a.deleted_at IS NULL)
                     ELSE (SELECT COUNT(DISTINCT e.account_id) FROM enrollments e
                           WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE' AND e.class_id IN (SELECT id FROM scoped_classes)) END) AS students,
-                  (SELECT CASE WHEN :admin THEN (SELECT COUNT(*) FROM teachers t WHERE t.deleted_at IS NULL)
+                  (SELECT CASE WHEN :wide THEN (SELECT COUNT(*) FROM teachers t WHERE t.deleted_at IS NULL)
                     ELSE (SELECT COUNT(DISTINCT ta.teacher_id) FROM teaching_assignments ta
                           WHERE ta.deleted_at IS NULL AND ta.class_id IN (SELECT id FROM scoped_classes)) END) AS teachers,
                   (SELECT COUNT(*) FROM scoped_statements) AS statements_total,
@@ -133,7 +144,7 @@ public final class AnalyticsSql {
         return SCOPE + """
                 SELECT i.id, i.code, i.name,
                   (SELECT COUNT(*) FROM courses co WHERE co.institution_id = i.id AND co.deleted_at IS NULL
-                      AND (:admin OR co.id IN (SELECT course_id FROM scoped_classes))) AS courses,
+                      AND (:wide OR co.id IN (SELECT course_id FROM scoped_classes))) AS courses,
                   (SELECT COUNT(*) FROM scoped_classes c WHERE c.institution_id = i.id) AS classes,
                   (SELECT COUNT(DISTINCT e.account_id) FROM enrollments e
                       JOIN scoped_classes c ON c.id = e.class_id
@@ -145,7 +156,7 @@ public final class AnalyticsSql {
                       WHERE sc.owner_institution_id = i.id AND sc.status = 'FINISHED') AS average_time
                 FROM institutions i
                 WHERE i.deleted_at IS NULL
-                  AND (:admin OR i.id IN (SELECT institution_id FROM scoped_classes))
+                  AND (:wide OR i.id IN (SELECT institution_id FROM scoped_classes))
                 ORDER BY i.name
                 """;
     }

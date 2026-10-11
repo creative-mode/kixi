@@ -49,7 +49,7 @@ class AnalyticsControllerTest {
 
     @Test
     void aTeacherGetsTheOverviewInTheShapeTheDashboardReads() {
-        when(service.overview()).thenReturn(Mono.just(new Overview(
+        when(service.overview(any())).thenReturn(Mono.just(new Overview(
                 "TEACHER", 1, 2, 30, 1,
                 new Overview.Statements(4, 3, 1, 0),
                 new Overview.Simulations(10, 8, 1, 1, 9),
@@ -85,7 +85,7 @@ class AnalyticsControllerTest {
 
     @Test
     void anOutOfRangeParameterIsABadRequest() {
-        when(service.activity(any())).thenThrow(ApiException.badRequest("days must be between 1 and 365"));
+        when(service.activity(any(), any())).thenThrow(ApiException.badRequest("days must be between 1 and 365"));
 
         client.mutateWith(as("ADMIN"))
                 .get().uri("/api/v1/analytics/activity?days=999")
@@ -106,13 +106,21 @@ class AnalyticsControllerTest {
 
     @Test
     void listsComeBackAsArrays() {
-        when(service.statements(any())).thenReturn(Flux.empty());
+        when(service.statements(any(), any())).thenReturn(Flux.empty());
 
         client.mutateWith(as("ADMIN"))
                 .get().uri("/api/v1/analytics/statements?limit=5")
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody().json("[]");
+    }
+
+    @Test
+    void aNonPositiveFilterIsABadRequest() {
+        client.mutateWith(as("ADMIN"))
+                .get().uri("/api/v1/analytics/overview?classId=0")
+                .exchange()
+                .expectStatus().isBadRequest();
     }
 
     private static WebTestClientConfigurer as(String role) {
