@@ -45,7 +45,6 @@ class ExamRoomServiceTest {
     private ExamRoomParticipantRepository participants;
     private SimulationRepository simulations;
     private SimulationDeadlineService deadlineService;
-    private SimulationDeadlineService deadlineService;
     private AccountRepository accounts;
     private StatementRepository statements;
     private ClassRepository classes;
