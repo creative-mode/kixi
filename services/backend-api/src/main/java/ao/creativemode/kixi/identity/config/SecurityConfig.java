@@ -184,6 +184,12 @@ public class SecurityConfig {
                         // file already carries were both accidents of the same kind.
                         .pathMatchers("/api/v1/leaderboard", "/api/v1/leaderboard/**")
                         .authenticated()
+                        // Friendships (issue #121): any signed-in account, for the same
+                        // reason the ranking is. What a request may do is decided by who
+                        // is holding the other end of it, not by a role, and a teacher
+                        // follows a colleague exactly like a student does.
+                        .pathMatchers("/api/v1/friends", "/api/v1/friends/**")
+                        .authenticated()
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling

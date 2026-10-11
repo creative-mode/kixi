@@ -41,6 +41,7 @@ class LeaderboardServiceTest {
 
     private static final Long ACCOUNT_ID = 12L;
     private static final Long CLASS_ID = 7L;
+    private static final Long FRIEND_ID = 34L;
     private static final Long SCHOOL_ID = 1L;
     private static final Long OTHER_SCHOOL_ID = 2L;
     private static final Long YEAR = 1L;
@@ -471,12 +472,65 @@ class LeaderboardServiceTest {
     // ── The parts not built yet ─────────────────────────────────────────────
 
     @Test
-    void theFriendsScopeIsNotFoundUntilFriendshipsExist() {
+    void theFriendsScopeRanksTheFriendsOfTheCaller() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.scope()).isEqualTo("friends");
+        assertThat(response.entries()).hasSize(2);
+        // The group id handed to the repository is the caller's own account: a friendship
+        // is a pair of ids, and there is no column on enrollments that could carry it.
+        verify(repository).findAverages(eq(Scope.FRIENDS), eq(ACCOUNT_ID), any(), any(), any(), any());
+    }
+
+    /**
+     * A group of two friends is still readable.
+     *
+     * <p>The small-group floor would hide every row of a two-person table, and the
+     * acceptance criterion of issue #121 is that the two of them appear to each other.
+     * Mutual consent is what the floor was standing in for, and here it was given.</p>
+     */
+    @Test
+    void twoFriendsStillSeeEachOther() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.entries()).hasSize(2);
+        assertThat(response.entries()).anySatisfy(row -> {
+            assertThat(row.position()).isEqualTo(2);
+            assertThat(row.displayName()).isNotBlank();
+        });
+    }
+
+    /**
+     * The floor still applies to a class of the same size.
+     *
+     * <p>The exception is for friends, not for small tables: a class of two is the case
+     * the rule was written for.</p>
+     */
+    @Test
+    void theSmallGroupFloorStillAppliesToAClass() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.entries()).noneSatisfy(row ->
+                assertThat(row.position()).isEqualTo(2));
+    }
+
+    /** A student with no seat has no school year, and friends are counted over it. */
+    @Test
+    void theFriendsScopeNeedsAnActiveEnrollment() {
+        noSeat();
+
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "friends", null, "all"))
-                .expectErrorSatisfies(error -> {
-                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                    assertThat(error).hasMessageContaining("#121");
-                })
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
     }
 

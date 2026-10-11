@@ -89,11 +89,6 @@ public class LeaderboardService {
     public Mono<LeaderboardResponse> leaderboard(
             Long accountId, String scope, Long statementId, String period) {
         return Mono.defer(() -> {
-            if ("friends".equalsIgnoreCase(scope)) {
-                return Mono.error(ApiException.notFound(
-                        "The friends ranking is not available yet; it arrives with friendships (issue #121)"));
-            }
-
             Scope resolved;
             Period window;
             try {
@@ -124,12 +119,18 @@ public class LeaderboardService {
         return seats.activeSeatsOf(accountId)
                 .filter(seat -> scope != Scope.SCHOOL || seat.institutionId() != null)
                 .next()
+                .filter(seat -> scope != Scope.SCHOOL || seat.institutionId() != null)
                 .switchIfEmpty(Mono.error(ApiException.forbidden(switch (scope) {
                     case CLASS -> "A class ranking needs an active enrollment in a class";
                     case SCHOOL -> "A school ranking needs an active enrollment in a school";
+                    case FRIENDS -> "The friends ranking needs an active enrollment in a school";
                 })))
                 .map(seat -> new Cohort(
-                        scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
+                        // Friends are not a group: the "group id" the repository wants is
+                        // the caller's own account, because a friendship is a pair of ids
+                        // and not a column on enrollments.
+                        scope == Scope.FRIENDS ? accountId
+                                : scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
                         seat.schoolYearId()));
     }
 
@@ -242,7 +243,15 @@ public class LeaderboardService {
         List<Ranked> ranked = ranking.ranked();
         // Both numbers matter. Too few enrolled, or too few with a score to rank, and the
         // table is short enough that naming its bottom says something about real people.
-        boolean smallGroup = Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
+        //
+        // Friends are the exception, and the acceptance criterion of issue #121 is the
+        // reason: "two students become friends and appear in each other's ranking" cannot
+        // hold if the floor hides every row of a two-person table. The floor exists because
+        // a student is ranked beside people they were placed with, and the teacher can see
+        // the table. A friend was asked and answered — that is the consent the floor was
+        // standing in for, and here it has actually been given.
+        boolean smallGroup = scope != Scope.FRIENDS
+                && Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
 
         int mine = -1;
         for (int i = 0; i < ranked.size(); i++) {
