@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ao.creativemode.kixi.exams.dto.statement.CatalogStatementSummary;
 import ao.creativemode.kixi.exams.dto.statement.StatementCatalogFilter;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository;
@@ -42,6 +43,7 @@ class StatementCatalogServiceTest {
         service = new StatementCatalogService(repository, meService);
         when(repository.findPage(any())).thenReturn(Flux.empty());
         when(repository.count(any())).thenReturn(Mono.just(0L));
+        when(repository.countQuestions(any())).thenReturn(Mono.just(java.util.Map.of()));
     }
 
     @Test
@@ -118,7 +120,7 @@ class StatementCatalogServiceTest {
 
         StepVerifier.create(service.catalog(filter(null, null, null, 2, 10), STUDENT))
                 .assertNext(page -> {
-                    assertThat(page.content()).extracting(Statement::getId).containsExactly(1L, 2L);
+                    assertThat(page.content()).extracting(CatalogStatementSummary::id).containsExactly(1L, 2L);
                     assertThat(page.page()).isEqualTo(2);
                     assertThat(page.size()).isEqualTo(10);
                     assertThat(page.totalElements()).isEqualTo(45L);
@@ -129,6 +131,21 @@ class StatementCatalogServiceTest {
         Criteria criteria = capturedCriteria();
         assertThat(criteria.limit()).isEqualTo(10);
         assertThat(criteria.offset()).isEqualTo(20L);
+    }
+
+    @Test
+    void everyStatementCarriesItsQuestionCountFromOneGroupedQuery() {
+        // #178. A statement with no live questions is missing from the counts: zero.
+        givenTheStudentIsEnrolled();
+        when(repository.findPage(any())).thenReturn(Flux.just(statement(1L), statement(2L)));
+        when(repository.countQuestions(List.of(1L, 2L))).thenReturn(Mono.just(java.util.Map.of(1L, 12L)));
+
+        StepVerifier.create(service.catalog(filter(null, null, null, 0, 20), STUDENT))
+                .assertNext(page -> assertThat(page.content())
+                        .extracting(CatalogStatementSummary::questionCount)
+                        .containsExactly(12L, 0L))
+                .verifyComplete();
+        verify(repository).countQuestions(List.of(1L, 2L));
     }
 
     @Test

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
+import ao.creativemode.kixi.exams.dto.statement.CatalogStatementSummary;
 import ao.creativemode.kixi.exams.dto.statement.StatementCatalogFilter;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.ManualStatementService;
@@ -79,7 +80,8 @@ class StatementCatalogControllerTest {
     @Test
     void aStudentGetsAPageOfStatementSummaries() {
         when(catalogService.catalog(any(), eq(42L)))
-                .thenReturn(Mono.just(PageResponse.of(List.of(statement()), 0, 20, 21)));
+                .thenReturn(Mono.just(PageResponse.of(
+                        List.of(CatalogStatementSummary.from(statement(), 3)), 0, 20, 21)));
 
         client.mutateWith(studentJwt())
                 .get()
@@ -89,6 +91,12 @@ class StatementCatalogControllerTest {
                 .expectBody()
                 .jsonPath("$.content[0].id").isEqualTo(7)
                 .jsonPath("$.content[0].title").isEqualTo("Exame de Matemática")
+                // #178
+                .jsonPath("$.content[0].questionCount").isEqualTo(3)
+                // #170: what only matters to whoever edits the statement stays out
+                .jsonPath("$.content[0].ocrConfidence").doesNotExist()
+                .jsonPath("$.content[0].needsReview").doesNotExist()
+                .jsonPath("$.content[0].source").doesNotExist()
                 .jsonPath("$.page").isEqualTo(0)
                 .jsonPath("$.size").isEqualTo(20)
                 .jsonPath("$.totalElements").isEqualTo(21)
@@ -159,6 +167,9 @@ class StatementCatalogControllerTest {
         Statement statement = new Statement("Exame Final", "Exame de Matemática");
         statement.setId(7L);
         statement.setVisible(true);
+        statement.setSource("ocr");
+        statement.setNeedsReview(true);
+        statement.setOcrConfidence(0.42);
         return statement;
     }
 
