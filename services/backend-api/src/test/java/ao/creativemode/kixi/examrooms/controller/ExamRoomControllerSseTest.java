@@ -1,107 +1,261 @@
 package ao.creativemode.kixi.examrooms.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.test.web.reactive.server.FluxExchangeResult;
+import org.springframework.web.reactive.config.EnableWebFlux;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
+import ao.creativemode.kixi.examrooms.model.ExamRoom;
+import ao.creativemode.kixi.examrooms.model.ExamRoomParticipant;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
+import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.examrooms.service.ExamRoomMonitoringService;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
+import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
+import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+@SpringJUnitConfig(ExamRoomControllerSseTest.TestConfiguration.class)
 class ExamRoomControllerSseTest {
+    private static final int STREAMS = 120;
+
+    @Autowired
+    private ApplicationContext applicationContext;
+    @Autowired
+    private StreamBarrier barrier;
+    @Autowired
+    private ExamRoomRepository rooms;
+    @Autowired
+    private QuestionRepository questions;
+    @Autowired
+    private SimulationRepository simulations;
     private WebTestClient client;
-
-    private ExamRoomService service;
-
-    private CurrentAccountService current;
-
-    private ExamRoomMonitoringService monitoring;
 
     @BeforeEach
     void setUp() {
-        service = org.mockito.Mockito.mock(ExamRoomService.class);
-        current = org.mockito.Mockito.mock(CurrentAccountService.class);
-        monitoring = org.mockito.Mockito.mock(ExamRoomMonitoringService.class);
-        client = WebTestClient.bindToController(new ExamRoomController(service, current, monitoring)).build();
-        when(current.requiredAccountId()).thenReturn(Mono.just(99L));
-        when(current.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
-        when(current.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
+        ExamRoom room = new ExamRoom();
+        room.setId(7L);
+        room.setStatementId(5L);
+        room.setTeacherAccountId(99L);
+        room.setStatus(ExamRoomStatus.RUNNING);
+        room.setStartsAt(LocalDateTime.now().minusMinutes(10));
+        room.setEndsAt(LocalDateTime.now().plusMinutes(30));
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L))
+                .thenReturn(Flux.just(new ao.creativemode.kixi.exams.model.Question()));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        client = WebTestClient.bindToApplicationContext(applicationContext).build();
     }
 
     @Test
-    void servesAndCancelsOneHundredTwentyConcurrentLiveStreams() {
-        ExamRoomLiveResponse snapshot = snapshotWithParticipants(120);
-        AtomicInteger emitted = new AtomicInteger();
-        AtomicInteger openStreams = new AtomicInteger();
-        AtomicInteger maximumOpenStreams = new AtomicInteger();
-        when(monitoring.live(7L, 99L, false)).thenReturn(Mono.just(snapshot));
-        when(monitoring.stream(7L, 99L, false)).thenAnswer(ignored -> {
-            int open = openStreams.incrementAndGet();
-            maximumOpenStreams.updateAndGet(previous -> Math.max(previous, open));
-            return Flux.range(0, 120)
-                    .map(ignoredEvent -> snapshot)
-                    .doOnNext(ignoredEvent -> emitted.incrementAndGet())
-                    .doFinally(signal -> openStreams.decrementAndGet());
-        });
-
-        List<String> bodies = Flux.range(0, 120)
-                .flatMap(ignored -> Mono.fromCallable(() -> readTwoEvents())
-                        .subscribeOn(Schedulers.boundedElastic()), 120)
+    void servesOneHundredTwentyConcurrentRealSseStreamsWithPollingAndCancellation() throws Exception {
+        barrier.openStreamPhase();
+        List<FluxExchangeResult<ServerSentEvent<ExamRoomLiveResponse>>> responses = Flux.range(0, STREAMS)
+                .flatMap(ignored -> Mono.fromCallable(() -> client.get()
+                        .uri("/test/exam-room-live")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .exchange()
+                        .expectStatus().isOk()
+                        .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)
+                        .returnResult(new ParameterizedTypeReference<ServerSentEvent<ExamRoomLiveResponse>>() { }))
+                        .subscribeOn(Schedulers.boundedElastic()), STREAMS)
                 .collectList()
-                .block();
+                .block(Duration.ofSeconds(30));
 
-        assertThat(bodies).hasSize(120);
-        assertThat(bodies).allSatisfy(body -> {
-            assertThat(body).contains("event='progress'").contains("roomId=7");
-            assertThat(body).contains("totalParticipants=120");
-        });
-        assertThat(emitted).hasValue(240);
-        assertThat(openStreams).hasValue(0);
-        assertThat(maximumOpenStreams.get()).isGreaterThan(0);
-    }
+        assertThat(responses).hasSize(STREAMS);
 
-    private String readTwoEvents() {
-        return client
-                .get()
-                .uri("/api/v1/exam-rooms/7/live")
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .exchange()
-                .expectStatus().isOk()
-                .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)
-                .returnResult(ServerSentEvent.class)
-                .getResponseBody()
-                .take(2)
+        AtomicInteger cancelled = new AtomicInteger();
+        List<List<ServerSentEvent<ExamRoomLiveResponse>>> events = Flux.fromIterable(responses)
+                .flatMap(response -> response.getResponseBody()
+                        .doOnCancel(cancelled::incrementAndGet)
+                        .take(2)
+                        .collectList(), STREAMS)
                 .collectList()
-                .map(events -> events.toString())
-                .block();
+                .block(Duration.ofSeconds(45));
+
+        assertThat(events).hasSize(STREAMS);
+        assertThat(events).allSatisfy(stream -> {
+            assertThat(stream).hasSize(2);
+            assertThat(stream).allSatisfy(event -> {
+                assertThat(event.event()).isEqualTo("progress");
+                assertThat(event.data()).isInstanceOf(ExamRoomLiveResponse.class);
+                assertThat(((ExamRoomLiveResponse) event.data()).totalParticipants()).isEqualTo(STREAMS);
+            });
+        });
+        assertThat(barrier.maximumActive()).isGreaterThan(100);
+        assertThat(barrier.snapshotCalls()).isGreaterThanOrEqualTo(STREAMS * 2);
+        assertThat(cancelled).hasValue(STREAMS);
     }
 
-    private ExamRoomLiveResponse snapshotWithParticipants(int count) {
-        List<ExamRoomLiveResponse.ParticipantProgress> participants =
-                java.util.stream.IntStream.rangeClosed(1, count)
-                        .mapToObj(account -> new ExamRoomLiveResponse.ParticipantProgress(
-                                (long) account, (long) account, LocalDateTime.now(), "IN_PROGRESS", 1, 2))
-                        .toList();
-        return new ExamRoomLiveResponse(7L, ExamRoomStatus.RUNNING, LocalDateTime.now(),
-                LocalDateTime.now().minusMinutes(1), LocalDateTime.now().plusMinutes(30),
-                1800, count, count, 0, 50d, participants);
+    @Configuration
+    @EnableWebFlux
+    static class TestConfiguration {
+        @Bean
+        StreamBarrier streamBarrier() {
+            return new StreamBarrier();
+        }
+
+        @Bean
+        ExamRoomRepository rooms() {
+            return mock(ExamRoomRepository.class);
+        }
+
+        @Bean
+        ExamRoomParticipantRepository participants(StreamBarrier barrier) {
+            return barrier.participants;
+        }
+
+        @Bean
+        SimulationRepository simulations() {
+            return mock(SimulationRepository.class);
+        }
+
+        @Bean
+        SimulationAnswerRepository answers() {
+            return mock(SimulationAnswerRepository.class);
+        }
+
+        @Bean
+        QuestionRepository questions() {
+            return mock(QuestionRepository.class);
+        }
+
+        @Bean
+        Clock clock() {
+            return Clock.fixed(Instant.parse("2026-10-11T13:00:00Z"), ZoneOffset.UTC);
+        }
+
+        @Bean
+        ExamRoomMonitoringService monitoring(ExamRoomRepository rooms,
+                ExamRoomParticipantRepository participants, SimulationRepository simulations,
+                SimulationAnswerRepository answers, QuestionRepository questions, Clock clock) {
+            return new ExamRoomMonitoringService(rooms, participants, simulations, answers, questions, clock);
+        }
+
+        @Bean
+        ExamRoomService service() {
+            return mock(ExamRoomService.class);
+        }
+
+        @Bean
+        CurrentAccountService current() {
+            CurrentAccountService current = mock(CurrentAccountService.class);
+            when(current.requiredAccountId()).thenReturn(Mono.just(99L));
+            when(current.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
+            when(current.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
+            return current;
+        }
+
+        @Bean
+        ExamRoomController controller(ExamRoomService service, CurrentAccountService current,
+                ExamRoomMonitoringService monitoring) {
+            return new ExamRoomController(service, current, monitoring);
+        }
+
+        @Bean
+        ProbeController probe(ExamRoomMonitoringService monitoring) {
+            return new ProbeController(monitoring);
+        }
     }
 
+    @RestController
+    static class ProbeController {
+        private final ExamRoomMonitoringService monitoring;
+
+        ProbeController(ExamRoomMonitoringService monitoring) {
+            this.monitoring = monitoring;
+        }
+
+        @GetMapping(value = "/test/exam-room-live", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+        Flux<ServerSentEvent<ExamRoomLiveResponse>> live() {
+            return monitoring.stream(7L, 99L, false)
+                    .map(snapshot -> ServerSentEvent.<ExamRoomLiveResponse>builder()
+                            .event("progress").data(snapshot).build());
+        }
+    }
+
+    static class StreamBarrier {
+        private final ExamRoomParticipantRepository participants = mock(ExamRoomParticipantRepository.class);
+        private final AtomicBoolean streamPhase = new AtomicBoolean();
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger maximum = new AtomicInteger();
+        private final AtomicInteger calls = new AtomicInteger();
+        private final CountDownLatch entered = new CountDownLatch(STREAMS);
+        private final CompletableFuture<Void> release = new CompletableFuture<>();
+        private final List<ExamRoomParticipant> rows = participantRows();
+
+        StreamBarrier() {
+            when(participants.findByExamRoomId(7L)).thenAnswer(ignored -> {
+                int call = calls.incrementAndGet();
+                if (!streamPhase.get() || call <= STREAMS) {
+                    return Flux.fromIterable(rows);
+                }
+                int current = active.incrementAndGet();
+                maximum.updateAndGet(previous -> Math.max(previous, current));
+                entered.countDown();
+                if (entered.getCount() == 0) {
+                    release.complete(null);
+                }
+                return Mono.fromFuture(release)
+                        .thenMany(Flux.fromIterable(rows))
+                        .doFinally(signal -> active.decrementAndGet());
+            });
+        }
+
+        void openStreamPhase() {
+            streamPhase.set(true);
+        }
+
+        int maximumActive() {
+            return maximum.get();
+        }
+
+        int snapshotCalls() {
+            return calls.get();
+        }
+
+        private static List<ExamRoomParticipant> participantRows() {
+            LocalDateTime now = LocalDateTime.of(2026, 10, 11, 14, 0);
+            return java.util.stream.IntStream.rangeClosed(1, STREAMS).mapToObj(account -> {
+                ExamRoomParticipant participant = new ExamRoomParticipant();
+                participant.setExamRoomId(7L);
+                participant.setAccountId((long) account);
+                participant.setSimulationId((long) account);
+                participant.setJoinedAt(now.minusMinutes(10));
+                return participant;
+            }).toList();
+        }
+    }
 }
