@@ -2,6 +2,7 @@ package ao.creativemode.kixi.examrooms.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import java.time.LocalDateTime;
@@ -10,6 +11,7 @@ import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
 
@@ -132,7 +134,7 @@ class ExamRoomServiceTest {
             simulation.setId(80L);
             return Mono.just(simulation);
         });
-        when(simulations.insertExamRoomSimulation(any(), any(), any(), any())).thenAnswer(invocation -> {
+        when(simulations.insertExamRoomSimulation(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             Simulation simulation = new Simulation();
             simulation.setId(80L);
             return Mono.just(simulation);
@@ -144,7 +146,9 @@ class ExamRoomServiceTest {
         StepVerifier.create(service.join(20L, 42L))
                 .assertNext(response -> assertThat(response.simulationId()).isEqualTo(80L))
                 .verifyComplete();
-        verify(simulations).insertExamRoomSimulation(42L, 5L, 20L, 90);
+        ArgumentCaptor<LocalDateTime> startedAt = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(simulations).insertExamRoomSimulation(eq(42L), eq(5L), eq(20L), eq(90), startedAt.capture());
+        assertThat(startedAt.getValue()).isNotNull();
     }
 
     @Test
@@ -285,7 +289,7 @@ class ExamRoomServiceTest {
         when(rooms.findById(20L)).thenReturn(Mono.just(running));
         when(participants.findByExamRoomIdAndAccountId(20L, 42L)).thenReturn(Mono.just(participant(20L, 42L)));
         when(simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(20L, 42L)).thenReturn(Mono.empty());
-        when(simulations.insertExamRoomSimulation(any(), any(), any(), any())).thenReturn(Mono.just(simulation(80L)));
+        when(simulations.insertExamRoomSimulation(any(), any(), any(), any(), any())).thenReturn(Mono.just(simulation(80L)));
         when(participants.save(any())).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
         StepVerifier.create(boundaryService.join(20L, 42L)).expectNextCount(1).verifyComplete();

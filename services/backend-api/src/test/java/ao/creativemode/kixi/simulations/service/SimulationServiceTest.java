@@ -243,7 +243,21 @@ class SimulationServiceTest {
     @Test
     void participantCannotCreateNormalSimulationForAnOpenOrRunningRoomStatement() {
         ExamRoomAccess rooms = mock(ExamRoomAccess.class);
-        when(rooms.hasOpenOrRunningRoom(1L)).thenReturn(Mono.just(true));
+        when(rooms.hasNonClosedRoom(1L)).thenReturn(Mono.just(true));
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
+    void participantCannotCreateNormalSimulationForADraftRoomStatement() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasNonClosedRoom(1L)).thenReturn(Mono.just(true));
         SimulationService participantService = new SimulationService(repository, accountRepository,
                 schoolYearRepository, statementRepository, deadlineService, rooms, null);
 

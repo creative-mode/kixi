@@ -134,16 +134,16 @@ public class SimulationService {
 
     @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto) {
-        return create(dto, dto.accountId(), true);
+        return create(dto, dto.accountId(), true, true, false);
     }
 
     @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin) {
-        return create(dto, callerAccountId, admin, true);
+        return create(dto, callerAccountId, admin, true, false);
     }
 
     private Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin,
-            boolean authorizeStatement) {
+            boolean authorizeStatement, boolean rejectAnyNonClosedRoom) {
         return accountRepository.findById(dto.accountId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
                 .then(statementLookup(dto.statementId())
@@ -160,7 +160,9 @@ public class SimulationService {
                              }
                              Mono<Void> statementLock = examRoomAccess.lockStatementForSimulation(statement.getId());
                              if (statementLock == null) statementLock = Mono.empty();
-                             Mono<Boolean> activeRoom = examRoomAccess.hasOpenOrRunningRoom(statement.getId());
+                              Mono<Boolean> activeRoom = rejectAnyNonClosedRoom
+                                      ? examRoomAccess.hasNonClosedRoom(statement.getId())
+                                      : examRoomAccess.hasOpenOrRunningRoom(statement.getId());
                              if (activeRoom == null) activeRoom = Mono.just(false);
                              return statementLock
                                      .then(activeRoom)
@@ -201,7 +203,7 @@ public class SimulationService {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
         }
-        return create(dto, accountId, false, false);
+        return create(dto, accountId, false, false, true);
     }
 
     public Mono<SimulationResponse> update(Long id, SimulationRequest dto) {
@@ -298,7 +300,7 @@ public class SimulationService {
         Mono<Boolean> visibility = simulation.getExamRoomId() == null || examRoomAccess == null
                 ? (examRoomAccess == null ? Mono.just(true)
                         : Mono.defer(() -> {
-                            Mono<Boolean> active = examRoomAccess.hasOpenOrRunningRoom(simulation.getStatementId());
+                            Mono<Boolean> active = examRoomAccess.hasNonClosedRoom(simulation.getStatementId());
                             return (active == null ? Mono.just(false) : active)
                                     .defaultIfEmpty(false).map(value -> !value);
                         }))

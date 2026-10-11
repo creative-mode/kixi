@@ -239,7 +239,7 @@ public class ExamRoomService implements ExamRoomAccess {
                             simulation.setStatus(SimulationStatus.IN_PROGRESS);
                             simulation.setExamRoomId(room.getId());
                             simulation.setExamRoomDurationMinutes(room.getDurationMinutes());
-                             return existingOrInsert(roomId, accountId, simulation)
+                             return existingOrInsert(roomId, accountId, simulation, now)
                                       .flatMap(saved -> {
                                           participant.setSimulationId(saved.getId());
                                           Mono<Integer> claimed = participants.claimSimulation(participant.getId(), saved.getId());
@@ -256,11 +256,11 @@ public class ExamRoomService implements ExamRoomAccess {
                                   : toParticipantResponse(saved)));
     }
 
-    private Mono<Simulation> existingOrInsert(Long roomId, Long accountId, Simulation simulation) {
+    private Mono<Simulation> existingOrInsert(Long roomId, Long accountId, Simulation simulation, LocalDateTime now) {
         Mono<Simulation> existing = simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(roomId, accountId);
         if (existing == null) existing = Mono.empty();
         Mono<Simulation> inserted = simulations.insertExamRoomSimulation(accountId, simulation.getStatementId(), roomId,
-                simulation.getExamRoomDurationMinutes());
+                simulation.getExamRoomDurationMinutes(), now);
         Mono<Simulation> afterConflict = simulations.findByExamRoomIdAndAccountIdAndDeletedAtIsNull(roomId, accountId);
         return existing.switchIfEmpty(inserted.switchIfEmpty(afterConflict));
     }
@@ -306,6 +306,12 @@ public class ExamRoomService implements ExamRoomAccess {
     @Override
     public Mono<Boolean> hasOpenOrRunningRoom(Long statementId) {
         Mono<Boolean> exists = rooms.existsOpenOrRunningByStatementId(statementId);
+        return (exists == null ? Mono.just(false) : exists).defaultIfEmpty(false);
+    }
+
+    @Override
+    public Mono<Boolean> hasNonClosedRoom(Long statementId) {
+        Mono<Boolean> exists = rooms.existsNonClosedByStatementId(statementId);
         return (exists == null ? Mono.just(false) : exists).defaultIfEmpty(false);
     }
 

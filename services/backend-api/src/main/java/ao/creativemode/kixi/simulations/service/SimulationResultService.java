@@ -219,7 +219,7 @@ public class SimulationResultService {
             return Mono.just(true);
         }
         if (simulation.getExamRoomId() == null) {
-            Mono<Boolean> active = examRooms.hasOpenOrRunningRoom(simulation.getStatementId());
+            Mono<Boolean> active = examRooms.hasNonClosedRoom(simulation.getStatementId());
             return (active == null ? Mono.just(false) : active)
                     .defaultIfEmpty(false).map(value -> !value);
         }

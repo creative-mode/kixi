@@ -245,9 +245,16 @@ public class SimulationSubmissionService {
 
     private Mono<SimulationAnswerResponse> toResponse(SimulationAnswer answer) {
         return simulationForAnswer(answer.getSimulationId()).flatMap(simulation -> {
-            Mono<Boolean> visible = simulation.getExamRoomId() == null || examRooms == null
-                    ? Mono.just(true)
-                    : examRooms.answerKeyVisible(simulation.getExamRoomId()).defaultIfEmpty(false);
+            Mono<Boolean> visible;
+            if (examRooms == null) {
+                visible = Mono.just(true);
+            } else if (simulation.getExamRoomId() == null) {
+                Mono<Boolean> active = examRooms.hasNonClosedRoom(simulation.getStatementId());
+                visible = (active == null ? Mono.just(false) : active)
+                        .defaultIfEmpty(false).map(value -> !value);
+            } else {
+                visible = examRooms.answerKeyVisible(simulation.getExamRoomId()).defaultIfEmpty(false);
+            }
             return visible.map(answerKeyVisible -> new SimulationAnswerResponse(answer.getId(), answer.getSimulationId(),
                     answer.getQuestionId(), answer.getSelectedOptionId(), answer.getAnswerText(),
                     answerKeyVisible ? answer.getScoreObtained() : null,

@@ -202,6 +202,21 @@ class SimulationResultServiceTest {
     }
 
     @Test
+    void aStudentResultForAStatementInANonClosedRoomDoesNotExposeTheAnswerKey() {
+        givenAFinishedSimulationWithOneAnsweredQuestion();
+        when(examRooms.hasNonClosedRoom(STATEMENT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.findResult(SIMULATION_ID, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    SimulationResultResponse.QuestionResult question = response.questions().get(0);
+                    assertThat(question.modelAnswer()).isNull();
+                    assertThat(question.correctOptionId()).isNull();
+                    assertThat(response.finalScore()).isNull();
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void aQuestionWithNoMarkedAnswerCarriesNoAnswerKeyRatherThanGuessingOne() {
         // The approval gate asks for at least one correct option and only for
         // questions that have options at all, so an open question reaches here

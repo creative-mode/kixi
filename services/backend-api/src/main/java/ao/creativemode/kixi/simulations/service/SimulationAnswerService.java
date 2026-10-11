@@ -337,7 +337,7 @@ public class SimulationAnswerService {
                             .defaultIfEmpty(false)
                             .map(visible -> toResponse(entity, visible));
                 }
-                Mono<Boolean> active = examRooms.hasOpenOrRunningRoom(owner.getStatementId());
+                Mono<Boolean> active = examRooms.hasNonClosedRoom(owner.getStatementId());
                 return (active == null ? Mono.just(false) : active)
                         .defaultIfEmpty(false)
                         .map(value -> toResponse(entity, !value));

@@ -96,7 +96,6 @@ public class SimulationDeadlineService {
      * @param now the server clock, passed in so the caller decides when it is read
      */
     public Mono<Boolean> expired(Simulation simulation, LocalDateTime now) {
-        if (simulation.getStartedAt() != null && now.isBefore(simulation.getStartedAt())) return Mono.just(true);
         if (examRoomAccess == null || simulation.getExamRoomId() == null) {
             return deadline(simulation).map(deadline -> !now.isBefore(deadline)).defaultIfEmpty(false);
         }

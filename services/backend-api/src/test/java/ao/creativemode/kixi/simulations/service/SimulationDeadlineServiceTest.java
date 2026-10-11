@@ -194,6 +194,17 @@ class SimulationDeadlineServiceTest {
     }
 
     @Test
+    void aFutureStartedAtDoesNotExpireAnOtherwiseNewSimulation() {
+        Simulation simulation = started(now.plusSeconds(2));
+        givenStatement(30);
+        givenAccount(null);
+
+        StepVerifier.create(service.expired(simulation, now))
+                .expectNext(false)
+                .verifyComplete();
+    }
+
+    @Test
     void missingAccountGetsThePlainDurationPlusTolerance() {
         Simulation simulation = started(now.minusMinutes(35));
         givenStatement(30);

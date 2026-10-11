@@ -4,6 +4,7 @@ import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.stereotype.Repository;
+import java.time.LocalDateTime;
 
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
@@ -22,9 +23,10 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
 
     @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
-            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, CURRENT_TIMESTAMP, 'IN_PROGRESS') "
+            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, :startedAt, 'IN_PROGRESS') "
             + "ON CONFLICT (exam_room_id, account_id) WHERE exam_room_id IS NOT NULL DO NOTHING RETURNING *")
-    Mono<Simulation> insertExamRoomSimulation(Long accountId, Long statementId, Long roomId, Integer durationMinutes);
+    Mono<Simulation> insertExamRoomSimulation(Long accountId, Long statementId, Long roomId, Integer durationMinutes,
+            LocalDateTime startedAt);
     Mono<Simulation> findByIdAndDeletedAtIsNotNull(Long id);
 
     /** The simulations the expiration job sweeps on every poll. */
