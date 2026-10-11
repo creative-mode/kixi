@@ -24,6 +24,7 @@ import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.simulations.model.Simulation;
+import ao.creativemode.kixi.simulations.model.SimulationAnswer;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
@@ -96,6 +97,24 @@ class ExamRoomMonitoringServiceTest {
     }
 
     @Test
+    void countsOnlyEffectiveAnswersInProgress() {
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.RUNNING);
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(participant(1L, 1L, true)));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.just(simulation(1L, SimulationStatus.IN_PROGRESS)));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(any())).thenReturn(Flux.just(
+                answer(1L, 10L, 2L, null), answer(1L, 11L, null, null)));
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenReturn(Flux.just(new Question(), new Question()));
+
+        StepVerifier.create(service.live(7L, 99L, false))
+                .assertNext(snapshot -> {
+                    assertThat(snapshot.participants().get(0).answeredQuestions()).isEqualTo(1);
+                    assertThat(snapshot.progressPercentage()).isEqualTo(50d);
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void slowSnapshotsAreSerializedAndRemainInOrder() {
         ExamRoom room = room(7L, 99L, ExamRoomStatus.RUNNING);
         AtomicInteger started = new AtomicInteger();
@@ -151,5 +170,14 @@ class ExamRoomMonitoringServiceTest {
         simulation.setStatus(status);
         simulation.setFinishedAt(status == SimulationStatus.FINISHED ? now : null);
         return simulation;
+    }
+
+    private SimulationAnswer answer(long simulationId, long questionId, Long selectedOptionId, String answerText) {
+        SimulationAnswer answer = new SimulationAnswer();
+        answer.setSimulationId(simulationId);
+        answer.setQuestionId(questionId);
+        answer.setSelectedOptionId(selectedOptionId);
+        answer.setAnswerText(answerText);
+        return answer;
     }
 }

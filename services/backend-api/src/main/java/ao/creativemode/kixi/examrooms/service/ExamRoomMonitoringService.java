@@ -102,7 +102,9 @@ public class ExamRoomMonitoringService {
             List<ExamRoomParticipant> roomParticipants, Map<Long, Simulation> byId, int totalQuestions,
             List<SimulationAnswer> allAnswers) {
         Map<Long, Long> answerCounts = allAnswers.stream().collect(Collectors.groupingBy(
-                SimulationAnswer::getSimulationId, Collectors.counting()));
+                SimulationAnswer::getSimulationId, Collectors.filtering(answer -> answer.getSelectedOptionId() != null
+                        || (answer.getAnswerText() != null && !answer.getAnswerText().isBlank()),
+                        Collectors.counting())));
         List<ExamRoomLiveResponse.ParticipantProgress> progress = roomParticipants.stream().map(participant -> {
             Simulation simulation = byId.get(participant.getSimulationId());
             String status = simulation == null ? "NOT_STARTED" : simulation.getStatus().name();
