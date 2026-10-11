@@ -20,7 +20,8 @@ import org.junit.jupiter.api.Test;
  *  |- exams      (statements, questions, options, question images) -&gt; shared, institutions
  *  |- simulations (simulations, simulation answers) -&gt; shared, identity, academic, exams
  *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
- *  '- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
+ *  |- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
+ *  '- analytics  (dashboard aggregates, nothing of its own) -&gt; shared and every domain module
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -107,6 +108,21 @@ class ArchitectureTest {
         noClasses().that().resideInAPackage("..chat..")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..identity..", "..academic..", "..institutions..", "..simulations..", "..ocr..")
+                .check(classes);
+    }
+
+    /**
+     * The dashboard reads across every module on purpose — it counts statements,
+     * simulations, enrollments and schools together — and nothing points back at it, so it
+     * sits at the top of the diagram rather than forcing every query through a door.
+     *
+     * <p>What it may not reach is the tutor or the OCR client: neither feeds a number the
+     * dashboard shows, and both would drag a third party's concerns into an aggregate.</p>
+     */
+    @Test
+    void analyticsReadsEveryDomainButTheTutorAndTheOcrClient() {
+        noClasses().that().resideInAPackage("..analytics..")
+                .should().dependOnClassesThat().resideInAnyPackage("..chat..", "..ocr..")
                 .check(classes);
     }
 

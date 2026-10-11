@@ -160,6 +160,12 @@ public class SecurityConfig {
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // The dashboard of issue #110. Staff only: these are school-wide
+                        // aggregates, and a student has no business seeing how their class
+                        // is doing. The audience inside the scope is the service's job —
+                        // an ADMIN sees everything, a TEACHER only their own classes.
+                        .pathMatchers("/api/v1/analytics/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling
