@@ -160,6 +160,10 @@ public class SecurityConfig {
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Dashboard (BE-14): staff only. What each one sees is narrowed
+                        // by AnalyticsService, from the account, not from a parameter.
+                        .pathMatchers("/api/v1/analytics", "/api/v1/analytics/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling
