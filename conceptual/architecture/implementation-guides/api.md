@@ -220,6 +220,37 @@ configurada, estes endpoints respondem `503`.
 
 ---
 
+## Fluxo 7 — Aprendizagem social
+
+O aluno compara o seu desempenho com o da comunidade no mesmo enunciado e,
+se quiser, partilha a sua resolução — de forma anónima ou com nome. Nada é
+partilhado sem um opt-in explícito, e a partilha pode ser revogada.
+
+```bash
+# Agregado da comunidade (entre instituições) + "tu vs. média"
+curl -s $HOST/api/v1/statements/1/community -H "Authorization: Bearer $TOKEN"
+
+# Partilhar a minha simulação terminada (anónima por omissão)
+curl -s -X POST $HOST/api/v1/simulations/$SIM/share \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"anonymous":false,"displayName":"Ana"}'
+
+# Resoluções partilhadas, as mais recentes primeiro (filtro opcional por escola)
+curl -s "$HOST/api/v1/statements/1/community/solutions?institutionId=1" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Revogar a partilha (a nota não é tocada)
+curl -s -X DELETE $HOST/api/v1/simulations/$SIM/share \
+  -H "Authorization: Bearer $TOKEN" -o /dev/null -w '%{http_code}\n'
+```
+
+Só simulações `FINISHED` com nota entram no agregado; respostas ainda em
+revisão não contam como erro. A listagem lê apenas consentimentos ativos e
+nunca expõe o gabarito nem a conta por trás de uma partilha anónima.
+
+---
+
 ## Notas de manutenção
 
 - Os caminhos reais de cada operação estão em `/v3/api-docs`; esta página segue os
