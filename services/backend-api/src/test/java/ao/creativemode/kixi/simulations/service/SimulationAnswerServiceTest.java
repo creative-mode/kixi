@@ -393,6 +393,72 @@ class SimulationAnswerServiceTest {
         verify(repository, never()).delete(any(SimulationAnswer.class));
     }
 
+    @Test
+    void anOpenQuestionWithOptionsAcceptsItsOwnOption() {
+        // #184: graded as a choice question since #169, so its option has to be accepted.
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 5L)));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "open"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .assertNext(response -> assertThat(response.questionId()).isEqualTo(5L))
+                .verifyComplete();
+    }
+
+    @Test
+    void aQuestionWithoutOptionsStillRefusesAnOption() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 99L)));
+        when(options.countByQuestionIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(0L));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "MULTIPLE_CHOICE"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .isEqualTo("Open questions cannot select an option"))
+                .verify();
+        verify(repository, never()).insertIfInProgress(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anOptionOfAnotherQuestionIsRefused() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 99L)));
+        when(options.countByQuestionIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(3L));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "open"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .isEqualTo("Option does not belong to the question"))
+                .verify();
+    }
+
+    private SimulationAnswerService serviceWith(QuestionOptionRepository options, Question question) {
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(questionRepository.findByIdAndDeletedAtIsNull(question.getId())).thenReturn(Mono.just(question));
+        when(repository.insertIfInProgress(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            SimulationAnswer saved = answer(7L);
+            saved.setQuestionId(invocation.getArgument(1));
+            saved.setSelectedOptionId(invocation.getArgument(2));
+            return Mono.just(saved);
+        });
+        return new SimulationAnswerService(repository, simulationRepository, questionRepository, options,
+                deadlineService, null, null);
+    }
+
+    private static Question question(Long id, String type) {
+        Question question = new Question();
+        question.setId(id);
+        question.setQuestionType(type);
+        return question;
+    }
+
+    private static ao.creativemode.kixi.exams.model.QuestionOption option(Long id, Long questionId) {
+        ao.creativemode.kixi.exams.model.QuestionOption option = new ao.creativemode.kixi.exams.model.QuestionOption();
+        option.setId(id);
+        option.setQuestionId(questionId);
+        return option;
+    }
+
     private SimulationAnswer answer(Long id) {
         SimulationAnswer answer = new SimulationAnswer();
         answer.setId(id);
