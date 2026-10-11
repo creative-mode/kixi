@@ -249,7 +249,13 @@ class SimulationAnswerPostgresConcurrencyTest {
         }
         assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("CLOSED");
         assertThat(value("SELECT status FROM simulations WHERE id = " + SIMULATION))
-                .isEqualTo(closeIsFirst ? "IN_PROGRESS" : "CANCELLED");
+                .isEqualTo(closeIsFirst ? "FINISHED" : "CANCELLED");
+        if (closeIsFirst) {
+            assertThat(value("SELECT review_status FROM simulation_answers WHERE id = " + ANSWER))
+                    .isEqualTo("PENDING_REVIEW");
+            assertThat(count("SELECT COUNT(*) FROM simulations WHERE id = " + SIMULATION
+                    + " AND finished_at IS NOT NULL AND final_score IS NOT NULL")).isEqualTo(1);
+        }
     }
 
     private void assertAnswerResult(Outcome<?> answerOutcome) {
