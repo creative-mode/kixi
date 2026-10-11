@@ -2,7 +2,9 @@ package ao.creativemode.kixi.simulations.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +29,7 @@ import ao.creativemode.kixi.institutions.service.InstitutionAccessService;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -54,7 +57,9 @@ class SimulationServiceTest {
         when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
         Statement statement = new Statement();
         statement.setId(1L);
+        statement.setVisible(true);
         when(statementRepository.findById(1L)).thenReturn(Mono.just(statement));
+        when(statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(1L)).thenReturn(Mono.just(statement));
     }
 
     @Test
@@ -287,6 +292,30 @@ class SimulationServiceTest {
     }
 
     @Test
+    void studentCannotCreateSimulationForInvisibleStatementWithoutRoom() {
+        when(statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(1L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectError(ApiException.class).verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
+    void studentCannotCreateSimulationForInvisibleStatementInClosedRoom() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        when(rooms.hasNonClosedRoom(1L)).thenReturn(Mono.just(false));
+        when(statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(1L)).thenReturn(Mono.empty());
+        SimulationService participantService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(participantService.createForAccount(
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, null), 1L))
+                .expectError(ApiException.class).verify();
+        verify(repository, never()).save(any(Simulation.class));
+    }
+
+    @Test
     void updateRejectsMissingSimulation() {
         when(repository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Mono.empty());
 
@@ -356,6 +385,49 @@ class SimulationServiceTest {
                 })
                 .verify();
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void studentUpdateLocksExamRoomBeforeSimulationAndRechecksAnswerWindow() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        Simulation simulation = simulation(1L, SimulationStatus.IN_PROGRESS);
+        simulation.setExamRoomId(20L);
+        when(repository.findByIdAndAccountIdAndDeletedAtIsNull(1L, 1L)).thenReturn(Mono.just(simulation));
+        when(repository.lockForAnswerWrite(1L)).thenReturn(Mono.just(simulation));
+        when(rooms.lockRoomForSimulation(20L)).thenReturn(Mono.empty());
+        when(rooms.acceptsSimulationAnswers(eq(20L), any(LocalDateTime.class))).thenReturn(Mono.just(true));
+        when(repository.save(simulation)).thenReturn(Mono.just(simulation));
+        SimulationService studentService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(studentService.updateForAccount(1L,
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, SimulationStatus.CANCELLED), 1L))
+                .expectNextCount(1).verifyComplete();
+
+        InOrder order = inOrder(rooms, repository);
+        order.verify(rooms).lockRoomForSimulation(20L);
+        order.verify(repository).lockForAnswerWrite(1L);
+        order.verify(rooms).acceptsSimulationAnswers(eq(20L), any(LocalDateTime.class));
+        verify(repository).save(simulation);
+    }
+
+    @Test
+    void studentUpdateCannotOverwriteFinishedSimulationAfterWaitingForLock() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        Simulation initiallyRead = simulation(1L, SimulationStatus.IN_PROGRESS);
+        initiallyRead.setExamRoomId(20L);
+        Simulation finished = simulation(1L, SimulationStatus.FINISHED);
+        finished.setExamRoomId(20L);
+        when(repository.findByIdAndAccountIdAndDeletedAtIsNull(1L, 1L)).thenReturn(Mono.just(initiallyRead));
+        when(repository.lockForAnswerWrite(1L)).thenReturn(Mono.just(finished));
+        when(rooms.lockRoomForSimulation(20L)).thenReturn(Mono.empty());
+        SimulationService studentService = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, null);
+
+        StepVerifier.create(studentService.updateForAccount(1L,
+                        new SimulationRequest(1L, 1L, 1L, null, null, null, null, SimulationStatus.CANCELLED), 1L))
+                .expectError(ApiException.class).verify();
+        verify(repository, never()).save(any(Simulation.class));
     }
 
     @Test

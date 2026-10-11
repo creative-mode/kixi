@@ -81,7 +81,7 @@ class SimulationAnswerPostgresConcurrencyTest {
         sql("DELETE FROM statements WHERE id = " + STATEMENT).block(Duration.ofSeconds(10));
         sql("DELETE FROM accounts WHERE id = " + ACCOUNT).block(Duration.ofSeconds(10));
         sql("INSERT INTO accounts(id, username, email, password_hash) VALUES (" + ACCOUNT + ", 'it-room', 'it-room@example.com', 'x')").block(Duration.ofSeconds(10));
-        sql("INSERT INTO statements(id, title, source, created_by) VALUES (" + STATEMENT + ", 'integration', 'manual', " + ACCOUNT + ")").block(Duration.ofSeconds(10));
+        sql("INSERT INTO statements(id, title, source, visible, created_by) VALUES (" + STATEMENT + ", 'integration', 'manual', TRUE, " + ACCOUNT + ")").block(Duration.ofSeconds(10));
         sql("INSERT INTO questions(id, statement_id, number, text, question_type, order_index) VALUES (" + QUESTION + ", " + STATEMENT + ", 1, '1 + 1', 'open', 1)").block(Duration.ofSeconds(10));
         sql("INSERT INTO exam_rooms(id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES (" + ROOM + ", " + STATEMENT + ", " + ACCOUNT + ", '" + START + "', '" + END + "', 60, 'RUNNING')").block(Duration.ofSeconds(10));
         sql("INSERT INTO simulations(id, account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) VALUES (" + SIMULATION + ", " + ACCOUNT + ", " + STATEMENT + ", " + ROOM + ", 60, CURRENT_TIMESTAMP, 'IN_PROGRESS')").block(Duration.ofSeconds(10));
@@ -111,6 +111,18 @@ class SimulationAnswerPostgresConcurrencyTest {
         Pair<Outcome<Object>, Outcome<Object>> answerFirst = raceWithLockFixture("simulations", SIMULATION,
                 answer(), submit().cast(Object.class));
         assertSubmitRace(answerFirst, false);
+    }
+
+    @Test
+    void updateAndCloseCannotCancelAfterRoomClosure() {
+        Pair<Outcome<Object>, Outcome<Object>> closeFirst = raceWithLockFixture("exam_rooms", ROOM,
+                close(), update().cast(Object.class));
+        assertUpdateCloseRace(closeFirst, true);
+
+        data();
+        Pair<Outcome<Object>, Outcome<Object>> updateFirst = raceWithLockFixture("exam_rooms", ROOM,
+                update().cast(Object.class), close());
+        assertUpdateCloseRace(updateFirst, false);
     }
 
     @Test
@@ -154,6 +166,12 @@ class SimulationAnswerPostgresConcurrencyTest {
 
     private Mono<Object> submit() {
         return submissionService.submit(SIMULATION, ACCOUNT, false).cast(Object.class);
+    }
+
+    private Mono<SimulationResponse> update() {
+        return simulationService.updateForAccount(SIMULATION,
+                new SimulationRequest(ACCOUNT, STATEMENT, null, null, null, null, null,
+                        ao.creativemode.kixi.simulations.model.SimulationStatus.CANCELLED), ACCOUNT);
     }
 
     private <F, S> Pair<Outcome<F>, Outcome<S>> raceWithLockFixture(
@@ -214,13 +232,24 @@ class SimulationAnswerPostgresConcurrencyTest {
         assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("OPEN");
         long simulations = count("SELECT COUNT(*) FROM simulations WHERE statement_id = " + STATEMENT
                 + " AND exam_room_id IS NULL AND account_id = " + ACCOUNT + " AND status = 'IN_PROGRESS'");
-        if (openIsFirst) {
-            assertConflict(create);
-            assertThat(simulations).isZero();
+        assertConflict(create);
+        assertThat(simulations).isZero();
+    }
+
+    private void assertUpdateCloseRace(Pair<?, ?> result, boolean closeIsFirst) {
+        Outcome<?> first = (Outcome<?>) result.first();
+        Outcome<?> second = (Outcome<?>) result.second();
+        Outcome<?> close = closeIsFirst ? first : second;
+        Outcome<?> update = closeIsFirst ? second : first;
+        assertThat(close.error()).isNull();
+        if (closeIsFirst) {
+            assertConflict(update);
         } else {
-            assertThat(create.error()).isNull();
-            assertThat(simulations).isEqualTo(1L);
+            assertThat(update.error()).isNull();
         }
+        assertThat(value("SELECT status FROM exam_rooms WHERE id = " + ROOM)).isEqualTo("CLOSED");
+        assertThat(value("SELECT status FROM simulations WHERE id = " + SIMULATION))
+                .isEqualTo(closeIsFirst ? "IN_PROGRESS" : "CANCELLED");
     }
 
     private void assertAnswerResult(Outcome<?> answerOutcome) {

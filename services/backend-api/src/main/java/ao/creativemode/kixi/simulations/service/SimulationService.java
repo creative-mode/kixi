@@ -134,19 +134,21 @@ public class SimulationService {
 
     @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto) {
-        return create(dto, dto.accountId(), true, true, false);
+        return create(dto, dto.accountId(), true, true, false, false);
     }
 
     @Transactional
     public Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin) {
-        return create(dto, callerAccountId, admin, true, false);
+        return create(dto, callerAccountId, admin, true, false, false);
     }
 
     private Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin,
-            boolean authorizeStatement, boolean rejectAnyNonClosedRoom) {
+            boolean authorizeStatement, boolean rejectAnyNonClosedRoom, boolean requireVisibleStatement) {
         return accountRepository.findById(dto.accountId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
-                .then(statementLookup(dto.statementId())
+                .then((requireVisibleStatement
+                        ? statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(dto.statementId())
+                        : statementLookup(dto.statementId()))
                         .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
                         .flatMap(statement -> !authorizeStatement
                                 ? Mono.just(statement)
@@ -203,15 +205,46 @@ public class SimulationService {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
         }
-        return create(dto, accountId, false, false, true);
+        return create(dto, accountId, false, false, true, true);
     }
 
+    @Transactional
     public Mono<SimulationResponse> update(Long id, SimulationRequest dto) {
-        return updateExisting(repository.findByIdAndDeletedAtIsNull(id), dto);
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
+                .flatMap(simulation -> lockForUpdate(simulation)
+                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)));
     }
 
+    @Transactional
     public Mono<SimulationResponse> updateForAccount(Long id, SimulationRequest dto, Long accountId) {
-        return updateExisting(repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId), dto);
+        return repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
+                .flatMap(simulation -> lockForUpdate(simulation)
+                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)));
+    }
+
+    private Mono<Simulation> lockForUpdate(Simulation simulation) {
+        Mono<Void> roomLock = simulation.getExamRoomId() == null || examRoomAccess == null
+                ? Mono.empty()
+                : examRoomAccess.lockRoomForSimulation(simulation.getExamRoomId());
+        Mono<Simulation> simulationLock = repository.lockForAnswerWrite(simulation.getId());
+        if (simulationLock == null) simulationLock = Mono.just(simulation);
+        return roomLock.then(simulationLock)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
+                .flatMap(locked -> {
+                    if (!SimulationStatus.IN_PROGRESS.equals(locked.getStatus())) {
+                        return Mono.error(ApiException.badRequest("Simulation cannot be updated"));
+                    }
+                    if (locked.getExamRoomId() == null || examRoomAccess == null) return Mono.just(locked);
+                    Mono<Boolean> accepts = examRoomAccess.acceptsSimulationAnswers(locked.getExamRoomId(),
+                            LocalDateTime.now());
+                    return (accepts == null ? Mono.just(false) : accepts)
+                            .filter(Boolean::booleanValue)
+                            .switchIfEmpty(Mono.error(ApiException.conflict(
+                                    "The exam room is no longer accepting simulation updates")))
+                            .thenReturn(locked);
+                });
     }
 
     private Mono<SimulationResponse> updateExisting(Mono<Simulation> simulationMono, SimulationRequest dto) {
