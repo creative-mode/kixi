@@ -42,6 +42,21 @@ public class AccountService {
                 .map(this::toResponse);
     }
 
+    /**
+     * Live accounts holding {@code role} (#147), for the manager's pickers: the
+     * enrollments screen only makes sense with STUDENT accounts. The name is
+     * matched the way roles are stored (upper case, no {@code ROLE_} prefix), so
+     * {@code student} and {@code ROLE_STUDENT} also work. An unknown role is an
+     * empty list, not an error.
+     */
+    public Flux<AccountResponse> findAllActiveWithRole(String role) {
+        String name = role.trim().toUpperCase(java.util.Locale.ROOT);
+        if (name.startsWith("ROLE_")) {
+            name = name.substring("ROLE_".length());
+        }
+        return repository.findAllWithRoleAndDeletedAtIsNull(name).map(this::toResponse);
+    }
+
     public Flux<AccountResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull()
                 .map(this::toResponse);

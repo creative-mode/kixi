@@ -9,6 +9,9 @@ public interface EnrollmentRepository extends ReactiveCrudRepository<Enrollment,
 
     Flux<Enrollment> findAllByAccountIdAndDeletedAtIsNull(Long accountId);
 
+    /** Every live enrollment, for the administrator's listing (#146). */
+    Flux<Enrollment> findAllByDeletedAtIsNullOrderByIdAsc();
+
     Flux<Enrollment> findAllByClassIdAndDeletedAtIsNull(Long classId);
 
     Mono<Enrollment> findFirstByAccountIdAndSchoolYearIdAndDeletedAtIsNull(Long accountId, Long schoolYearId);

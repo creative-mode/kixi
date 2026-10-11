@@ -370,6 +370,22 @@ class AuthorizationIntegrationTest {
         org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findAllVisible();
     }
 
+    @Test
+    void theAccountListingFiltersByRoleWhenAsked() {
+        // #147: the manager's enrollment picker only wants STUDENT accounts.
+        when(accountService.findAllActiveWithRole("STUDENT")).thenReturn(Flux.empty());
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/accounts?role=STUDENT")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(accountService).findAllActiveWithRole("STUDENT");
+        org.mockito.Mockito.verify(accountService, org.mockito.Mockito.never()).findAllActive();
+    }
+
     private static OcrResponse successfulOcrResponse() {
         return new OcrResponse(
                 "success",
