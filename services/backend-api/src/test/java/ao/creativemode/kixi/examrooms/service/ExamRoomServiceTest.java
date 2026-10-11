@@ -173,6 +173,35 @@ class ExamRoomServiceTest {
     }
 
     @Test
+    void invitationsCarryTheRoomStateWindowAndServerTime() {
+        ExamRoomParticipant running = participant(20L, 42L);
+        running.setSimulationId(80L);
+        ExamRoomParticipant waiting = participant(21L, 42L);
+        when(participants.findByAccountIdOrderByCreatedAtDesc(42L)).thenReturn(Flux.just(running, waiting));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
+        when(rooms.findById(21L)).thenReturn(Mono.just(room(21L, ExamRoomStatus.DRAFT)));
+        Statement statement = new Statement("P1", "Redes 12B");
+        statement.setId(5L);
+        when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(statement));
+        when(simulations.findById(80L)).thenReturn(Mono.just(simulation(80L)));
+
+        StepVerifier.create(service.mineAsStudent(42L))
+                .assertNext(first -> {
+                    assertThat(first.roomId()).isEqualTo(20L);
+                    assertThat(first.status()).isEqualTo(ExamRoomStatus.RUNNING);
+                    assertThat(first.statementTitle()).isEqualTo("Redes 12B");
+                    assertThat(first.simulationStatus()).isEqualTo("IN_PROGRESS");
+                    assertThat(first.serverTime()).isNotNull();
+                })
+                .assertNext(second -> {
+                    assertThat(second.status()).isEqualTo(ExamRoomStatus.DRAFT);
+                    assertThat(second.simulationId()).isNull();
+                    assertThat(second.simulationStatus()).isNull();
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void studentViewIncludesOptionsWithoutTheAnswerKey() {
         when(rooms.findById(20L)).thenReturn(Mono.just(room(20L, ExamRoomStatus.RUNNING)));
         ExamRoomParticipant participant = participant(20L, 42L);
