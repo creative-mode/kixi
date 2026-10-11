@@ -10,6 +10,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomGradeResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
@@ -50,6 +51,7 @@ public class ExamRoomMonitoringService {
         this(rooms, participants, simulations, answers, questions, clock, null, null);
     }
 
+    @Autowired
     public ExamRoomMonitoringService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, SimulationAnswerRepository answers, QuestionRepository questions,
             Clock clock, AccountRepository accounts, UserRepository users) {
