@@ -197,7 +197,10 @@ class ExamRoomControllerSseTest {
         StreamBarrier() {
             when(participants.findByExamRoomId(7L)).thenAnswer(ignored -> {
                 int call = calls.incrementAndGet();
-                if (!streamPhase.get() || call <= STREAMS * 2) {
+                // #188: one snapshot per stream before the first event (the
+                // endpoint no longer builds one only to authorize), so the
+                // second tick of every stream is the one held at the barrier.
+                if (!streamPhase.get() || call <= STREAMS) {
                     return Flux.fromIterable(rows);
                 }
                 int current = active.incrementAndGet();

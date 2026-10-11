@@ -103,9 +103,11 @@ public class ExamRoomController {
 
     @GetMapping(value = "/{id}/live", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Mono<ResponseEntity<Flux<ServerSentEvent<ExamRoomLiveResponse>>>> live(@PathVariable Long id) {
-        return staffContext().flatMap(context -> monitoring.live(id, context.accountId(), context.admin())
-                .thenReturn(ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
-                        .body(monitoring.stream(id, context.accountId(), context.admin())
+        // #188: authorize with the room alone; the stream builds the first
+        // snapshot, instead of one here only to throw it away.
+        return staffContext().flatMap(context -> monitoring.authorize(id, context.accountId(), context.admin())
+                .map(room -> ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
+                        .body(monitoring.stream(room, context.accountId(), context.admin())
                                 .map(snapshot -> ServerSentEvent.<ExamRoomLiveResponse>builder()
                                         .event("progress").data(snapshot).build()))));
     }
