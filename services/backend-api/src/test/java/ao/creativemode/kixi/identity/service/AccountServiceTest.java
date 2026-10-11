@@ -333,4 +333,17 @@ class AccountServiceTest {
         account.setEmailVerified(false);
         return account;
     }
+
+    @Test
+    void theRoleFilterMatchesTheStoredNameHoweverItIsWritten() {
+        // #147: roles are stored upper case without the ROLE_ prefix.
+        Account student = new Account();
+        student.setId(5L);
+        when(repository.findAllWithRoleAndDeletedAtIsNull("STUDENT")).thenReturn(Flux.just(student));
+
+        StepVerifier.create(service.findAllActiveWithRole(" role_student "))
+                .expectNextMatches(response -> response.id().equals(5L))
+                .verifyComplete();
+        verify(repository).findAllWithRoleAndDeletedAtIsNull("STUDENT");
+    }
 }
