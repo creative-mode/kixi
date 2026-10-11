@@ -4,6 +4,7 @@ import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.teachers.TeacherRequest;
 import ao.creativemode.kixi.identity.dto.teachers.TeacherResponse;
 import ao.creativemode.kixi.identity.service.TeacherService;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,9 +19,23 @@ import java.util.List;
 public class TeacherController {
 
     private final TeacherService service;
+    private final CurrentAccountService currentAccountService;
 
-    public TeacherController(TeacherService service) {
+    public TeacherController(TeacherService service, CurrentAccountService currentAccountService) {
         this.service = service;
+        this.currentAccountService = currentAccountService;
+    }
+
+    /**
+     * The caller's own teacher record (#176), for the first teaching assignment a
+     * teacher makes. Open to TEACHER as well as ADMIN in SecurityConfig; the rest
+     * of this controller stays ADMIN-only. 404 when the account has no record.
+     */
+    @GetMapping("/me")
+    public Mono<ResponseEntity<TeacherResponse>> mine() {
+        return currentAccountService.requiredAccountId()
+            .flatMap(service::findMine)
+            .map(ResponseEntity::ok);
     }
 
     @GetMapping

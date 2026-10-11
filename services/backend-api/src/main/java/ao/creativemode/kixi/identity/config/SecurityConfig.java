@@ -49,6 +49,10 @@ public class SecurityConfig {
                         // SPRINGDOC_SWAGGER_UI_ENABLED (false fora de dev).
                         .pathMatchers("/v3/api-docs/**", "/swagger-ui.html",
                                 "/swagger-ui/**", "/webjars/**").permitAll()
+                        // #176: a teacher reads their own record; every other
+                        // /teachers route stays ADMIN-only below.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
