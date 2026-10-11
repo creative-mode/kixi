@@ -399,7 +399,9 @@ public class StatementController {
         Long termId,
         Long subjectId,
         Long classId,
-        Long institutionId
+        Long institutionId,
+        /** #183: without it a client that reads and writes back lost the course on PUT. */
+        Long courseId
     ) {
         public static StatementSummary from(Statement statement) {
             return new StatementSummary(
@@ -417,7 +419,8 @@ public class StatementController {
                 statement.getTermId(),
                 statement.getSubjectId(),
                 statement.getClassId(),
-                statement.getInstitutionId()
+                statement.getInstitutionId(),
+                statement.getCourseId()
             );
         }
     }
