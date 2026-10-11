@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.exams.service;
 
+import ao.creativemode.kixi.exams.dto.statement.CatalogStatementSummary;
 import ao.creativemode.kixi.exams.dto.statement.StatementCatalogFilter;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository;
@@ -9,7 +10,9 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.dto.PageResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -37,7 +40,7 @@ public class StatementCatalogService {
         this.meService = meService;
     }
 
-    public Mono<PageResponse<Statement>> catalog(StatementCatalogFilter filter, Long accountId) {
+    public Mono<PageResponse<CatalogStatementSummary>> catalog(StatementCatalogFilter filter, Long accountId) {
         return Mono.defer(() -> {
             validatePaging(filter);
             Sort sort = parseSort(filter.sort());
@@ -71,12 +74,24 @@ public class StatementCatalogService {
                         (long) filter.page() * filter.size());
 
                 return Mono.zip(repository.findPage(criteria).collectList(), repository.count(criteria))
-                        .map(page -> PageResponse.of(page.getT1(), filter.page(), filter.size(), page.getT2()));
+                        .flatMap(page -> withQuestionCounts(page.getT1())
+                                .map(content -> PageResponse.of(content, filter.page(), filter.size(), page.getT2())));
             });
         });
     }
 
-    private Mono<Affiliation> affiliationOf(Long accountId) {
+    /** #178: one grouped count for the page, not one query per statement. */
+    private Mono<List<CatalogStatementSummary>> withQuestionCounts(List<Statement> statements) {
+        List<Long> ids = statements.stream().map(Statement::getId).toList();
+        return repository.countQuestions(ids)
+                .defaultIfEmpty(Map.of())
+                .map(counts -> statements.stream()
+                        .map(statement -> CatalogStatementSummary.from(
+                                statement, counts.getOrDefault(statement.getId(), 0L)))
+                        .toList());
+    }
+
+        private Mono<Affiliation> affiliationOf(Long accountId) {
         return meService.getMe(accountId).map(me -> new Affiliation(
                 me.school() != null ? me.school().id() : null,
                 me.course() != null ? me.course().id() : null,
