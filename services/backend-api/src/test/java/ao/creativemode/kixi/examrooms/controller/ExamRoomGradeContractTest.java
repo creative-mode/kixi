@@ -40,8 +40,9 @@ class ExamRoomGradeContractTest {
         String csv = (String) toCsv.invoke(controller, List.of(
                 new ExamRoomGradeResponse(42L, "fallback-user", null, "NOT_STARTED", null, 0, 0, 0, null)));
 
-        assertThat(csv).startsWith("accountId,name,simulationId,");
-        assertThat(csv).contains("42,fallback-user,,NOT_STARTED,");
+        assertThat(csv).isEqualTo("accountId,name,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\r\n"
+                + "42,fallback-user,,NOT_STARTED,,0,0,0,\r\n");
+        assertThat(csv.replace("\r\n", "")).doesNotContain("\n");
     }
 
     @Test
@@ -67,5 +68,13 @@ class ExamRoomGradeContractTest {
         assertThat(csv).contains("5,'+Jane,,NOT_STARTED,");
         assertThat(csv).contains("6,'-Jane,,NOT_STARTED,");
         assertThat(csv).contains("7,'@Jane,,NOT_STARTED,");
+        assertThat(csv).isEqualTo("accountId,name,simulationId,status,finalScore,correctAnswers,totalQuestions,pendingReviewCount,finishedAt\r\n"
+                + "1,\"Doe, Jane\",,NOT_STARTED,,0,0,0,\r\n"
+                + "2,\"Jane \"\"JJ\"\" Doe\",,NOT_STARTED,,0,0,0,\r\n"
+                + "3,\"Jane\nDoe\",,NOT_STARTED,,0,0,0,\r\n"
+                + "4,'=1+1,,NOT_STARTED,,0,0,0,\r\n"
+                + "5,'+Jane,,NOT_STARTED,,0,0,0,\r\n"
+                + "6,'-Jane,,NOT_STARTED,,0,0,0,\r\n"
+                + "7,'@Jane,,NOT_STARTED,,0,0,0,\r\n");
     }
 }
