@@ -1,10 +1,8 @@
 package ao.creativemode.kixi.simulations.service;
 
-import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
-import ao.creativemode.kixi.institutions.model.Enrollment;
-import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
-import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
+import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.DisplayName;
@@ -13,7 +11,6 @@ import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.Scope;
 
 import org.springframework.stereotype.Service;
 
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -27,21 +24,20 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The relative leaderboard of issue #117.
  *
- * <p>Four rules shape it:</p>
+ * <p>Five rules shape it:</p>
  * <ol>
  *   <li><b>The caller decides the cohort.</b> {@code scope=class} and {@code school}
- *       resolve through {@code /me}, never from a parameter, so nobody can ask for a
- *       group they do not belong to.</li>
- *   <li><b>Membership is proved, not assumed.</b> {@code /me} is not proof of belonging:
- *       it answers with the most recent enrollment whether or not it is active, and its
- *       school can also come from an institutional link that has no enrollment behind it.
- *       Both are read here as a starting point and then confirmed against an ACTIVE
- *       enrollment, so neither a cancelled seat nor a bare affiliation can buy a ranking
- *       that is counted over active students alone.</li>
+ *       resolve from the seats the caller actually holds, never from a parameter, so
+ *       nobody can ask for a group they do not belong to.</li>
+ *   <li><b>Membership is a seat, in one school year.</b> Not a profile, and not a link to
+ *       the institution: a cancelled row is not a seat, and neither is last year's. The
+ *       year is carried into the queries, because a student who moved keeps their old row
+ *       ACTIVE forever and would otherwise go on being ranked where they no longer are.</li>
  *   <li><b>The cache holds the cohort, the answer does not.</b> A ranking is cached per
  *       cohort because every member reads the same rows; the window that comes back is
  *       built per request. Caching the response instead would hand one caller somebody
@@ -49,6 +45,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>A small group publishes no podium.</b> Under ten students a full ranking would
  *       name who is last, which is the exposure the issue asks to avoid. The caller
  *       still sees their own position and immediate neighbours.</li>
+ *   <li><b>Protection follows the ranked rows.</b> The floor is drawn from how many
+ *       students actually have a score, not from how many are enrolled: otherwise a class
+ *       of eight with five scores would still show fifth, and {@code rankedStudents}
+ *       would tell the reader it was the last.</li>
  * </ol>
  *
  * <p>A colleague appears as a masked label and no identifier: a stable account id in a
@@ -76,28 +76,13 @@ public class LeaderboardService {
     /** Bound on the cache, so it cannot grow with whatever the caller varies. */
     private static final int MAX_CACHED_COHORTS = 500;
 
-    /**
-     * Newest enrollment first, then highest id. The id is the tiebreaker so that two rows
-     * created in the same millisecond still produce one answer instead of an arbitrary
-     * one, and so that the order never depends on how the database felt like returning
-     * them.
-     */
-    private static final Comparator<Enrollment> SEAT_ORDER = Comparator
-            .comparing(Enrollment::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
-            .thenComparing(Enrollment::getId, Comparator.nullsLast(Comparator.reverseOrder()));
-
-    private final MeService meService;
-    private final EnrollmentRepository enrollments;
+    private final EnrollmentSeatReader seats;
     private final LeaderboardRepository repository;
 
     private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
-    public LeaderboardService(
-            MeService meService,
-            EnrollmentRepository enrollments,
-            LeaderboardRepository repository) {
-        this.meService = meService;
-        this.enrollments = enrollments;
+    public LeaderboardService(EnrollmentSeatReader seats, LeaderboardRepository repository) {
+        this.seats = seats;
         this.repository = repository;
     }
 
@@ -119,116 +104,39 @@ public class LeaderboardService {
             }
 
             return cohortOf(accountId, resolved)
-                    .flatMap(cohort -> ranking(resolved, cohort.id(), statementId, window)
+                    .flatMap(cohort -> ranking(resolved, cohort.id(), cohort.schoolYearId(), statementId, window)
                             .flatMap(ranked -> windowAround(
                                     accountId, ranked, resolved, cohort.id(), statementId, window)));
         });
     }
 
     /**
-     * The class or school to rank, together with the proof that the caller sits in it.
+     * The group to rank and the school year it is counted over.
      *
-     * <p>{@code /me} proposes; this confirms. Its enrollment is the most recent one
-     * whatever its status, and its school may come from an institutional link that has no
-     * enrollment behind it — neither is a reason to hand out a ranking counted over
-     * ACTIVE students.</p>
+     * <p>Taken from the caller's newest ACTIVE seat: the most recent one is the school
+     * they are at now. Two seats in two schools are a legal state — one per school year —
+     * so the choice is a rule, never the order the rows arrived in.</p>
      */
     private Mono<Cohort> cohortOf(Long accountId, Scope scope) {
-        return meService.getMe(accountId).flatMap(me -> switch (scope) {
-            case CLASS -> classCohort(accountId, me);
-            case SCHOOL -> schoolCohort(accountId, me);
-        });
-    }
-
-    /**
-     * The class comes from the caller's ACTIVE seat too, and never from
-     * {@code me.currentClass()}.
-     *
-     * <p>{@code /me} picks its enrollment by id and not by state, so a cancelled one can
-     * point the profile at a class the caller has already left. Looking for an active
-     * seat in *that* class then finds nothing and refuses a student who does hold one.
-     * Reading the class off the active seat removes the guesswork.</p>
-     */
-    private Mono<Cohort> classCohort(Long accountId, MeResponse me) {
-        return newestActiveSeat(accountId)
-                .switchIfEmpty(Mono.error(ApiException.forbidden(
-                        "A class ranking needs an active enrollment in a class")))
-                .map(seat -> new Cohort(seat.enrollment().getClassId(), seat.enrollment().getSchoolYearId()));
-    }
-
-    /**
-     * The school comes from the caller's ACTIVE enrollment, never from {@code me.school()}.
-     *
-     * <p>{@code /me} picks its enrollment by id and not by state, so a cancelled one that
-     * happens to be newer — say a late withdrawal from another school — points the profile
-     * at that school. Filtering ACTIVE enrollments of *that* school would then refuse a
-     * student who does hold a valid seat somewhere else. Reading the school off the seat
-     * itself cannot be wrong in that way: there is no seat, there is no school.</p>
-     */
-    private Mono<Cohort> schoolCohort(Long accountId, MeResponse me) {
-        return firstActiveEnrollmentWithASchool(accountId)
-                .switchIfEmpty(Mono.error(ApiException.forbidden(
-                        "A school ranking needs an active enrollment in a school")))
-                .map(entry -> new Cohort(entry.schoolId(), entry.enrollment().getSchoolYearId()));
-    }
-
-    /**
-     * The caller's ACTIVE seat in a school, decided by a rule and not by arrival.
-     *
-     * <p>A student may hold one ACTIVE enrollment per school year, so two of them in
-     * different schools is a legal state, and the repository does not order what it
-     * returns. Taking the first to arrive would pick a school out of the database's
-     * whim, and the cache would then keep whichever it happened to get. The rule here is
-     * the newest enrollment among the active ones — the same one {@code /me} uses for the
-     * current seat, so "the school I am at now" means the same thing in both. Filtering
-     * the inactive out first is what keeps a cancelled row from steering the choice.</p>
-     *
-     * <p>An institutional link with no enrollment never gets this far: there is no seat,
-     * so there is nothing to rank with.</p>
-     */
-    private Mono<ActiveSeat> firstActiveEnrollmentWithASchool(Long accountId) {
-        return activeSeats(accountId)
-                // concatMap, not filter: deciding whether an enrollment sits in a school is
-                // a query, and blocking here would park a thread on the database.
-                .concatMap(enrollment -> meService.classInstitutionId(enrollment.getClassId())
-                        .map(schoolId -> new ActiveSeat(schoolId, enrollment)))
-                .next();
-    }
-
-    /** The caller's ACTIVE seat, whether or not its class belongs to a school. */
-    private Mono<ActiveSeat> newestActiveSeat(Long accountId) {
-        return activeSeats(accountId)
-                .map(enrollment -> new ActiveSeat(null, enrollment))
-                .next();
-    }
-
-    /**
-     * The caller's ACTIVE seats, newest first.
-     *
-     * <p>Newest first, so the seat joined most recently wins. Sorting here rather than in
-     * SQL keeps the rule where it is read, and lets both cohort scopes share it.</p>
-     */
-    private Flux<Enrollment> activeSeats(Long accountId) {
-        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
-                .filter(Enrollment::isActive)
-                .filter(enrollment -> enrollment.getClassId() != null)
-                .sort(SEAT_ORDER);
-    }
-
-    /** The caller's ACTIVE enrollment in the class they are asking about. */
-    private Mono<Enrollment> activeEnrollmentIn(Long accountId, Long classId) {
-        return enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId)
-                .filter(Enrollment::isActive)
-                .filter(enrollment -> classId.equals(enrollment.getClassId()))
-                .next();
+        return seats.activeSeatsOf(accountId)
+                .filter(seat -> scope != Scope.SCHOOL || seat.institutionId() != null)
+                .next()
+                .switchIfEmpty(Mono.error(ApiException.forbidden(switch (scope) {
+                    case CLASS -> "A class ranking needs an active enrollment in a class";
+                    case SCHOOL -> "A school ranking needs an active enrollment in a school";
+                })))
+                .map(seat -> new Cohort(
+                        scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
+                        seat.schoolYearId()));
     }
 
     /**
      * The whole cohort, ordered. Every member reads the same rows, which is exactly why
      * it — and not the response — is what gets cached.
      */
-    private Mono<Ranking> ranking(Scope scope, Long groupId, Long statementId, Period period) {
-        CacheKey key = new CacheKey(scope, groupId, statementId, period);
+    private Mono<Ranking> ranking(
+            Scope scope, Long groupId, Long schoolYearId, Long statementId, Period period) {
+        CacheKey key = new CacheKey(scope, groupId, schoolYearId, statementId, period);
 
         Entry running = cache.get(key);
         if (running != null && !running.expired()) {
@@ -236,9 +144,10 @@ public class LeaderboardService {
         }
 
         Mono<Ranking> computed = Mono.defer(() -> Mono.zip(
-                        repository.findAverages(scope, groupId, statementId, period.from(), period.to())
+                        repository.findAverages(scope, groupId, schoolYearId, statementId,
+                                period.from(), period.to())
                                 .collectList(),
-                        repository.countMembers(scope, groupId))
+                        repository.countMembers(scope, groupId, schoolYearId))
                         .map(tuples -> rank(tuples.getT1(), tuples.getT2())));
 
         prune();
@@ -249,14 +158,23 @@ public class LeaderboardService {
             return computed;
         }
 
+        // The failure has to drop this key and not whatever replaced it meanwhile, so the
+        // removal is by identity rather than by key alone.
+        AtomicReference<Entry> mine = new AtomicReference<>();
         Mono<Ranking> fresh = computed
                 // cache() holds the error as well as the value, and a database that blipped
                 // would then answer the whole cohort with the same failure for the whole
                 // TTL. Dropping the key on the way out leaves the next caller to retry.
-                .doOnError(error -> cache.remove(key))
+                .doOnError(error -> {
+                    Entry current = mine.get();
+                    if (current != null) {
+                        cache.remove(key, current);
+                    }
+                })
                 .cache(CACHE_TTL);
 
         Entry entry = new Entry(fresh, System.nanoTime() + CACHE_TTL.toNanos());
+        mine.set(entry);
         Entry raced = cache.putIfAbsent(key, entry);
         return raced != null && !raced.expired() ? raced.ranking() : fresh;
     }
@@ -301,8 +219,9 @@ public class LeaderboardService {
             Long statementId,
             Period period) {
         List<Ranked> ranked = ranking.ranked();
-        // "Turma com < 10 alunos" is about the class, not about how many of them sat.
-        boolean smallGroup = ranking.totalStudents() < SMALL_GROUP_LIMIT;
+        // Both numbers matter. Too few enrolled, or too few with a score to rank, and the
+        // table is short enough that naming its bottom says something about real people.
+        boolean smallGroup = Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
 
         int mine = -1;
         for (int i = 0; i < ranked.size(); i++) {
@@ -318,13 +237,14 @@ public class LeaderboardService {
             for (int i = Math.max(0, mine - NEIGHBOURS); i <= last; i++) {
                 indexes.add(i);
             }
-            // In a small group the bottom of the table is the exposure the issue is about,
-            // and a symmetric window walks straight into it: sixth of eight would show
-            // seventh and eighth. Those places are withheld from everybody, the caller's
-            // own included — they already know where they stand, and hearing it from
-            // someone else's ranking is the part that hurts.
+            // The window walks into the bottom of the table otherwise: sixth of eight would
+            // show seventh and eighth. Those places are withheld from everybody, the
+            // caller's own included — they already know where they stand, and learning it
+            // from somebody else's ranking is the part that hurts.
             if (smallGroup) {
-                int floor = ranking.totalStudents() - NEIGHBOURS;
+                // Drawn from the rows actually ranked, not from the enrolment count: with
+                // five of eight marked, a floor of six protects nothing.
+                int floor = ranked.size() - NEIGHBOURS;
                 int myPosition = mine;
                 indexes.removeIf(index ->
                         ranked.get(index).position() > floor && index != myPosition);
@@ -402,16 +322,14 @@ public class LeaderboardService {
         return masked.isEmpty() ? "Aluno" : masked;
     }
 
-    /** The group being ranked and the year the caller's seat in it belongs to. */
-    record Cohort(Long id, Long schoolYearId) { }
-
     /**
-     * An ACTIVE enrollment, and the school it sits in when that was resolved.
+     * The group being ranked and the year it is counted over.
      *
-     * @param schoolId null where no school was looked up, which is what the class scope
-     *                 needs: a seat in a class with no institution is still a seat.
+     * <p>The year is part of the cohort, not a filter on it: both the seats and the
+     * papers have to be from the same school year, or the average belongs to another
+     * cohort altogether.</p>
      */
-    record ActiveSeat(Long schoolId, Enrollment enrollment) { }
+    record Cohort(Long id, Long schoolYearId) { }
 
     /** The time window a ranking covers. */
     enum Period {
@@ -451,8 +369,8 @@ public class LeaderboardService {
     /** Everything every member of a cohort is allowed to see. */
     record Ranking(List<Ranked> ranked, int totalStudents) { }
 
-    /** What identifies a cached ranking: the cohort and the window everyone shares it under. */
-    record CacheKey(Scope scope, Long groupId, Long statementId, Period period) { }
+    /** What identifies a cached ranking, and nothing that could serve another's. */
+    record CacheKey(Scope scope, Long groupId, Long schoolYearId, Long statementId, Period period) { }
 
     /**
      * A cached ranking and when it stops being worth reading. The timestamp is kept here

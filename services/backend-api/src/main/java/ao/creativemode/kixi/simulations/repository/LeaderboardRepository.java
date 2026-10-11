@@ -37,14 +37,39 @@ import java.util.Map;
 @Repository
 public class LeaderboardRepository {
 
-    /** The enrollment every ranked account has to hold, for the requested group. */
+    /**
+     * The enrollment every ranked account has to hold, for the requested group and year.
+     *
+     * <p>The school year is not optional. A student who moves from school A to school B
+     * keeps their A row ACTIVE forever — the state only ever goes to CANCELLED — so
+     * without the year filter they would go on being ranked in A, with the marks they
+     * took in B, under their own name.</p>
+     */
     private static final String MEMBERSHIP = """
             EXISTS (SELECT 1
                       FROM enrollments e
                       JOIN classes cl ON cl.id = e.class_id AND cl.deleted_at IS NULL
+                      JOIN accounts a ON a.id = e.account_id
                      WHERE e.account_id = s.account_id
                        AND e.deleted_at IS NULL
                        AND e.status = 'ACTIVE'
+                       AND a.deleted_at IS NULL AND a.active = TRUE
+            """;
+
+    /**
+     * A simulation whose open questions are still waiting for a teacher does not score.
+     *
+     * <p>Since #169 an open question is {@code PENDING_REVIEW} and {@code final_score}
+     * only adds up what has been marked. Ranking that number against the whole
+     * {@code total_max_score} would park a student below their peers until the teacher
+     * got round to them, and the class would see it happen.</p>
+     */
+    private static final String FULLY_MARKED = """
+            NOT EXISTS (SELECT 1
+                          FROM simulation_answers sa
+                         WHERE sa.simulation_id = s.id
+                           AND sa.deleted_at IS NULL
+                           AND sa.review_status = 'PENDING_REVIEW'
             """;
 
     private final DatabaseClient databaseClient;
@@ -55,8 +80,9 @@ public class LeaderboardRepository {
 
     /** One average percentage per account that has a computable score in the group. */
     public Flux<GroupScore> findAverages(
-            Scope scope, Long groupId, Long statementId, LocalDateTime from, LocalDateTime to) {
-        Sql sql = averagesSql(scope, groupId, statementId, from, to);
+            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            LocalDateTime from, LocalDateTime to) {
+        Sql sql = averagesSql(scope, groupId, schoolYearId, statementId, from, to);
         return bindAll(databaseClient.sql(sql.statement()), sql.binds())
                 .map((row, metadata) -> new GroupScore(
                         ((Number) row.get("account_id")).longValue(),
@@ -64,16 +90,19 @@ public class LeaderboardRepository {
                 .all();
     }
 
-    /** How many students belong to the group, ranked or not. */
-    public Mono<Long> countMembers(Scope scope, Long groupId) {
+    /** How many students belong to the group and year, ranked or not. */
+    public Mono<Long> countMembers(Scope scope, Long groupId, Long schoolYearId) {
         String where = groupPredicate(scope, groupId, "e", "cl");
         return databaseClient.sql("""
                         SELECT COUNT(DISTINCT e.account_id) AS total
                           FROM enrollments e
                           JOIN classes cl ON cl.id = e.class_id AND cl.deleted_at IS NULL
-                        WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE' AND """
+                          JOIN accounts a ON a.id = e.account_id
+                        WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE'
+                          AND a.deleted_at IS NULL AND a.active = TRUE AND """
                         + where)
                 .bind("groupId", groupId)
+                .bind("schoolYearId", schoolYearId)
                 .map((row, metadata) -> ((Number) row.get("total")).longValue())
                 .one()
                 .defaultIfEmpty(0L);
@@ -99,7 +128,8 @@ public class LeaderboardRepository {
     }
 
     static Sql averagesSql(
-            Scope scope, Long groupId, Long statementId, LocalDateTime from, LocalDateTime to) {
+            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            LocalDateTime from, LocalDateTime to) {
         List<String> where = new ArrayList<>();
         Map<String, Object> binds = new LinkedHashMap<>();
 
@@ -112,8 +142,14 @@ public class LeaderboardRepository {
         // A score without a scale cannot be turned into a percentage, and comparing it
         // against one that has a scale would be meaningless.
         where.add("st.total_max_score IS NOT NULL AND st.total_max_score > 0");
-        where.add(MEMBERSHIP + " AND " + groupPredicate(scope, groupId, "e", "cl"));
+        // A cohort is one school year, so the paper has to be from it too: last year's
+        // average is not this year's result.
+        where.add("s.school_year_id = :schoolYearId");
+        where.add(FULLY_MARKED);
+        where.add(MEMBERSHIP + " AND " + groupPredicate(scope, groupId, "e", "cl")
+                + " AND e.school_year_id = :schoolYearId");
 
+        binds.put("schoolYearId", schoolYearId);
         if (statementId != null) {
             where.add("s.statement_id = :statementId");
             binds.put("statementId", statementId);
