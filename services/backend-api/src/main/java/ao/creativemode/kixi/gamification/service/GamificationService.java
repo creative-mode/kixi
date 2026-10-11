@@ -7,6 +7,7 @@ import ao.creativemode.kixi.gamification.model.UserBadge;
 import ao.creativemode.kixi.gamification.model.UserStats;
 import ao.creativemode.kixi.gamification.repository.BadgeRepository;
 import ao.creativemode.kixi.gamification.repository.GamificationRepository;
+import ao.creativemode.kixi.gamification.repository.UserBadgeRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -26,11 +27,14 @@ public class GamificationService {
 
     private final GamificationRepository stats;
     private final BadgeRepository badges;
+    private final UserBadgeRepository userBadges;
     private final Clock clock;
 
-    public GamificationService(GamificationRepository stats, BadgeRepository badges, Clock clock) {
+    public GamificationService(GamificationRepository stats, BadgeRepository badges,
+            UserBadgeRepository userBadges, Clock clock) {
         this.stats = stats;
         this.badges = badges;
+        this.userBadges = userBadges;
         this.clock = clock;
     }
 
@@ -76,7 +80,7 @@ public class GamificationService {
     }
 
     public Flux<UserBadgeResponse> getBadges(Long accountId) {
-        return badges.findAllByAccountIdOrderByUnlockedAtDesc(accountId)
+        return userBadges.findAllByAccountIdOrderByUnlockedAtDesc(accountId)
             .concatMap(this::toResponse);
     }
 

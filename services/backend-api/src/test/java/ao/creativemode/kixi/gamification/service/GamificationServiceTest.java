@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import ao.creativemode.kixi.gamification.model.UserStats;
 import ao.creativemode.kixi.gamification.repository.BadgeRepository;
 import ao.creativemode.kixi.gamification.repository.GamificationRepository;
+import ao.creativemode.kixi.gamification.repository.UserBadgeRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -27,6 +28,7 @@ import reactor.test.StepVerifier;
 class GamificationServiceTest {
     private GamificationRepository repository;
     private BadgeRepository badgeRepository;
+    private UserBadgeRepository userBadgeRepository;
     private GamificationService service;
     private UserStats userStats;
 
@@ -34,7 +36,8 @@ class GamificationServiceTest {
     void setUp() {
         repository = mock(GamificationRepository.class);
         badgeRepository = mock(BadgeRepository.class);
-        service = new GamificationService(repository, badgeRepository,
+        userBadgeRepository = mock(UserBadgeRepository.class);
+        service = new GamificationService(repository, badgeRepository, userBadgeRepository,
                 Clock.fixed(Instant.parse("2026-10-11T12:00:00Z"), ZoneId.of("UTC")));
         userStats = stats(7L, 0L, 1, 0, 1, null);
         when(repository.ensureStats(7L)).thenReturn(Mono.just(1));
