@@ -175,6 +175,28 @@ class StatementFullResponseTest {
         org.mockito.Mockito.verify(statementService).findByIdWithQuestions(STATEMENT_ID);
     }
 
+    @Test
+    void theReadsCarryTheSchoolAndTheCourseThePutWrites() {
+        // #183: the PUT replaces courseId, so a client that reads and writes back
+        // has to get it from the read, or the course is wiped without a word.
+        statement.setInstitutionId(100L);
+        statement.setCourseId(5L);
+        givenAFullStatement();
+        when(statementService.findById(STATEMENT_ID)).thenReturn(Mono.just(statement));
+
+        assertThat(bodyAsJson(adminJwt()))
+                .contains("\"institutionId\":100")
+                .contains("\"courseId\":5");
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/statements/" + STATEMENT_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.institutionId").isEqualTo(100)
+                .jsonPath("$.courseId").isEqualTo(5);
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenAFullStatement() {
