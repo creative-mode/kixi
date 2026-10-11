@@ -5,11 +5,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -91,6 +93,35 @@ class ExamRoomMonitoringServiceTest {
                 .assertNext(grades -> assertThat(grades).isEmpty())
                 .verifyComplete();
         verify(participants, times(2)).findByExamRoomId(7L);
+    }
+
+    @Test
+    void slowSnapshotsAreSerializedAndRemainInOrder() {
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.RUNNING);
+        AtomicInteger started = new AtomicInteger();
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximumActive = new AtomicInteger();
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(participant(1L, 1L, true)));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenAnswer(ignored -> {
+            int call = started.incrementAndGet();
+            int current = active.incrementAndGet();
+            maximumActive.updateAndGet(previous -> Math.max(previous, current));
+            Duration delay = call == 1 ? Duration.ofSeconds(5) : Duration.ofSeconds(1);
+            return Mono.delay(delay)
+                    .doOnSuccess(ignoredValue -> active.decrementAndGet())
+                    .thenMany(Flux.range(1, call));
+        });
+
+        StepVerifier.create(service.stream(7L, 99L, false))
+                .expectNextMatches(snapshot -> snapshot.participants().get(0).totalQuestions() == 1)
+                .expectNextMatches(snapshot -> snapshot.participants().get(0).totalQuestions() == 2)
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+
+        assertThat(maximumActive).hasValue(1);
+        assertThat(started).hasValue(2);
     }
 
     private ExamRoom room(Long id, Long teacherId, ExamRoomStatus status) {

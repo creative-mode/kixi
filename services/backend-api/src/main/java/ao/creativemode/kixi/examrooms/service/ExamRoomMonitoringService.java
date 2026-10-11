@@ -61,7 +61,8 @@ public class ExamRoomMonitoringService {
 
     public Flux<ExamRoomLiveResponse> stream(Long roomId, Long caller, boolean admin) {
         return Flux.interval(Duration.ZERO, Duration.ofSeconds(2))
-                .flatMap(ignored -> live(roomId, caller, admin))
+                .onBackpressureLatest()
+                .concatMap(ignored -> live(roomId, caller, admin))
                 .takeUntil(value -> value.status() == ExamRoomStatus.CLOSED);
     }
 
