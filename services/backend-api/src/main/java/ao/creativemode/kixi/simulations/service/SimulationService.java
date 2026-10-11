@@ -241,7 +241,7 @@ public class SimulationService {
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(locked -> {
                     if (!SimulationStatus.IN_PROGRESS.equals(locked.getStatus())) {
-                        return Mono.error(ApiException.badRequest("Simulation cannot be updated"));
+                        return Mono.error(ApiException.conflict("Simulation cannot be updated"));
                     }
                     if (locked.getExamRoomId() == null || examRoomAccess == null) return Mono.just(locked);
                     Mono<Boolean> accepts = examRoomAccess.acceptsSimulationAnswers(locked.getExamRoomId(),
@@ -259,7 +259,7 @@ public class SimulationService {
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(simulation -> {
                     if (!SimulationStatus.IN_PROGRESS.equals(simulation.getStatus())) {
-                        return Mono.error(ApiException.badRequest("Simulation cannot be updated"));
+                        return Mono.error(ApiException.conflict("Simulation cannot be updated"));
                     }
 
                     if (dto.status() != null && dto.status() != SimulationStatus.FINISHED

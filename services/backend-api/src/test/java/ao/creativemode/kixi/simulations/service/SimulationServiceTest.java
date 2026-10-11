@@ -413,8 +413,9 @@ class SimulationServiceTest {
 
         StepVerifier.create(service.update(1L, new SimulationRequest(1L, 1L, 1L, null, null, null, null, null)))
                 .expectErrorSatisfies(error -> {
-                    assertThat(error).isInstanceOf(ApiException.class);
-                    assertThat(((ApiException) error).getMessage()).isEqualTo("Simulation cannot be updated");
+                     assertThat(error).isInstanceOf(ApiException.class);
+                     assertThat(((ApiException) error).getStatus().value()).isEqualTo(409);
+                     assertThat(((ApiException) error).getMessage()).isEqualTo("Simulation cannot be updated");
                 })
                 .verify();
 

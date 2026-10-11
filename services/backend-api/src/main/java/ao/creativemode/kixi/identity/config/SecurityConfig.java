@@ -81,6 +81,18 @@ public class SecurityConfig {
                         // material it should not (teaching-assignments, gabarito).
                         .pathMatchers("/api/v1/chat/**")
                         .authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/mine", "/api/exam-rooms/mine",
+                                "/api/v1/exam-rooms/*/student", "/api/exam-rooms/*/student")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.POST, "/api/v1/exam-rooms/*/join", "/api/exam-rooms/*/join")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/*/live", "/api/exam-rooms/*/grades",
+                                "/api/v1/exam-rooms/*/grades.csv", "/api/exam-rooms/*/live",
+                                "/api/exam-rooms/*/grades", "/api/exam-rooms/*/grades.csv")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/exam-rooms", "/api/v1/exam-rooms/**",
+                                "/api/exam-rooms", "/api/exam-rooms/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",

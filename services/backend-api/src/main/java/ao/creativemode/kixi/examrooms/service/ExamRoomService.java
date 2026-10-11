@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.academic.repository.ClassRepository;
@@ -36,6 +37,7 @@ import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -55,6 +57,7 @@ public class ExamRoomService implements ExamRoomAccess {
     private final QuestionRepository questions;
     private final QuestionOptionRepository options;
     private final Clock clock;
+    private final SimulationSubmissionService submissionService;
     private final SimulationDeadlineService simulationDeadlineService;
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
@@ -63,16 +66,16 @@ public class ExamRoomService implements ExamRoomAccess {
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
             QuestionOptionRepository options) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
-                accountRoles, roles, questions, options, Clock.systemDefaultZone());
+                accountRoles, roles, questions, options, Clock.systemDefaultZone(), (SimulationSubmissionService) null);
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
-            QuestionOptionRepository options, Clock clock) {
+            QuestionOptionRepository options, Clock clock, @Lazy SimulationSubmissionService submissionService) {
         this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
-                accountRoles, roles, questions, options, clock, null);
+                accountRoles, roles, questions, options, clock, null, submissionService);
     }
 
     @Autowired
@@ -80,7 +83,8 @@ public class ExamRoomService implements ExamRoomAccess {
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
             AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
-            QuestionOptionRepository options, Clock clock, SimulationDeadlineService simulationDeadlineService) {
+            QuestionOptionRepository options, Clock clock, SimulationDeadlineService simulationDeadlineService,
+            @Lazy SimulationSubmissionService submissionService) {
         this.rooms = rooms;
         this.participants = participants;
         this.simulations = simulations;
@@ -94,13 +98,33 @@ public class ExamRoomService implements ExamRoomAccess {
         this.questions = questions;
         this.options = options;
         this.clock = clock;
+        this.submissionService = submissionService;
         this.simulationDeadlineService = simulationDeadlineService;
     }
 
     public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
+            ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options, Clock clock) {
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
+                accountRoles, roles, questions, options, clock, null, null);
+    }
+
+    public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
+            SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
+            ClassRepository classes, EnrollmentRepository enrollments, StatementWriteAccessService statementWriteAccess,
+            AccountRoleRepository accountRoles, RoleRepository roles, QuestionRepository questions,
+            QuestionOptionRepository options, Clock clock, SimulationDeadlineService simulationDeadlineService) {
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments, statementWriteAccess,
+                accountRoles, roles, questions, options, clock, simulationDeadlineService, null);
+    }
+
+    public ExamRoomService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
+            SimulationRepository simulations, AccountRepository accounts, StatementRepository statements,
             ClassRepository classes, EnrollmentRepository enrollments) {
-        this(rooms, participants, simulations, accounts, statements, classes, enrollments, null, null, null, null, null);
+        this(rooms, participants, simulations, accounts, statements, classes, enrollments,
+                null, null, null, null, null, Clock.systemDefaultZone(), null, null);
     }
 
     public Mono<ExamRoomResponse> create(ExamRoomRequest data, Long teacherAccountId) {
@@ -409,11 +433,21 @@ public class ExamRoomService implements ExamRoomAccess {
             Mono<Void> statementLock = next == ExamRoomStatus.OPEN
                     ? lockStatementForSimulation(room.getStatementId()) : Mono.empty();
             Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
-            return statementLock.then(lockSimulations).then(rooms.transition(id, room.getStatus(), next))
+            Mono<Void> finalize = next == ExamRoomStatus.CLOSED ? finalizeRoom(id) : Mono.empty();
+            return statementLock.then(lockSimulations).then(finalize)
+                    .then(Mono.defer(() -> rooms.transition(id, room.getStatus(), next)))
                     .filter(count -> count == 1)
                     .switchIfEmpty(Mono.error(ApiException.conflict("Exam room changed concurrently")))
                     .then(rooms.findById(id)).map(ExamRoomService::toResponse);
         });
+    }
+
+    private Mono<Void> finalizeRoom(Long roomId) {
+        if (submissionService == null) return Mono.empty();
+        return simulations.findByExamRoomIdAndDeletedAtIsNull(roomId)
+                .filter(simulation -> simulation.getStatus() == SimulationStatus.IN_PROGRESS)
+                .concatMap(simulation -> submissionService.submit(simulation.getId(), null, true))
+                .then();
     }
 
     private Mono<ExamRoom> managedRoom(Long id, Long caller, boolean admin) {

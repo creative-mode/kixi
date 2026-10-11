@@ -36,6 +36,7 @@ import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.service.SimulationDeadlineService;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -250,6 +251,77 @@ class ExamRoomServiceTest {
                     assertThat(view.questions()).extracting(q -> q.id()).containsExactly(11L, 12L);
                     assertThat(view.questions().get(1).options()).extracting(o -> o.id()).containsExactly(101L, 102L);
                 }).verifyComplete();
+    }
+
+    @Test
+    void closingRoomSubmitsEveryInProgressSimulationBeforeChangingRoomState() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        Simulation first = new Simulation();
+        first.setId(81L);
+        first.setStatus(ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS);
+        Simulation second = new Simulation();
+        second.setId(82L);
+        second.setStatus(ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(first, second));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(first, second));
+        when(submission.submit(anyLong(), isNull(), eq(true))).thenReturn(Mono.just(first));
+        when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(closingService.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectNextCount(1).verifyComplete();
+        InOrder order = inOrder(submission, rooms);
+        order.verify(submission).submit(81L, null, true);
+        order.verify(submission).submit(82L, null, true);
+        order.verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
+    }
+
+    @Test
+    void closingRoomDoesNotResubmitFinishedSimulations() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        Simulation inProgress = simulation(81L);
+        Simulation finished = simulation(82L);
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress, finished));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress, finished));
+        when(submission.submit(81L, null, true)).thenReturn(Mono.just(inProgress));
+        when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(closingService.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectNextCount(1).verifyComplete();
+        verify(submission).submit(81L, null, true);
+        verify(submission, never()).submit(82L, null, true);
+        verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
+    }
+
+    @Test
+    void closingRoomDoesNotTransitionWhenAutomaticSubmissionFails() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        Simulation inProgress = simulation(81L);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress));
+        when(submission.submit(81L, null, true)).thenReturn(Mono.error(new IllegalStateException("submission failed")));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.create(closingService.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .expectErrorMessage("submission failed").verify();
+        verify(rooms, never()).transition(anyLong(), any(), eq(ExamRoomStatus.CLOSED));
     }
 
     @Test
