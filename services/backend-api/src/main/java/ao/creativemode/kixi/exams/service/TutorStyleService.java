@@ -27,26 +27,26 @@ public class TutorStyleService {
     }
 
     /**
-     * The raw {@code tutor_style} of the author for that class, subject and year, or an
-     * empty string when there is nobody whose voice to borrow.
+     * The raw {@code tutor_style} of the author for that class and subject (the year is
+     * the class's), or an empty string when there is nobody whose voice to borrow.
      *
-     * <p>Empty is the normal case, not a failure: a statement without an author, class,
-     * subject or year has nobody to speak for, and an author who never wrote a style has
+     * <p>Empty is the normal case, not a failure: a statement without an author, class or
+     * subject has nobody to speak for, and an author who never wrote a style has
      * none to give. Either way the prompt is composed exactly as it was before this
      * issue, which is the behaviour {@code compose(null)} guarantees byte for byte.</p>
      */
     public Mono<String> styleOf(Statement statement) {
-        Long teacherId = statement.getCreatedBy();
+        // created_by is the author's account; the repository goes through teachers.
+        Long authorAccountId = statement.getCreatedBy();
         Long classId = statement.getClassId();
         Long subjectId = statement.getSubjectId();
-        Long yearId = statement.getSchoolYearId();
 
-        if (teacherId == null || classId == null || subjectId == null || yearId == null) {
+        if (authorAccountId == null || classId == null || subjectId == null) {
             return Mono.just("");
         }
 
         return assignments
-            .findFirstActiveForTeaching(teacherId, classId, subjectId, yearId)
+            .findActiveForAuthor(authorAccountId, classId, subjectId)
             // flatMap and justOrEmpty, not map: an assignment with no style is not a
             // failure, and a mapper that returns null throws instead of saying so.
             .flatMap(assignment -> Mono.justOrEmpty(assignment.getTutorStyle()))

@@ -20,10 +20,10 @@ import reactor.core.publisher.Mono;
  */
 class TutorStyleServiceTest {
 
-    private static final Long TEACHER = 5L;
+    /** The author's account id: statements.created_by references accounts, not teachers. */
+    private static final Long AUTHOR = 500L;
     private static final Long CLASS = 7L;
     private static final Long SUBJECT = 9L;
-    private static final Long YEAR = 3L;
 
     private TeachingAssignmentRepository assignments;
     private TutorStyleService service;
@@ -37,7 +37,7 @@ class TutorStyleServiceTest {
     /** The style of the assignment the author holds for that class, subject and year. */
     @Test
     void readsTheStyleFromTheAuthorsAssignment() {
-        when(assignments.findFirstActiveForTeaching(TEACHER, CLASS, SUBJECT, YEAR))
+        when(assignments.findActiveForAuthor(AUTHOR, CLASS, SUBJECT))
                 .thenReturn(Mono.just(assignment("explica com exemplos")));
 
         String style = service.styleOf(statement()).block();
@@ -48,13 +48,13 @@ class TutorStyleServiceTest {
     /** Two teachers, two styles: the acceptance criterion of the issue. */
     @Test
     void twoAuthorsWithDifferentStylesAreReadDifferently() {
-        when(assignments.findFirstActiveForTeaching(TEACHER, CLASS, SUBJECT, YEAR))
+        when(assignments.findActiveForAuthor(AUTHOR, CLASS, SUBJECT))
                 .thenReturn(Mono.just(assignment("prefere a fórmula primeiro")));
         String one = service.styleOf(statement()).block();
 
         Statement other = statement();
         other.setCreatedBy(99L);
-        when(assignments.findFirstActiveForTeaching(99L, CLASS, SUBJECT, YEAR))
+        when(assignments.findActiveForAuthor(99L, CLASS, SUBJECT))
                 .thenReturn(Mono.just(assignment("sempre muito breve")));
         String another = service.styleOf(other).block();
 
@@ -71,7 +71,7 @@ class TutorStyleServiceTest {
      */
     @Test
     void anAuthorWithoutAStyleYieldsNothing() {
-        when(assignments.findFirstActiveForTeaching(anyLong(), anyLong(), anyLong(), anyLong()))
+        when(assignments.findActiveForAuthor(anyLong(), anyLong(), anyLong()))
                 .thenReturn(Mono.just(assignment(null)));
 
         assertThat(service.styleOf(statement()).block()).isEmpty();
@@ -80,16 +80,16 @@ class TutorStyleServiceTest {
     /** Whitespace is not a voice. */
     @Test
     void aBlankStyleYieldsNothing() {
-        when(assignments.findFirstActiveForTeaching(anyLong(), anyLong(), anyLong(), anyLong()))
+        when(assignments.findActiveForAuthor(anyLong(), anyLong(), anyLong()))
                 .thenReturn(Mono.just(assignment("   ")));
 
         assertThat(service.styleOf(statement()).block()).isEmpty();
     }
 
-    /** No assignment at all — the author teaches that class under another year. */
+    /** No assignment at all: the author does not teach that class and subject. */
     @Test
     void anAuthorWithNoAssignmentYieldsNothing() {
-        when(assignments.findFirstActiveForTeaching(anyLong(), anyLong(), anyLong(), anyLong()))
+        when(assignments.findActiveForAuthor(anyLong(), anyLong(), anyLong()))
                 .thenReturn(Mono.empty());
 
         assertThat(service.styleOf(statement()).block()).isEmpty();
@@ -98,25 +98,24 @@ class TutorStyleServiceTest {
     /**
      * A statement with nobody to speak for does not reach the database.
      *
-     * <p>A missing author, class, subject or year means the question has no answer, and
+     * <p>A missing author, class or subject means the question has no answer, and
      * asking anyway would find a row by luck.</p>
      */
     @Test
     void aStatementWithNobodyToSpeakForAsksNobody() {
         for (Statement incomplete : new Statement[] {
-            withoutAuthor(), withoutClass(), withoutSubject(), withoutYear()}) {
+            withoutAuthor(), withoutClass(), withoutSubject()}) {
             assertThat(service.styleOf(incomplete).block()).isEmpty();
         }
 
-        verify(assignments, never()).findFirstActiveForTeaching(anyLong(), anyLong(), anyLong(), anyLong());
+        verify(assignments, never()).findActiveForAuthor(anyLong(), anyLong(), anyLong());
     }
 
     private static Statement statement() {
         Statement statement = new Statement();
-        statement.setCreatedBy(TEACHER);
+        statement.setCreatedBy(AUTHOR);
         statement.setClassId(CLASS);
         statement.setSubjectId(SUBJECT);
-        statement.setSchoolYearId(YEAR);
         return statement;
     }
 
@@ -135,12 +134,6 @@ class TutorStyleServiceTest {
     private static Statement withoutSubject() {
         Statement statement = statement();
         statement.setSubjectId(null);
-        return statement;
-    }
-
-    private static Statement withoutYear() {
-        Statement statement = statement();
-        statement.setSchoolYearId(null);
         return statement;
     }
 
