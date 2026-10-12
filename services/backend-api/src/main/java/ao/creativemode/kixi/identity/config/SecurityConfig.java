@@ -156,6 +156,15 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Social learning (issue #119): revoking is an explicit act
+                        // of the simulation's owner, and without its own rule the
+                        // DELETE would fall through to the staff-only catch-all
+                        // and lock students out of revoking their own consent.
+                        // (The POST is already covered by the three-role
+                        // simulations rule below.)
+                        .pathMatchers(HttpMethod.DELETE,
+                                "/api/v1/simulations/*/share")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER")
