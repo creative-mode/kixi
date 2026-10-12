@@ -34,6 +34,21 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Flux<Simulation> findByStatusAndDeletedAtIsNull(SimulationStatus status);
 
     /**
+     * Every finished attempt at one statement: the population the community
+     * aggregates (issue #119) are computed from.
+     */
+    Flux<Simulation> findAllByStatementIdAndStatusAndDeletedAtIsNull(
+            Long statementId, SimulationStatus status);
+
+    /**
+     * The caller's latest finished attempt at one statement, for the
+     * "you vs. the average" comparison. Latest, not best: it is the attempt
+     * the comparison reads most naturally against.
+     */
+    Mono<Simulation> findFirstByStatementIdAndAccountIdAndStatusAndDeletedAtIsNullOrderByIdDesc(
+            Long statementId, Long accountId, SimulationStatus status);
+
+    /**
      * Serializes answer writes with submission/finalization on PostgreSQL.
      * The lock is held by the surrounding reactive transaction until commit.
      */

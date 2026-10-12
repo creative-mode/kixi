@@ -36,13 +36,24 @@ public class EnrollmentController {
     /**
      * Active enrollments: the caller's own, or another account's
      * ({@code ?accountId=}) when the caller is ADMIN/TEACHER.
+     *
+     * <p>An ADMIN without {@code ?accountId=} gets every enrollment (#146): the
+     * manager's enrollments screen manages the whole platform, and listing only
+     * the administrator's own left it empty. A TEACHER keeps the old behaviour
+     * until it is decided what part of the school they should see.
      */
     @GetMapping
     public Mono<ResponseEntity<List<EnrollmentResponse>>> list(
             @RequestParam(required = false) Long accountId
     ) {
-        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> service.findVisible(tuple.getT1(), tuple.getT2(), accountId).collectList())
+        return Mono.zip(
+                currentAccountService.requiredAccountId(),
+                currentAccountService.hasAnyRole("ADMIN", "TEACHER"),
+                currentAccountService.hasAnyRole("ADMIN"))
+            .flatMap(tuple -> (accountId == null && tuple.getT3()
+                    ? service.findAllActive()
+                    : service.findVisible(tuple.getT1(), tuple.getT2(), accountId))
+                .collectList())
             .map(ResponseEntity::ok);
     }
 

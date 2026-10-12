@@ -1,6 +1,6 @@
 package ao.creativemode.kixi.exams.controller;
 
-import ao.creativemode.kixi.exams.controller.StatementController.StatementSummary;
+import ao.creativemode.kixi.exams.dto.statement.CatalogStatementSummary;
 import ao.creativemode.kixi.exams.dto.statement.StatementCatalogFilter;
 import ao.creativemode.kixi.exams.service.StatementCatalogService;
 import ao.creativemode.kixi.shared.dto.PageResponse;
@@ -44,7 +44,7 @@ public class StatementCatalogController {
      * @param q     free text matched against the title and the exam type
      */
     @GetMapping("/catalog")
-    public Mono<ResponseEntity<PageResponse<StatementSummary>>> catalog(
+    public Mono<ResponseEntity<PageResponse<CatalogStatementSummary>>> catalog(
             @RequestParam(required = false) Long institutionId,
             @RequestParam(required = false) Long courseId,
             @RequestParam(required = false) Long classId,
@@ -65,12 +65,6 @@ public class StatementCatalogController {
 
         return currentAccountService.requiredAccountId()
                 .flatMap(accountId -> catalogService.catalog(filter, accountId))
-                .map(result -> new PageResponse<>(
-                        result.content().stream().map(StatementSummary::from).toList(),
-                        result.page(),
-                        result.size(),
-                        result.totalElements(),
-                        result.totalPages()))
                 .map(ResponseEntity::ok);
     }
 }

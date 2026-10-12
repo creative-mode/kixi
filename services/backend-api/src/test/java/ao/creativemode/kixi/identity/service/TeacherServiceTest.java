@@ -155,4 +155,29 @@ class TeacherServiceTest {
         return new AccountResponse(id, "ana.silva", "ana@itel.ao", false, true, false,
                 null, null, null, null);
     }
+
+    @Test
+    void theSignedInAccountFindsItsOwnTeacherRecord() {
+        // #176
+        Teacher teacher = new Teacher();
+        teacher.setId(3L);
+        teacher.setAccountId(7L);
+        when(repository.findByAccountIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(teacher));
+
+        StepVerifier.create(service.findMine(7L))
+                .assertNext(response -> {
+                    assertThat(response.id()).isEqualTo(3L);
+                    assertThat(response.accountId()).isEqualTo(7L);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void anAccountWithoutATeacherRecordIsNotFound() {
+        when(repository.findByAccountIdAndDeletedAtIsNull(9L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.findMine(9L))
+                .verifyErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.NOT_FOUND);
+    }
 }

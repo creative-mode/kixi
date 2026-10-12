@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.repository;
 
 import ao.creativemode.kixi.exams.model.Statement;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +63,32 @@ public class StatementCatalogRepository {
                 .one()
                 .defaultIfEmpty(0L);
     }
+
+    /**
+     * How many live questions each statement has, for one page of the catalog (#178).
+     * One grouped query for the whole page; a statement without questions is simply
+     * missing from the map.
+     */
+    public Mono<Map<Long, Long>> countQuestions(Collection<Long> statementIds) {
+        if (statementIds.isEmpty()) {
+            return Mono.just(Map.of());
+        }
+        return databaseClient.sql(QUESTION_COUNTS)
+                .bind("ids", statementIds.toArray(Long[]::new))
+                .map((row, metadata) -> Map.entry(
+                        ((Number) row.get("statement_id")).longValue(),
+                        ((Number) row.get("questions")).longValue()))
+                .all()
+                .collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
+    static final String QUESTION_COUNTS = """
+            SELECT q.statement_id, COUNT(*) AS questions
+            FROM questions q
+            WHERE q.statement_id = ANY(:ids)
+              AND q.deleted_at IS NULL
+            GROUP BY q.statement_id
+            """;
 
     private static DatabaseClient.GenericExecuteSpec bindAll(
             DatabaseClient.GenericExecuteSpec spec, Map<String, Object> binds) {

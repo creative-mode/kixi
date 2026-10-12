@@ -197,16 +197,25 @@ public class SimulationAnswerService {
             .then();
     }
 
+    /**
+     * Issue #184: the same rule as grading (#169). A question is a choice question when
+     * it has active options, whatever its {@code question_type} says: the column is free
+     * text, the OCR writes "development" and QuestionService defaults to "open". Deciding
+     * here by the type refused the option of an "open" question with options, which
+     * grading then marked as a choice question, and the student always got zero.
+     *
+     * <p>A question without active options still refuses any option, with the same
+     * message as before.</p>
+     */
     private Mono<Void> validateSelectedOption(ao.creativemode.kixi.exams.model.Question question, Long optionId) {
-        if (optionId == null) return Mono.empty();
-        if ("open".equalsIgnoreCase(question.getQuestionType())
-                || "development".equalsIgnoreCase(question.getQuestionType())) {
-            return Mono.error(ApiException.badRequest("Open questions cannot select an option"));
-        }
-        if (optionRepository == null) return Mono.empty();
+        if (optionId == null || optionRepository == null) return Mono.empty();
         return optionRepository.findByIdAndDeletedAtIsNull(optionId)
             .filter(option -> question.getId().equals(option.getQuestionId()))
-            .switchIfEmpty(Mono.error(ApiException.badRequest("Option does not belong to the question")))
+            .switchIfEmpty(Mono.defer(() -> optionRepository.countByQuestionIdAndDeletedAtIsNull(question.getId())
+                .defaultIfEmpty(0L)
+                .flatMap(count -> Mono.error(count == 0
+                    ? ApiException.badRequest("Open questions cannot select an option")
+                    : ApiException.badRequest("Option does not belong to the question")))))
             .then();
     }
 

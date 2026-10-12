@@ -2,7 +2,10 @@ package ao.creativemode.kixi.chat.service;
 
 import ao.creativemode.kixi.chat.client.GroqClient;
 import ao.creativemode.kixi.chat.client.GroqMessage;
+import ao.creativemode.kixi.chat.dto.ChatSessionRequest;
 import ao.creativemode.kixi.chat.dto.ChatSessionResponse;
+import ao.creativemode.kixi.chat.dto.TutorSource;
+import ao.creativemode.kixi.chat.model.TutorMode;
 import ao.creativemode.kixi.chat.dto.ChatStreamEvent;
 import ao.creativemode.kixi.chat.model.ChatMessage;
 import ao.creativemode.kixi.chat.model.ChatRole;
@@ -12,7 +15,10 @@ import ao.creativemode.kixi.chat.repository.ChatSessionRepository;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.service.SimilarQuestionService;
+import ao.creativemode.kixi.exams.service.SimilarQuestionService.SimilarQuestion;
 import ao.creativemode.kixi.exams.service.StatementService;
+import ao.creativemode.kixi.exams.service.TutorStyleService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.exception.ApiException;
 
@@ -56,33 +62,31 @@ public class ChatService {
     /** Recent turns sent back to the model; older ones fall out of the prompt. */
     static final int HISTORY_LIMIT = 20;
 
-    static final String SYSTEM_PROMPT = """
-            És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
-            Responde sempre em português, usando APENAS o enunciado e as questões
-            fornecidos abaixo como material de trabalho.
-            Se a pergunta não puder ser respondida com esse material, recusa
-            educadamente e explica que só acompanhás o enunciado desta sessão —
-            não inventes conteúdo nem respondas sobre outros assuntos.
-            Não digas qual é a opção correcta: explica o raciocínio passo a passo
-            e deixa a escolha ao aluno.
-            """;
-
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final StatementService statementService;
     private final ChatRateLimiter rateLimiter;
     private final GroqClient groqClient;
+    private final TutorStyleService tutorStyles;
+    private final SimilarQuestionService similarQuestions;
+
+    /** Real catalog questions offered per answer in "exercícios semelhantes" (#115). */
+    static final int SIMILAR_LIMIT = 3;
 
     public ChatService(ChatSessionRepository sessionRepository,
                        ChatMessageRepository messageRepository,
                        StatementService statementService,
                        ChatRateLimiter rateLimiter,
-                       GroqClient groqClient) {
+                       GroqClient groqClient,
+                       TutorStyleService tutorStyles,
+                       SimilarQuestionService similarQuestions) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.statementService = statementService;
         this.rateLimiter = rateLimiter;
         this.groqClient = groqClient;
+        this.tutorStyles = tutorStyles;
+        this.similarQuestions = similarQuestions;
     }
 
     /**
@@ -91,15 +95,60 @@ public class ChatService {
      * so no session can bind the tutor to material the account may not see.
      */
     public Mono<ChatSessionResponse> createSession(Long accountId, Long statementId) {
-        return statementService.findByIdVisible(statementId)
-                .flatMap(statement -> {
-                    ChatSession session = new ChatSession();
-                    session.setAccountId(accountId);
-                    session.setStatementId(statement.getId());
-                    return sessionRepository.save(session);
-                })
-                .map(session -> new ChatSessionResponse(
-                        session.getId(), session.getStatementId(), session.getCreatedAt()));
+        return createSession(accountId, ChatSessionRequest.of(statementId));
+    }
+
+    /**
+     * Issue #115: a session may also say what it is for. Everything is checked
+     * before a row is written: a mode that needs a question gets one, the question
+     * belongs to the statement and is reviewed (ADR-0010), and the student's chosen
+     * option belongs to that question. Failures are 400s, not sessions that would
+     * point the tutor at material it may not use.
+     */
+    public Mono<ChatSessionResponse> createSession(Long accountId, ChatSessionRequest request) {
+        TutorMode mode = request.mode() == null ? TutorMode.GENERAL : request.mode();
+        boolean answered = request.selectedOptionId() != null || hasText(request.studentAnswer());
+        if (mode.needsQuestion() && request.questionId() == null) {
+            return Mono.error(ApiException.badRequest("questionId is required for mode " + mode));
+        }
+        if (request.questionId() == null) {
+            if (answered) {
+                return Mono.error(ApiException.badRequest("The student's answer needs a questionId"));
+            }
+            return statementService.findByIdVisible(request.statementId())
+                    .flatMap(statement -> save(accountId, statement, mode, null, request));
+        }
+        return statementService.findByIdWithQuestionsVisible(request.statementId())
+                .flatMap(withQuestions -> {
+                    Question focus = focusOf(withQuestions, request.questionId());
+                    if (focus == null) {
+                        return Mono.error(ApiException.badRequest(
+                                "Question does not belong to the statement: " + request.questionId()));
+                    }
+                    if (request.selectedOptionId() != null
+                            && optionOf(withQuestions, focus, request.selectedOptionId()) == null) {
+                        return Mono.error(ApiException.badRequest("Option does not belong to the question"));
+                    }
+                    return save(accountId, withQuestions.statement(), mode, focus, request);
+                });
+    }
+
+    private Mono<ChatSessionResponse> save(Long accountId, Statement statement, TutorMode mode,
+            Question focus, ChatSessionRequest request) {
+        ChatSession session = new ChatSession();
+        session.setAccountId(accountId);
+        session.setStatementId(statement.getId());
+        session.setMode(mode);
+        if (focus != null) {
+            session.setQuestionId(focus.getId());
+            session.setSelectedOptionId(request.selectedOptionId());
+            session.setStudentAnswer(hasText(request.studentAnswer()) ? request.studentAnswer().strip() : null);
+        }
+        return sessionRepository.save(session)
+                .map(saved -> new ChatSessionResponse(
+                        saved.getId(), saved.getStatementId(), saved.getCreatedAt(),
+                        saved.getMode(), saved.getQuestionId(),
+                        sourcesOf(statement, focus, List.of())));
     }
 
     /**
@@ -130,8 +179,33 @@ public class ChatService {
             ChatSession session, String content) {
         return messageRepository.save(new ChatMessage(session.getId(), ChatRole.USER, content))
                 .then(statementService.findByIdWithQuestionsVisible(session.getStatementId()))
-                .flatMap(withQuestions -> historyOf(session)
-                        .map(history -> stream(session, contextOf(withQuestions), history)));
+                .flatMap(withQuestions -> {
+                    TutorMode mode = session.getMode();
+                    // The question may have been deleted or sent back to review since the
+                    // session opened: then there is simply no question in focus.
+                    Question focus = focusOf(withQuestions, session.getQuestionId());
+                    Mono<String> style = tutorStyles.styleOf(withQuestions.statement())
+                            .defaultIfEmpty("")
+                            // A style that cannot be read must not take the tutor down with it:
+                            // the prompt without a voice is still a working tutor.
+                            .onErrorResume(error -> Mono.just(""));
+                    Mono<List<SimilarQuestion>> similar = mode == TutorMode.SIMILAR_EXERCISES && focus != null
+                            ? similarQuestions.similarTo(withQuestions.statement(), focus, SIMILAR_LIMIT)
+                                    .defaultIfEmpty(List.of())
+                                    // No catalog is not a reason to fail: the tutor then makes
+                                    // new exercises, and says so.
+                                    .onErrorResume(error -> Mono.just(List.of()))
+                            : Mono.just(List.of());
+                    return Mono.zip(style, similar).flatMap(found -> historyOf(session)
+                            .map(history -> stream(
+                                    session,
+                                    TutorSystemPrompt.compose(found.getT1(), instructionsFor(mode, focus)),
+                                    contextOf(withQuestions)
+                                            + focusContext(withQuestions, focus, session)
+                                            + similarContext(mode, focus, found.getT2()),
+                                    history,
+                                    sourcesOf(withQuestions.statement(), focus, found.getT2()))));
+                });
     }
 
     private Mono<List<GroqMessage>> historyOf(ChatSession session) {
@@ -148,9 +222,10 @@ public class ChatService {
     }
 
     private Flux<ServerSentEvent<ChatStreamEvent>> stream(
-            ChatSession session, String context, List<GroqMessage> history) {
+            ChatSession session, String systemPrompt, String context, List<GroqMessage> history,
+            List<TutorSource> sources) {
         List<GroqMessage> prompt = new ArrayList<>();
-        prompt.add(new GroqMessage("system", SYSTEM_PROMPT + "\n\n" + context));
+        prompt.add(new GroqMessage("system", systemPrompt + "\n\n" + context));
         prompt.addAll(history);
 
         StringBuilder answer = new StringBuilder();
@@ -160,7 +235,7 @@ public class ChatService {
                         .<ChatStreamEvent>builder(ChatStreamEvent.delta(fragment))
                         .event("delta")
                         .build())
-                .concatWith(persistAnswer(session, answer))
+                .concatWith(persistAnswer(session, answer, sources))
                 // After the first event the status is committed: a provider
                 // or persistence failure from here on can only be reported
                 // in-band, as an error event on the same stream.
@@ -168,7 +243,7 @@ public class ChatService {
     }
 
     private Flux<ServerSentEvent<ChatStreamEvent>> persistAnswer(
-            ChatSession session, StringBuilder answer) {
+            ChatSession session, StringBuilder answer, List<TutorSource> sources) {
         return Flux.defer(() -> {
             ChatMessage assistant =
                     new ChatMessage(session.getId(), ChatRole.ASSISTANT, answer.toString());
@@ -176,7 +251,7 @@ public class ChatService {
             return messageRepository.save(assistant)
                     .map(saved -> ServerSentEvent
                             .<ChatStreamEvent>builder(
-                                    ChatStreamEvent.finished(saved.getId(), saved.getModel()))
+                                    ChatStreamEvent.finished(saved.getId(), saved.getModel(), sources))
                             .event("final")
                             .build());
         });
@@ -251,6 +326,123 @@ public class ChatService {
                             .append('\n'));
         }
         return context.toString();
+    }
+
+    // === tutor modes (issue #115) =========================================
+
+    /**
+     * The rules each mode adds. They sit with the base rules, before the teacher's
+     * style (see {@link TutorSystemPrompt#compose(String, String)}). GENERAL adds
+     * nothing, so a session of #114 gets the same prompt as before.
+     */
+    static String instructionsFor(TutorMode mode, Question focus) {
+        if (mode.needsQuestion() && focus == null) {
+            return """
+                    MODO: a questão escolhida para esta sessão já não está disponível.
+                    Ajuda o aluno com o enunciado em geral.
+                    """;
+        }
+        return switch (mode) {
+            case GENERAL -> "";
+            case EXPLAIN_QUESTION -> """
+                    MODO: EXPLICAR QUESTÃO. Concentra-te na questão em foco indicada no
+                    material. Explica o que ela pede e o raciocínio passo a passo. Se o
+                    material trouxer a resposta do aluno, mostra onde esse raciocínio pode
+                    ter falhado, sem dizer qual é a opção correcta.
+                    """;
+            case SIMILAR_EXERCISES -> """
+                    MODO: EXERCÍCIOS SEMELHANTES. Propõe exercícios parecidos com a questão
+                    em foco. Usa primeiro as questões semelhantes do catálogo listadas no
+                    material e diz de que enunciado vem cada uma. Só quando não houver
+                    nenhuma, ou o aluno pedir mais, podes criar exercícios novos sobre o
+                    mesmo tema, e tens de dizer que foram criados por ti. Não dês as
+                    soluções logo: deixa o aluno tentar primeiro.
+                    """;
+            case CONCEPT -> """
+                    MODO: DÚVIDAS DE CONCEITO. O aluno quer perceber um conceito. Explica-o
+                    com palavras simples e exemplos curtos, partindo do que aparece no
+                    enunciado (e na questão em foco, se houver). No fim, confirma com uma
+                    pergunta curta se ficou claro.
+                    """;
+        };
+    }
+
+    /** The question in focus and, when given, the student's answer to it. */
+    static String focusContext(StatementWithQuestions withQuestions, Question focus, ChatSession session) {
+        if (focus == null) return "";
+        StringBuilder context = new StringBuilder("\nQUESTÃO EM FOCO\n");
+        context.append("Questão ").append(focus.getNumber() != null ? focus.getNumber() : "?")
+                .append(": ").append(orEmpty(focus.getText())).append('\n');
+        QuestionOption chosen = optionOf(withQuestions, focus, session.getSelectedOptionId());
+        if (chosen != null) {
+            context.append("Opção escolhida pelo aluno: ")
+                    .append(chosen.getOptionLabel() != null ? chosen.getOptionLabel() + ") " : "")
+                    .append(orEmpty(chosen.getOptionText())).append('\n');
+        }
+        if (hasText(session.getStudentAnswer())) {
+            // The student's own words, flattened: they are data about the attempt.
+            context.append("Resposta escrita pelo aluno: ")
+                    .append(session.getStudentAnswer().replaceAll("\\s+", " ").strip()).append('\n');
+        }
+        return context.toString();
+    }
+
+    /** The catalog questions offered as similar exercises, without the answer key. */
+    static String similarContext(TutorMode mode, Question focus, List<SimilarQuestion> similar) {
+        if (mode != TutorMode.SIMILAR_EXERCISES || focus == null) return "";
+        StringBuilder context = new StringBuilder("\nQUESTÕES SEMELHANTES DO CATÁLOGO\n");
+        if (similar.isEmpty()) {
+            return context.append("(nenhuma encontrada)\n").toString();
+        }
+        for (SimilarQuestion question : similar) {
+            context.append("- Enunciado \"").append(orEmpty(question.statementTitle())).append("\", questão ")
+                    .append(question.number() != null ? question.number() : "?").append(": ")
+                    .append(orEmpty(question.text())).append('\n');
+            for (SimilarQuestionService.Choice choice : question.choices()) {
+                context.append("    ").append(choice.label() != null ? choice.label() + ") " : "- ")
+                        .append(orEmpty(choice.text())).append('\n');
+            }
+        }
+        return context.toString();
+    }
+
+    /** What the answer was built from, for "fonte da resposta". */
+    static List<TutorSource> sourcesOf(Statement statement, Question focus, List<SimilarQuestion> similar) {
+        List<TutorSource> sources = new ArrayList<>();
+        sources.add(TutorSource.statement(statement.getId(), statement.getTitle()));
+        if (focus != null) {
+            sources.add(TutorSource.question(statement.getId(), statement.getTitle(), focus.getId(), focus.getNumber()));
+        }
+        for (SimilarQuestion question : similar) {
+            sources.add(TutorSource.catalogQuestion(question.statementId(), question.statementTitle(),
+                    question.questionId(), question.number()));
+        }
+        return List.copyOf(sources);
+    }
+
+    /** A live, reviewed question of the statement, or null. */
+    static Question focusOf(StatementWithQuestions withQuestions, Long questionId) {
+        if (questionId == null) return null;
+        return withQuestions.questions().stream()
+                .filter(question -> questionId.equals(question.getId()))
+                .filter(question -> question.getDeletedAt() == null
+                        && !Boolean.TRUE.equals(question.getNeedsReview()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static QuestionOption optionOf(StatementWithQuestions withQuestions, Question question, Long optionId) {
+        if (optionId == null) return null;
+        return withQuestions.options().stream()
+                .filter(option -> optionId.equals(option.getId())
+                        && question.getId().equals(option.getQuestionId())
+                        && option.getDeletedAt() == null)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static void appendLine(StringBuilder context, String label, String value) {

@@ -52,3 +52,7 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
+
+# Local implementation plans (not committed)
+conceptual/119-social-learning-plan.md
+conceptual/119-issue.md

@@ -75,6 +75,20 @@ class MigrationInventoryTest {
                 "Legacy answers must stay out of the review queue until a simulation is submitted");
     }
 
+    @Test
+    void gamificationMigrationCreatesStatsAndBadgeTables() throws IOException, URISyntaxException {
+        Path migration = migrationDirectory().resolve("V42__create_gamification_tables.sql");
+        String sql = Files.readString(migration).toLowerCase();
+
+        assertTrue(sql.contains("create table user_stats"));
+        assertTrue(sql.contains("create table badges"));
+        assertTrue(sql.contains("create table user_badges"));
+        assertTrue(sql.contains("create table simulation_xp_awards"));
+        assertTrue(sql.contains("first_simulation"));
+        assertTrue(sql.contains("streak_30_days"));
+        assertTrue(sql.contains("topic_mastered"));
+    }
+
     private Path migrationDirectory() throws URISyntaxException {
         return Path.of(Objects.requireNonNull(
                 getClass().getClassLoader().getResource("db/migration")

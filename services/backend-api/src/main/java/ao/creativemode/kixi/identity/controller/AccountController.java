@@ -27,8 +27,9 @@ public class AccountController {
      * Retrieves all active (non-deleted) accounts.
      */
     @GetMapping
-    public Mono<ResponseEntity<List<AccountResponse>>> listAllActive() {
-        return service.findAllActive()
+    public Mono<ResponseEntity<List<AccountResponse>>> listAllActive(
+            @RequestParam(required = false) String role) {
+        return (role == null || role.isBlank() ? service.findAllActive() : service.findAllActiveWithRole(role))
                 .collectList()
                 .map(ResponseEntity::ok);
     }

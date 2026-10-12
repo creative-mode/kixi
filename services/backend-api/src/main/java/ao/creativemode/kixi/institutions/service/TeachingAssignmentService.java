@@ -115,6 +115,30 @@ public class TeachingAssignmentService {
             .onErrorMap(DataIntegrityViolationException.class, e -> ApiException.conflict(ASSIGNED_ELSEWHERE));
     }
 
+    /**
+     * Changes only the tutor style of an assignment (#206). A teacher may do it on
+     * their own assignments, to describe how they explain (kixi-frontend#29); an
+     * administrator on any. Class, subject and year stay with the administrator.
+     */
+    public Mono<TeachingAssignmentResponse> updateTutorStyle(
+        Long id, String tutorStyle, Long callerAccountId, boolean admin
+    ) {
+        return assignments.findByIdAndDeletedAtIsNull(id)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Teaching assignment not found")))
+            .flatMap(assignment -> (admin
+                    ? Mono.just(assignment)
+                    : teacherRepository.findByIdAndDeletedAtIsNull(assignment.getTeacherId())
+                        .filter(teacher -> callerAccountId.equals(teacher.getAccountId()))
+                        .map(teacher -> assignment)
+                        .switchIfEmpty(Mono.error(ApiException.forbidden(
+                            "Only the assigned teacher or ADMIN can change this tutor style"))))
+                .flatMap(owned -> {
+                    owned.setTutorStyle(normalizeStyle(tutorStyle));
+                    return assignments.save(owned);
+                }))
+            .map(TeachingAssignmentService::toResponse);
+    }
+
     public Mono<Void> softDelete(Long id) {
         return assignments
             .findByIdAndDeletedAtIsNull(id)
@@ -226,8 +250,11 @@ public class TeachingAssignmentService {
         assignment.setClassId(data.classId());
         assignment.setSubjectId(data.subjectId());
         assignment.setSchoolYearId(data.schoolYearId());
-        assignment.setTutorStyle(
-            data.tutorStyle() == null || data.tutorStyle().isBlank() ? null : data.tutorStyle().trim());
+        assignment.setTutorStyle(normalizeStyle(data.tutorStyle()));
+    }
+
+    private static String normalizeStyle(String style) {
+        return style == null || style.isBlank() ? null : style.trim();
     }
 
     private static TeachingAssignmentResponse toResponse(TeachingAssignment assignment) {

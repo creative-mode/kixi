@@ -113,4 +113,13 @@ class StatementCatalogRepositoryTest {
         return new Criteria(null, null, null, null, null, null, null, null, null,
                 affinityClassId, affinityCourseId, sort, 20, 0);
     }
+
+    @Test
+    void theQuestionCountOnlyCountsLiveQuestionsInOneGroupedQuery() {
+        // #178
+        assertThat(StatementCatalogRepository.QUESTION_COUNTS)
+                .contains("q.statement_id = ANY(:ids)")
+                .contains("q.deleted_at IS NULL")
+                .contains("GROUP BY q.statement_id");
+    }
 }

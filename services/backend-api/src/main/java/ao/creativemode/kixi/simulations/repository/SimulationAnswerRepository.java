@@ -12,6 +12,7 @@ public interface SimulationAnswerRepository
     extends ReactiveCrudRepository<SimulationAnswer, Long>
 {
     Flux<SimulationAnswer> findAllByDeletedAtIsNull();
+    Flux<SimulationAnswer> findAllBySimulationIdAndDeletedAtIsNull(Long simulationId);
     Flux<SimulationAnswer> findAllBySimulationIdInAndDeletedAtIsNull(Collection<Long> simulationIds);
     Flux<SimulationAnswer> findAllBySimulationIdInAndDeletedAtIsNotNull(Collection<Long> simulationIds);
     Flux<SimulationAnswer> findAllByDeletedAtIsNotNull();

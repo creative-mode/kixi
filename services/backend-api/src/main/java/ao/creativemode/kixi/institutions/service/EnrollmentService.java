@@ -123,6 +123,14 @@ public class EnrollmentService {
         return enrollments.findAllByAccountIdAndDeletedAtIsNull(targetAccountId).map(EnrollmentService::toResponse);
     }
 
+    /**
+     * Every active enrollment in the platform, for the administrator who manages
+     * them (#146). Only the controller decides who reaches it.
+     */
+    public Flux<EnrollmentResponse> findAllActive() {
+        return enrollments.findAllByDeletedAtIsNullOrderByIdAsc().map(EnrollmentService::toResponse);
+    }
+
     public Mono<EnrollmentResponse> cancel(Long callerAccountId, boolean staff, Long enrollmentId) {
         return enrollments.findById(enrollmentId)
             .filter(enrollment -> !enrollment.isDeleted())

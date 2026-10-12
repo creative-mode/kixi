@@ -5,8 +5,11 @@ import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
 import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.ManualStatementService;
+import ao.creativemode.kixi.exams.service.StatementReadAccessService;
+import ao.creativemode.kixi.exams.service.StatementReadScope;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -42,15 +45,18 @@ public class StatementController {
     private final StatementService statementService;
     private final ManualStatementService manualStatementService;
     private final CurrentAccountService currentAccountService;
+    private final StatementReadAccessService readAccess;
 
     public StatementController(
         StatementService statementService,
         ManualStatementService manualStatementService,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        StatementReadAccessService readAccess
     ) {
         this.statementService = statementService;
         this.manualStatementService = manualStatementService;
         this.currentAccountService = currentAccountService;
+        this.readAccess = readAccess;
     }
 
     // =========================================================================
@@ -73,8 +79,7 @@ public class StatementController {
      */
     @GetMapping("/review")
     public Mono<ResponseEntity<List<StatementSummary>>> listNeedingReview() {
-        return statementService
-            .findNeedingReview()
+        return staffStatements(statementService::findNeedingReview)
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -85,8 +90,7 @@ public class StatementController {
      */
     @GetMapping("/from-ocr")
     public Mono<ResponseEntity<List<StatementSummary>>> listFromOcr() {
-        return statementService
-            .findFromOcr()
+        return staffStatements(statementService::findFromOcr)
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -97,8 +101,7 @@ public class StatementController {
      */
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<StatementSummary>>> listTrashed() {
-        return statementService
-            .findAllDeleted()
+        return staffStatements(statementService::findAllDeleted)
             .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
@@ -129,11 +132,12 @@ public class StatementController {
     public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(
         @PathVariable Long id
     ) {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
-            .flatMap(staff -> readableStatementWithQuestions(
+        return reader()
+            .flatMap(reader -> readableStatementWithQuestions(
+                    reader,
                     () -> statementService.findByIdWithQuestions(id),
                     () -> statementService.findByIdWithQuestionsVisible(id))
-                .map(result -> StatementOcrResponse.from(result, staff)))
+                .map(result -> StatementOcrResponse.from(result, reader.staff())))
             .map(ResponseEntity::ok);
     }
 
@@ -190,28 +194,69 @@ public class StatementController {
         );
     }
 
+    /**
+     * Who is reading. An administrator reads everything, a student only what is
+     * published, and a teacher (#174) what their teaching assignments cover:
+     * until then the whole school reached the browser and the manager app threw
+     * away the rows that were not theirs.
+     *
+     * @param staff whether the caller reads as staff (sees drafts and review state)
+     * @param scope the teacher's scope; {@code null} for an administrator or a student
+     */
+    private record Reader(boolean staff, StatementReadScope scope) {
+        boolean sees(Statement statement) {
+            return scope == null || scope.allows(statement);
+        }
+    }
+
+    private Mono<Reader> reader() {
+        return Mono.zip(currentAccountService.hasAnyRole("ADMIN"), currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(roles -> {
+                if (roles.getT1()) return Mono.just(new Reader(true, null));
+                if (!roles.getT2()) return Mono.just(new Reader(false, null));
+                return currentAccountService.requiredAccountId()
+                    .flatMap(readAccess::teacherScope)
+                    .map(scope -> new Reader(true, scope));
+            });
+    }
+
+    /** A record outside the teacher's scope is refused, not hidden behind a 404. */
+    private static Mono<Statement> requireSees(Reader reader, Statement statement) {
+        return reader.sees(statement)
+            ? Mono.just(statement)
+            : Mono.error(ApiException.forbidden("Teacher is not assigned to this statement"));
+    }
+
+    /** The staff-only lists (review, OCR, trash): the route already keeps students out. */
+    private Flux<Statement> staffStatements(Supplier<Flux<Statement>> query) {
+        return reader().flatMapMany(reader -> query.get().filter(reader::sees));
+    }
+
     private Flux<Statement> readableStatements(
         Supplier<Flux<Statement>> staffQuery,
         Supplier<Flux<Statement>> studentQuery
     ) {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
-            .flatMapMany(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+        return reader().flatMapMany(reader -> reader.staff()
+            ? staffQuery.get().filter(reader::sees)
+            : studentQuery.get());
     }
 
     private Mono<Statement> readableStatement(
         Supplier<Mono<Statement>> staffQuery,
         Supplier<Mono<Statement>> studentQuery
     ) {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
-            .flatMap(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+        return reader().flatMap(reader -> reader.staff()
+            ? staffQuery.get().flatMap(statement -> requireSees(reader, statement))
+            : studentQuery.get());
     }
 
     private Mono<StatementWithQuestions> readableStatementWithQuestions(
+        Reader reader,
         Supplier<Mono<StatementWithQuestions>> staffQuery,
         Supplier<Mono<StatementWithQuestions>> studentQuery
     ) {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER")
-            .flatMap(isStaff -> isStaff ? staffQuery.get() : studentQuery.get());
+        if (!reader.staff()) return studentQuery.get();
+        return staffQuery.get().flatMap(result -> requireSees(reader, result.statement()).thenReturn(result));
     }
 
     /**
@@ -354,7 +399,9 @@ public class StatementController {
         Long termId,
         Long subjectId,
         Long classId,
-        Long institutionId
+        Long institutionId,
+        /** #183: without it a client that reads and writes back lost the course on PUT. */
+        Long courseId
     ) {
         public static StatementSummary from(Statement statement) {
             return new StatementSummary(
@@ -372,7 +419,8 @@ public class StatementController {
                 statement.getTermId(),
                 statement.getSubjectId(),
                 statement.getClassId(),
-                statement.getInstitutionId()
+                statement.getInstitutionId(),
+                statement.getCourseId()
             );
         }
     }

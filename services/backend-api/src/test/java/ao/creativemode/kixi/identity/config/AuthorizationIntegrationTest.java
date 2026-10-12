@@ -96,6 +96,17 @@ class AuthorizationIntegrationTest {
     @MockBean
     private ao.creativemode.kixi.exams.service.ManualStatementService manualStatementService;
 
+    /** #174: a teacher's reads go through their scope. None of these tests is about it. */
+    @MockBean
+    private ao.creativemode.kixi.exams.service.StatementReadAccessService statementReadAccess;
+
+    @org.junit.jupiter.api.BeforeEach
+    void teachersReadTheStatementsNoClassOwns() {
+        when(statementReadAccess.teacherScope(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(reactor.core.publisher.Mono.just(
+                        ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
+    }
+
     @MockBean
     private ao.creativemode.kixi.institutions.service.TeachingAssignmentService teachingAssignmentService;
 
@@ -359,6 +370,22 @@ class AuthorizationIntegrationTest {
         org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findAllVisible();
     }
 
+    @Test
+    void theAccountListingFiltersByRoleWhenAsked() {
+        // #147: the manager's enrollment picker only wants STUDENT accounts.
+        when(accountService.findAllActiveWithRole("STUDENT")).thenReturn(Flux.empty());
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/accounts?role=STUDENT")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(accountService).findAllActiveWithRole("STUDENT");
+        org.mockito.Mockito.verify(accountService, org.mockito.Mockito.never()).findAllActive();
+    }
+
     private static OcrResponse successfulOcrResponse() {
         return new OcrResponse(
                 "success",
@@ -563,6 +590,57 @@ class AuthorizationIntegrationTest {
                 .uri("/api/v1/teaching-assignments/1")
                 .exchange()
                 .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void aTeacherMayWriteTheTutorStyleButNothingElseOfAnAssignment() {
+        // #206: the service checks that the assignment is the teacher's.
+        when(teachingAssignmentService.updateTutorStyle(1L, "explica com exemplos", 7L, false))
+                .thenReturn(Mono.just(new ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentResponse(
+                        1L, 3L, 2L, 3L, 4L, "explica com exemplos", null, null)));
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "explica com exemplos"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.tutorStyle").isEqualTo("explica com exemplos");
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(assignmentPayload())
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void aStudentCannotWriteATutorStyle() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x"))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void aTutorStyleOverTheLimitIsRejected() {
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x".repeat(101)))
+                .exchange()
+                .expectStatus().isBadRequest();
 
         verifyNoInteractions(teachingAssignmentService);
     }
