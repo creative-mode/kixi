@@ -77,7 +77,7 @@ class MigrationInventoryTest {
 
     @Test
     void gamificationMigrationCreatesStatsAndBadgeTables() throws IOException, URISyntaxException {
-        Path migration = migrationDirectory().resolve("V38__create_gamification_tables.sql");
+        Path migration = migrationDirectory().resolve("V42__create_gamification_tables.sql");
         String sql = Files.readString(migration).toLowerCase();
 
         assertTrue(sql.contains("create table user_stats"));
