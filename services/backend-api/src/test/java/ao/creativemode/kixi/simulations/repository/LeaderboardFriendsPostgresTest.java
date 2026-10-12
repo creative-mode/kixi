@@ -88,7 +88,8 @@ class LeaderboardFriendsPostgresTest {
         exec("DELETE FROM institutions WHERE id BETWEEN 940000 AND 949999");
         // By the range, not the id: a run that dies half way leaves the row behind,
         // and the next one has to start clean whatever id it was written with.
-        exec("DELETE FROM school_years WHERE start_year = 2030 AND end_year = 2031");
+        exec("DELETE FROM school_years WHERE id = 940001"
+                + " OR (start_year = 2030 AND end_year = 2031)");
 
         // The chain an enrollment hangs from. Without it the row is refused before the
         // test ever reaches the query it is written to check.
