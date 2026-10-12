@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.simulations.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -26,6 +27,7 @@ import ao.creativemode.kixi.identity.config.CorsProperties;
 import ao.creativemode.kixi.identity.config.SecurityConfig;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.identity.service.JwtService;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
@@ -37,11 +39,16 @@ import reactor.core.publisher.Mono;
 /**
  * The leaderboard endpoints over HTTP, with the real security chain (#117, #189).
  *
- * <p>The consent switch is the one that is worth the file. It is the only place in the
- * leaderboard where a body decides something about somebody's account, and the one way
- * a caller could name a student is by asking for their consent — so the account has to
- * come from the token, and a body with no answer in it has to be refused rather than
- * quietly read as a "no" or, worse, as a "yes".</p>
+ * <p>The consent switch is the one that is worth the file for #189. It is the only place
+ * in the leaderboard where a body decides something about somebody's account, and the
+ * one way a caller could name a student is by asking for their consent — so the account
+ * has to come from the token, and a body with no answer in it has to be refused rather
+ * than quietly read as a "no" or, worse, as a "yes".</p>
+ *
+ * <p>For #117, what is being defended is not the ranking itself — {@code
+ * LeaderboardServiceTest} owns that — but the things only this layer can break: who gets
+ * in, that the cohort never arrives as a request parameter, and that the service's
+ * refusals (400, 404, 409) reach the client as the right status.</p>
  */
 @WebFluxTest(controllers = LeaderboardController.class)
 @TestPropertySource(properties = {
@@ -60,6 +67,31 @@ class LeaderboardControllerTest {
 
     @MockBean
     private LeaderboardService service;
+
+    // ── Who gets in ─────────────────────────────────────────────────────────
+
+    @Test
+    void anonymousNeverReachesTheRanking() {
+        client.get()
+                .uri("http://localhost/api/v1/leaderboard")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void aStudentReachesTheirOwnRanking() {
+        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("all")))
+                .thenReturn(Mono.just(ranking()));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.scope").isEqualTo("class")
+                .jsonPath("$.myPosition").isEqualTo(1);
+    }
 
     // ── The consent switch ───────────────────────────────────────────────
 
@@ -143,7 +175,7 @@ class LeaderboardControllerTest {
         verify(service, never()).consent(eq(42L), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
-    // ── The ranking itself ───────────────────────────────────────────────
+    // ── The cohort is never a parameter ─────────────────────────────────────
 
     @Test
     void theCohortIsNeverAParameter() {
@@ -160,6 +192,20 @@ class LeaderboardControllerTest {
         // reaches somebody else's group, which is the property #117 rests on.
         verify(service, never()).leaderboard(eq(42L), eq("class"),
                 eq(7L), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void theQueryParametersArePassedThroughAndNothingElse() {
+        when(service.leaderboard(eq(42L), eq("school"), eq(99L), eq("month")))
+                .thenReturn(Mono.just(ranking()));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard?scope=school&statementId=99&period=month")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(service).leaderboard(eq(42L), eq("school"), eq(99L), eq("month"));
     }
 
     @Test
@@ -180,6 +226,94 @@ class LeaderboardControllerTest {
                 .jsonPath("$.groupId").doesNotExist();
     }
 
+    // ── The answers the caller can get ──────────────────────────────────────
+
+    /**
+     * A scope or period the service cannot serve is a 400 with the error format, not a
+     * 500 and not an empty table. The ProblemDetail body is the client contract, so it
+     * is asserted rather than assumed.
+     */
+    @Test
+    void anUnsupportedScopeIsABadRequest() {
+        when(service.leaderboard(any(), any(), any(), any()))
+                .thenReturn(Mono.error(ApiException.badRequest(
+                        "Unsupported leaderboard scope: universe")));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard?scope=universe")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo(400);
+    }
+
+    @Test
+    void anUnsupportedPeriodIsABadRequest() {
+        when(service.leaderboard(any(), any(), any(), any()))
+                .thenReturn(Mono.error(ApiException.badRequest(
+                        "Unsupported period: fortnight (expected all or month)")));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard?period=fortnight")
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    /**
+     * The privacy rule issue #117 added, over HTTP.
+     *
+     * <p>A conflict, not a not-found and not an empty table: the paper is there, it just
+     * is not publishable while the room is open. The distinction matters to the client —
+     * a 404 would read as "nothing to show", which invites a retry that would still fail
+     * until the room closes.</p>
+     */
+    @Test
+    void aPaperBeingSatIsAConflict() {
+        when(service.leaderboard(any(), any(), any(), any()))
+                .thenReturn(Mono.error(ApiException.conflict(
+                        "The ranking of a paper is only available once the exam rooms for it are closed")));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard?statementId=42")
+                .exchange()
+                .expectStatus().isEqualTo(409)
+                .expectBody()
+                .jsonPath("$.status").isEqualTo(409);
+    }
+
+    @Test
+    void aPaperThatDoesNotExistIsNotFound() {
+        when(service.leaderboard(any(), any(), any(), any()))
+                .thenReturn(Mono.error(ApiException.notFound("No statement with id 42")));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard?statementId=42")
+                .exchange()
+                .expectStatus().isNotFound();
+    }
+
+    /**
+     * The account is resolved from the token, so a teacher reads their own ranking and not
+     * a student's.
+     */
+    @Test
+    void aTeacherReadsTheirOwnRankingAndNotTheStudents() {
+        when(service.leaderboard(eq(1L), eq("class"), eq(null), eq("all")))
+                .thenReturn(Mono.just(ranking()));
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(service).leaderboard(1L, "class", null, "all");
+    }
+
     private static LeaderboardResponse ranking() {
         return new LeaderboardResponse("class", 7L, null, "all", 12, 12, 0, false,
                 1, 90.0, null, List.of());
@@ -193,5 +327,10 @@ class LeaderboardControllerTest {
     private static WebTestClientConfigurer studentJwt() {
         return mockAuthentication(new UsernamePasswordAuthenticationToken(
                 "42", null, List.of(new SimpleGrantedAuthority("ROLE_STUDENT"))));
+    }
+
+    private static WebTestClientConfigurer teacherJwt() {
+        return mockAuthentication(new UsernamePasswordAuthenticationToken(
+                "1", null, List.of(new SimpleGrantedAuthority("ROLE_TEACHER"))));
     }
 }

@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
@@ -73,8 +74,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *       where it came from is legible, and one that does not is just ominous.</li>
  * </ul>
  *
- * <p>{@code scope=friends} is not implemented here: friendships are issue #121, and the
- * ranking is what that issue integrates into, not what it waits for.</p>
+ * <p>{@code scope=friends} ranks the caller against their accepted friendships (issue
+ * #121), isolated to the caller's own institution and school year the same way the class
+ * and school scopes are.</p>
+ *
+ * <p>A ranking is also refused with 409 while the paper's exam rooms are still open
+ * (issue #117): the same leak {@code CommunityStatsService} already guards against for
+ * the class aggregate, spread across colleagues instead of averaged into one number.</p>
  */
 @Service
 public class LeaderboardService {
@@ -108,12 +114,15 @@ public class LeaderboardService {
 
     private final EnrollmentSeatReader seats;
     private final LeaderboardRepository repository;
+    private final ExamRoomAccess examRooms;
 
     private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
-    public LeaderboardService(EnrollmentSeatReader seats, LeaderboardRepository repository) {
+    public LeaderboardService(
+            EnrollmentSeatReader seats, LeaderboardRepository repository, ExamRoomAccess examRooms) {
         this.seats = seats;
         this.repository = repository;
+        this.examRooms = examRooms;
     }
 
     public Mono<LeaderboardResponse> leaderboard(
@@ -131,6 +140,7 @@ public class LeaderboardService {
             return consentedFor(resolved, accountId)
                     .then(cohortOf(accountId, resolved))
                     .flatMap(cohort -> checkStatementExists(statementId)
+                            .then(requireNoOpenRoom(statementId))
                             .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
                                     cohort.institutionId(), statementId, window)
                                     .flatMap(ranked -> windowAround(
@@ -222,6 +232,48 @@ public class LeaderboardService {
                 .flatMap(exists -> exists
                         ? Mono.<Void>empty()
                         : Mono.error(ApiException.notFound("No statement with id " + statementId)));
+    }
+
+    /**
+     * A paper being sat right now does not get ranked.
+     *
+     * <p>The same rule the community aggregates follow, for the same reason: a score
+     * published while the room is still open tells a student who is halfway through the
+     * paper what everybody else scored on it, and a class average is enough to work out
+     * which options are the right ones. {@code CommunityStatsService} answers 409 to the
+     * aggregate and the solutions listing for exactly this; a per-colleague average is the
+     * same disclosure, spread thinner, so it gets the same status.</p>
+     *
+     * <p>Only for a named paper. Without a {@code statementId} there is no single exam
+     * room to be inside of — the cohort spans whatever everyone happened to sit, closed
+     * rooms included — and refusing the whole ranking because one room somewhere is open
+     * would hide closed papers from students who are done. This is the deliberate limit of
+     * the rule, not an oversight: what stays hidden is the ongoing exam, and the aggregate
+     * of a cohort that finished is not it.</p>
+     *
+     * <p>Null-safe like the community's copy: with no rooms wired in there is no room to
+     * be open, and a default interface that answers {@code false} must not be turned into
+     * a 409 for every request.</p>
+     *
+     * <p>This is a deliberate copy of {@code CommunityStatsService.requireNoOpenRoom}, not
+     * a call to it: that helper is package-private in {@code simulations.community}, and
+     * the two slices do not import each other — {@code ArchitectureTest} locks the
+     * dependency direction, so widening it to share twelve lines would cost more than the
+     * duplication. The copies can drift, so they answer the same status for the same
+     * reason on purpose; if the rule ever changes, it changes in both places.</p>
+     */
+    private Mono<Void> requireNoOpenRoom(Long statementId) {
+        if (statementId == null || examRooms == null) {
+            return Mono.empty();
+        }
+        Mono<Boolean> open = examRooms.hasNonClosedRoom(statementId);
+        return (open == null ? Mono.just(false) : open)
+                .defaultIfEmpty(false)
+                .flatMap(hasOpen -> hasOpen
+                        ? Mono.error(ApiException.conflict(
+                                "The ranking of a paper is only available once the exam rooms "
+                                        + "for it are closed"))
+                        : Mono.empty());
     }
 
     /**
