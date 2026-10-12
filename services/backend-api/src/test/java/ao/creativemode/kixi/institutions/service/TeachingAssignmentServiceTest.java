@@ -516,6 +516,70 @@ class TeachingAssignmentServiceTest {
         return klass;
     }
 
+    // ── Tutor style (#206) ──────────────────────────────────────────────────
+
+    @Test
+    void theAssignedTeacherChangesTheTutorStyleOfTheirAssignment() {
+        givenAnAssignmentOf(TEACHER_ID, ACCOUNT_ID);
+
+        StepVerifier.create(service.updateTutorStyle(11L, "  explica com exemplos  ", ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.tutorStyle()).isEqualTo("explica com exemplos"))
+                .verifyComplete();
+
+        ArgumentCaptor<TeachingAssignment> saved = ArgumentCaptor.forClass(TeachingAssignment.class);
+        verify(assignments).save(saved.capture());
+        // Only the style moves.
+        assertThat(saved.getValue().getClassId()).isEqualTo(CLASS_ID);
+        assertThat(saved.getValue().getSubjectId()).isEqualTo(SUBJECT_ID);
+        assertThat(saved.getValue().getTeacherId()).isEqualTo(TEACHER_ID);
+    }
+
+    @Test
+    void anotherTeacherCannotChangeIt() {
+        givenAnAssignmentOf(TEACHER_ID, ACCOUNT_ID);
+
+        StepVerifier.create(service.updateTutorStyle(11L, "outro estilo", 99L, false))
+                .verifyErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.FORBIDDEN);
+        verify(assignments, never()).save(any(TeachingAssignment.class));
+    }
+
+    @Test
+    void anAdministratorMayChangeAnyAndBlankClearsTheStyle() {
+        givenAnAssignmentOf(TEACHER_ID, ACCOUNT_ID);
+
+        StepVerifier.create(service.updateTutorStyle(11L, "   ", 1L, true))
+                .assertNext(response -> assertThat(response.tutorStyle()).isNull())
+                .verifyComplete();
+        verifyNoInteractions(teacherRepository);
+    }
+
+    @Test
+    void aMissingAssignmentIsNotFound() {
+        when(assignments.findByIdAndDeletedAtIsNull(11L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.updateTutorStyle(11L, "x", ACCOUNT_ID, false))
+                .verifyErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.NOT_FOUND);
+    }
+
+    private void givenAnAssignmentOf(Long teacherId, Long accountId) {
+        TeachingAssignment assignment = new TeachingAssignment();
+        assignment.setId(11L);
+        assignment.setTeacherId(teacherId);
+        assignment.setClassId(CLASS_ID);
+        assignment.setSubjectId(SUBJECT_ID);
+        assignment.setSchoolYearId(SCHOOL_YEAR_ID);
+        assignment.setTutorStyle("antigo");
+        when(assignments.findByIdAndDeletedAtIsNull(11L)).thenReturn(Mono.just(assignment));
+        Teacher teacher = new Teacher();
+        teacher.setId(teacherId);
+        teacher.setAccountId(accountId);
+        when(teacherRepository.findByIdAndDeletedAtIsNull(teacherId)).thenReturn(Mono.just(teacher));
+        when(assignments.save(any(TeachingAssignment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+    }
+
     private TeachingAssignment withId(TeachingAssignment assignment, Long id) {
         assignment.setId(id);
         return assignment;

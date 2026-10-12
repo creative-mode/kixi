@@ -594,6 +594,57 @@ class AuthorizationIntegrationTest {
         verifyNoInteractions(teachingAssignmentService);
     }
 
+    @Test
+    void aTeacherMayWriteTheTutorStyleButNothingElseOfAnAssignment() {
+        // #206: the service checks that the assignment is the teacher's.
+        when(teachingAssignmentService.updateTutorStyle(1L, "explica com exemplos", 7L, false))
+                .thenReturn(Mono.just(new ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentResponse(
+                        1L, 3L, 2L, 3L, 4L, "explica com exemplos", null, null)));
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "explica com exemplos"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.tutorStyle").isEqualTo("explica com exemplos");
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(assignmentPayload())
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void aStudentCannotWriteATutorStyle() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x"))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void aTutorStyleOverTheLimitIsRejected() {
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x".repeat(101)))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
     private static Map<String, Object> assignmentPayload() {
         return Map.of("teacherId", 1L, "classId", 2L, "subjectId", 3L, "schoolYearId", 4L);
     }

@@ -72,6 +72,10 @@ public class SecurityConfig {
                         .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET, "/api/v1/teaching-assignments/me")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // #206: a teacher writes the tutor style of their own
+                        // assignments; the service checks the ownership.
+                        .pathMatchers(HttpMethod.PUT, "/api/v1/teaching-assignments/*/tutor-style")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
                         .hasRole("ADMIN")
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
