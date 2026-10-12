@@ -29,6 +29,19 @@ public class ChatSession {
     @Column("created_at")
     private LocalDateTime createdAt;
 
+    /** Issue #115. Never null: a session opened without a mode is {@link TutorMode#GENERAL}. */
+    @Column("mode")
+    private TutorMode mode = TutorMode.GENERAL;
+
+    @Column("question_id")
+    private Long questionId;
+
+    @Column("selected_option_id")
+    private Long selectedOptionId;
+
+    @Column("student_answer")
+    private String studentAnswer;
+
     public ChatSession() {
         this.createdAt = LocalDateTime.now();
     }
@@ -63,5 +76,37 @@ public class ChatSession {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public TutorMode getMode() {
+        return mode == null ? TutorMode.GENERAL : mode;
+    }
+
+    public void setMode(TutorMode mode) {
+        this.mode = mode;
+    }
+
+    public Long getQuestionId() {
+        return questionId;
+    }
+
+    public void setQuestionId(Long questionId) {
+        this.questionId = questionId;
+    }
+
+    public Long getSelectedOptionId() {
+        return selectedOptionId;
+    }
+
+    public void setSelectedOptionId(Long selectedOptionId) {
+        this.selectedOptionId = selectedOptionId;
+    }
+
+    public String getStudentAnswer() {
+        return studentAnswer;
+    }
+
+    public void setStudentAnswer(String studentAnswer) {
+        this.studentAnswer = studentAnswer;
     }
 }

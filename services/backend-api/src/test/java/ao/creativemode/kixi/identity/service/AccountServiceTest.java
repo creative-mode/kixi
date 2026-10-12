@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
 import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -148,6 +149,19 @@ class AccountServiceTest {
                     assertThat(response.email()).isEqualTo("admin2@kixi.ao");
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    void updateAccessibilityChangesOnlyTheAccessibilityFlag() {
+        Account existing = account(1L, "student");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(repository.save(existing)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.updateAccessibility(1L, new AccountAccessibilityRequest(true)))
+                .assertNext(response -> assertThat(response.accessibilityExtraTime()).isTrue())
+                .verifyComplete();
+
+        verify(repository).save(existing);
     }
 
     @Test
@@ -318,5 +332,18 @@ class AccountServiceTest {
         account.setActive(true);
         account.setEmailVerified(false);
         return account;
+    }
+
+    @Test
+    void theRoleFilterMatchesTheStoredNameHoweverItIsWritten() {
+        // #147: roles are stored upper case without the ROLE_ prefix.
+        Account student = new Account();
+        student.setId(5L);
+        when(repository.findAllWithRoleAndDeletedAtIsNull("STUDENT")).thenReturn(Flux.just(student));
+
+        StepVerifier.create(service.findAllActiveWithRole(" role_student "))
+                .expectNextMatches(response -> response.id().equals(5L))
+                .verifyComplete();
+        verify(repository).findAllWithRoleAndDeletedAtIsNull("STUDENT");
     }
 }

@@ -35,6 +35,9 @@ public record StatementOcrResponse(
     Long termId,
     Long subjectId,
     Long classId,
+    /** #183: so /full is enough to edit the header without losing the school or the course. */
+    Long institutionId,
+    Long courseId,
     List<QuestionResponse> questions
 ) {
     /**
@@ -95,6 +98,8 @@ public record StatementOcrResponse(
             s.getTermId(),
             s.getSubjectId(),
             s.getClassId(),
+            s.getInstitutionId(),
+            s.getCourseId(),
             questionResponses
         );
     }

@@ -34,6 +34,24 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Mono<Statement> findByIdAndDeletedAtIsNull(Long id);
 
     /**
+     * The school a statement effectively belongs to: its own column when set,
+     * otherwise the class it was set for (and that class's course). Same
+     * resolution the catalog filters by, so the community routes and the
+     * catalog can never disagree about which school a paper belongs to.
+     */
+    @Query("""
+        SELECT COALESCE(s.institution_id, cl.institution_id, co.institution_id)
+        FROM statements s
+        LEFT JOIN classes cl ON cl.id = s.class_id
+        LEFT JOIN courses co ON co.id = COALESCE(s.course_id, cl.course_id)
+        WHERE s.id = :id AND s.deleted_at IS NULL
+        """)
+    Mono<Long> findEffectiveInstitutionId(Long id);
+
+    @Query("SELECT * FROM statements WHERE id = :id AND deleted_at IS NULL FOR UPDATE")
+    Mono<Statement> lockForUpdate(Long id);
+
+    /**
      * Find a visible active statement by ID.
      */
     Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);

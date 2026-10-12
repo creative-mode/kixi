@@ -8,6 +8,7 @@ public record AccountResponse(
     String email,
     Boolean emailVerified,
     Boolean active,
+    Boolean accessibilityExtraTime,
     LocalDateTime lastLogin,
     LocalDateTime createdAt,
     LocalDateTime updatedAt,

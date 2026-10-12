@@ -35,6 +35,14 @@ public class Account {
     @Column("active")
     private Boolean active;
 
+    /**
+     * Issue #107: this account is entitled to the accessibility extra time,
+     * i.e. +25% on the statement duration when the server closes a simulation.
+     * Written only by an administrator through PATCH /api/v1/accounts/{id}/accessibility.
+     */
+    @Column("accessibility_extra_time")
+    private Boolean accessibilityExtraTime = false;
+
     @Column("last_login")
     private LocalDateTime lastLogin;
 
