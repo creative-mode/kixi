@@ -320,4 +320,29 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
         "SELECT AVG(ocr_confidence) FROM questions WHERE statement_id = :statementId AND ocr_confidence IS NOT NULL AND deleted_at IS NULL"
     )
     Mono<Double> getAverageOcrConfidence(Long statementId);
+
+    /**
+     * Candidate questions for the tutor's "exercícios semelhantes" (issue #115): live,
+     * reviewed questions of other published statements of the same subject. Ranked by
+     * similarity in {@code SimilarQuestionService}; capped here so a big subject does
+     * not pull the whole catalog into memory.
+     */
+    @Query("""
+        SELECT q.* FROM questions q
+          JOIN statements s ON s.id = q.statement_id
+         WHERE s.subject_id = :subjectId
+           AND s.id <> :statementId
+           AND s.visible = TRUE
+           AND s.deleted_at IS NULL
+           AND COALESCE(s.needs_review, FALSE) = FALSE
+           AND q.deleted_at IS NULL
+           AND COALESCE(q.needs_review, FALSE) = FALSE
+         ORDER BY s.created_at DESC, q.id
+         LIMIT :limit
+        """)
+    Flux<Question> findCatalogCandidates(
+        @org.springframework.data.repository.query.Param("subjectId") Long subjectId,
+        @org.springframework.data.repository.query.Param("statementId") Long statementId,
+        @org.springframework.data.repository.query.Param("limit") int limit
+    );
 }

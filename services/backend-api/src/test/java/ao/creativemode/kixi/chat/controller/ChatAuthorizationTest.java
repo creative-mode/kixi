@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
+import ao.creativemode.kixi.chat.dto.ChatSessionRequest;
 import ao.creativemode.kixi.chat.dto.ChatSessionResponse;
 import ao.creativemode.kixi.chat.dto.ChatStreamEvent;
 import ao.creativemode.kixi.chat.exception.ChatRateLimitException;
@@ -88,7 +89,7 @@ class ChatAuthorizationTest {
 
     @Test
     void studentOpensASessionOnItsOwnStatement() {
-        when(chatService.createSession(42L, 7L))
+        when(chatService.createSession(42L, ChatSessionRequest.of(7L)))
                 .thenReturn(Mono.just(new ChatSessionResponse(3L, 7L, LocalDateTime.now())));
 
         client.mutateWith(studentJwt())
@@ -101,12 +102,12 @@ class ChatAuthorizationTest {
                 .expectHeader().value("Location",
                         location -> assertThat(location).endsWith("/api/v1/chat/sessions/3"));
 
-        verify(chatService).createSession(42L, 7L);
+        verify(chatService).createSession(42L, ChatSessionRequest.of(7L));
     }
 
     @Test
     void teacherMayOpenASessionToo() {
-        when(chatService.createSession(7L, 9L))
+        when(chatService.createSession(7L, ChatSessionRequest.of(9L)))
                 .thenReturn(Mono.just(new ChatSessionResponse(4L, 9L, LocalDateTime.now())));
 
         client.mutateWith(teacherJwt())
@@ -117,7 +118,7 @@ class ChatAuthorizationTest {
                 .exchange()
                 .expectStatus().isCreated();
 
-        verify(chatService).createSession(7L, 9L);
+        verify(chatService).createSession(7L, ChatSessionRequest.of(9L));
     }
 
     // === statuses of the message endpoint =================================
