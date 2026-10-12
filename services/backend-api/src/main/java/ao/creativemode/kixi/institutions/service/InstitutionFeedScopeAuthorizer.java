@@ -8,6 +8,7 @@ import ao.creativemode.kixi.institutions.model.TeachingAssignment;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.TeachingAssignmentRepository;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
+import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.Placement;
 
 import org.springframework.stereotype.Service;
 
@@ -99,6 +100,7 @@ public class InstitutionFeedScopeAuthorizer implements FeedScopeAuthorizer {
         Set<Long> classIds = new HashSet<>();
         Set<Long> courseIds = new HashSet<>();
         Set<Long> schoolYearIds = new HashSet<>();
+        Set<Placement> placements = new HashSet<>();
         for (Class klass : classesHeld) {
             classIds.add(klass.getId());
             if (klass.getInstitutionId() != null) {
@@ -110,10 +112,11 @@ public class InstitutionFeedScopeAuthorizer implements FeedScopeAuthorizer {
             if (klass.getSchoolYearId() != null) {
                 schoolYearIds.add(klass.getSchoolYearId());
             }
+            placements.add(new Placement(klass.getInstitutionId(), klass.getCourseId(), klass.getSchoolYearId()));
         }
         if (classIds.isEmpty()) {
             return FeedScope.NONE;
         }
-        return new FeedScope(institutionIds, classIds, courseIds, schoolYearIds);
+        return new FeedScope(institutionIds, classIds, courseIds, schoolYearIds, placements);
     }
 }

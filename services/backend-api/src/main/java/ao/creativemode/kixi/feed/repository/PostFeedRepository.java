@@ -2,6 +2,7 @@ package ao.creativemode.kixi.feed.repository;
 
 import ao.creativemode.kixi.feed.model.Post;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.FeedScope;
+import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
 
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
@@ -125,11 +126,19 @@ public class PostFeedRepository {
         where.add("is_hidden = false");
         where.add("deleted_at IS NULL");
         where.add("institution_id = ANY(:institutionIds)");
-        where.add("(class_id = ANY(:classIds) OR course_id = ANY(:courseIds) OR school_year_id = ANY(:schoolYearIds))");
+        // Course and school year are matched together with their institution, never
+        // from flat sets: a course id held in school A must not open school B's posts.
+        where.add("(class_id = ANY(:classIds) OR EXISTS (SELECT 1 FROM unnest("
+                + ":placementInstitutionIds::bigint[], :placementCourseIds::bigint[], :placementSchoolYearIds::bigint[]) "
+                + "AS held(institution_id, course_id, school_year_id) "
+                + "WHERE held.institution_id = posts.institution_id "
+                + "AND (held.course_id = posts.course_id OR held.school_year_id = posts.school_year_id)))");
         binds.put("institutionIds", toArray(scope.institutionIds()));
         binds.put("classIds", toArray(scope.classIds()));
-        binds.put("courseIds", toArray(scope.courseIds()));
-        binds.put("schoolYearIds", toArray(scope.schoolYearIds()));
+        List<FeedScopeAuthorizer.Placement> placements = List.copyOf(scope.placements());
+        binds.put("placementInstitutionIds", placements.stream().map(FeedScopeAuthorizer.Placement::institutionId).toArray(Long[]::new));
+        binds.put("placementCourseIds", placements.stream().map(FeedScopeAuthorizer.Placement::courseId).toArray(Long[]::new));
+        binds.put("placementSchoolYearIds", placements.stream().map(FeedScopeAuthorizer.Placement::schoolYearId).toArray(Long[]::new));
 
         // Optional narrowing the caller asked for. The service has already checked
         // each of these against the scope above, so this can only narrow, never widen.

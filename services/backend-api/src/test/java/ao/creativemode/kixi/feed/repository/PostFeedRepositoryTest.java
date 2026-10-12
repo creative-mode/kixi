@@ -34,11 +34,12 @@ class PostFeedRepositoryTest {
 
         assertThat(sql.statement())
                 .contains("class_id = ANY(:classIds)")
-                .contains("course_id = ANY(:courseIds)")
-                .contains("school_year_id = ANY(:schoolYearIds)");
+                .contains("held.institution_id = posts.institution_id")
+                .contains("held.course_id = posts.course_id")
+                .contains("held.school_year_id = posts.school_year_id");
         assertThat((Long[]) sql.binds().get("classIds")).containsExactly(10L);
-        assertThat((Long[]) sql.binds().get("courseIds")).containsExactly(20L);
-        assertThat((Long[]) sql.binds().get("schoolYearIds")).containsExactly(2026L);
+        assertThat((Long[]) sql.binds().get("placementCourseIds")).containsExactlyInAnyOrder(20L, null);
+        assertThat((Long[]) sql.binds().get("placementSchoolYearIds")).containsExactlyInAnyOrder(null, 2026L);
     }
 
     @Test

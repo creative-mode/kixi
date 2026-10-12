@@ -119,7 +119,7 @@ public class PostService {
                     "Only DOUBT or TOPIC posts can be created manually"));
         }
         return rateLimiter.check(accountId)
-                .then(requireClassScope(accountId, request.classId()))
+                .then(Mono.defer(() -> requireClassScope(accountId, request.classId())))
                 .flatMap(classScope -> {
                     Post post = new Post();
                     post.setAuthorAccountId(accountId);

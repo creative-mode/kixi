@@ -40,15 +40,47 @@ public interface FeedScopeAuthorizer {
      */
     Mono<Set<Long>> taughtClassesOf(Long accountId);
 
-    /** Where a caller is allowed to see and write feed content. */
+    /**
+     * Where a caller is allowed to see and write feed content.
+     *
+     * <p>{@code placements} keeps each held class's institution, course and
+     * school year together. The flat sets alone cannot say <em>whose</em>
+     * course a course id is, so an account in school A (course 100) and school
+     * B would otherwise be cleared for course 100 inside school B too.</p>
+     */
     record FeedScope(
             Set<Long> institutionIds,
             Set<Long> classIds,
             Set<Long> courseIds,
-            Set<Long> schoolYearIds) {
+            Set<Long> schoolYearIds,
+            Set<Placement> placements) {
 
         public static final FeedScope NONE =
-                new FeedScope(Set.of(), Set.of(), Set.of(), Set.of());
+                new FeedScope(Set.of(), Set.of(), Set.of(), Set.of(), Set.of());
+
+        /**
+         * Builds the placements as every institution paired with every course and
+         * school year; only right when the sets all belong to the same institution.
+         */
+        public FeedScope(
+                Set<Long> institutionIds, Set<Long> classIds, Set<Long> courseIds, Set<Long> schoolYearIds) {
+            this(institutionIds, classIds, courseIds, schoolYearIds,
+                    crossProduct(institutionIds, courseIds, schoolYearIds));
+        }
+
+        private static Set<Placement> crossProduct(
+                Set<Long> institutionIds, Set<Long> courseIds, Set<Long> schoolYearIds) {
+            Set<Placement> all = new java.util.HashSet<>();
+            for (Long institution : institutionIds) {
+                for (Long course : courseIds) {
+                    all.add(new Placement(institution, course, null));
+                }
+                for (Long year : schoolYearIds) {
+                    all.add(new Placement(institution, null, year));
+                }
+            }
+            return all;
+        }
 
         public boolean isEmpty() {
             return classIds.isEmpty();
@@ -56,12 +88,21 @@ public interface FeedScopeAuthorizer {
 
         /** Whether a post with these coordinates falls inside this scope. */
         public boolean covers(Long institutionId, Long classId, Long courseId, Long schoolYearId) {
-            return institutionIds.contains(institutionId)
-                    && (classIds.contains(classId)
-                            || courseIds.contains(courseId)
-                            || schoolYearIds.contains(schoolYearId));
+            if (!institutionIds.contains(institutionId)) {
+                return false;
+            }
+            if (classIds.contains(classId)) {
+                return true;
+            }
+            return placements.stream().anyMatch(placement ->
+                    institutionId.equals(placement.institutionId())
+                            && (courseId != null && courseId.equals(placement.courseId())
+                                    || schoolYearId != null && schoolYearId.equals(placement.schoolYearId())));
         }
     }
+
+    /** A course and school year as held inside one specific institution. */
+    record Placement(Long institutionId, Long courseId, Long schoolYearId) { }
 
     /** The institution, course and school year a specific class sits in. */
     record ClassScope(Long classId, Long institutionId, Long courseId, Long schoolYearId) { }

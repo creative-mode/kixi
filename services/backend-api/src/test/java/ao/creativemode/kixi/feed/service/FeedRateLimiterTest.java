@@ -72,7 +72,8 @@ class FeedRateLimiterTest {
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);
         when(databaseClient.sql(contains("INSERT INTO feed_rate_limits"))).thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
-        when(reserve.map(any(BiFunction.class))).thenReturn(rows(Mono.empty()));
+        RowsFetchSpec<Object> empty = rows(Mono.empty());
+        when(reserve.map(any(BiFunction.class))).thenReturn(empty);
 
         StepVerifier.create(limiter.check(42L))
                 .expectErrorSatisfies(error -> {
@@ -94,7 +95,8 @@ class FeedRateLimiterTest {
             when(row.get("attempts", Integer.class)).thenReturn(attempts);
             when(row.get("retry_after_seconds")).thenReturn(retryAfterSeconds);
             Object mapped = mapper.apply(row, null);
-            return rows(Mono.just(mapped));
+            RowsFetchSpec<Object> fetch = rows(Mono.just(mapped));
+            return fetch;
         });
     }
 
