@@ -21,7 +21,8 @@ import org.junit.jupiter.api.Test;
  *  |- simulations (simulations, simulation answers) -&gt; shared, identity, academic, exams, gamification
  *  |- gamification (XP, streaks, badges) -&gt; shared only
  *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
- *  '- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
+ *  |- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
+ *  '- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -117,6 +118,20 @@ class ArchitectureTest {
         noClasses().that().resideInAPackage("..chat..")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..identity..", "..academic..", "..institutions..", "..simulations..", "..gamification..", "..ocr..")
+                .check(classes);
+    }
+
+    /**
+     * The feed reads its scope through {@code FeedScopeAuthorizer} (shared)
+     * and resolves the caller through {@code CurrentAccountService} (shared)
+     * - it never reaches into institutions, identity or academic directly, the
+     * same way chat never reaches into identity for roles.
+     */
+    @Test
+    void feedOnlyDependsOnShared() {
+        noClasses().that().resideInAPackage("..feed..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..", "..chat..")
                 .check(classes);
     }
 
