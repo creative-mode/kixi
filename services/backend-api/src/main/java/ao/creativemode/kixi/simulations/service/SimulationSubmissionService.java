@@ -6,6 +6,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
+import ao.creativemode.kixi.gamification.service.GamificationService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
@@ -38,13 +39,14 @@ public class SimulationSubmissionService {
     private final SimulationDeadlineService deadlineService;
     private final Clock clock;
     private final ExamRoomAccess examRooms;
+    private final GamificationService gamification;
 
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, null,
-                Clock.systemDefaultZone(), null);
+                Clock.systemDefaultZone(), null, null);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -53,7 +55,7 @@ public class SimulationSubmissionService {
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService,
-                Clock.systemDefaultZone(), null);
+                Clock.systemDefaultZone(), null, null);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -61,7 +63,17 @@ public class SimulationSubmissionService {
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService, Clock clock) {
-        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock, null);
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock, null, null);
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer,
+            SimulationDeadlineService deadlineService, Clock clock,
+            ExamRoomAccess examRooms) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock,
+                examRooms, null);
     }
 
     @Autowired
@@ -70,7 +82,7 @@ public class SimulationSubmissionService {
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService, Clock clock,
-            ExamRoomAccess examRooms) {
+            ExamRoomAccess examRooms, GamificationService gamification) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
@@ -80,6 +92,7 @@ public class SimulationSubmissionService {
         this.deadlineService = deadlineService;
         this.clock = clock;
         this.examRooms = examRooms;
+        this.gamification = gamification;
     }
 
     @Transactional
@@ -119,17 +132,23 @@ public class SimulationSubmissionService {
         return Mono.just(placeholder);
     }
 
+    private Mono<Statement> statementOrDefault(Long statementId) {
+        Mono<Statement> statement = statements.findByIdAndDeletedAtIsNull(statementId);
+        return (statement == null ? Mono.<Statement>empty() : statement).defaultIfEmpty(new Statement());
+    }
+
     private Mono<Simulation> correct(Simulation simulation) {
         return Mono.zip(
                 questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList(),
-                answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId())).collectList())
-            .flatMap(tuple -> correctQuestions(simulation, tuple.getT1(), tuple.getT2()));
+                answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId())).collectList(),
+                statementOrDefault(simulation.getStatementId()))
+            .flatMap(tuple -> correctQuestions(simulation, tuple.getT1(), tuple.getT2(), tuple.getT3().getSubjectId()));
     }
 
     private Mono<Simulation> correctQuestions(Simulation simulation, List<Question> questions,
-            List<SimulationAnswer> existingAnswers) {
+            List<SimulationAnswer> existingAnswers, Long subjectId) {
         if (questions.isEmpty()) {
-            return finish(simulation, List.of());
+            return finish(simulation, List.of(), questions, subjectId);
         }
         return options.findAllByQuestionIdInAndDeletedAtIsNull(questions.stream().map(Question::getId).toList())
             .collectList()
@@ -165,11 +184,12 @@ public class SimulationSubmissionService {
                     return answer;
                 }).toList();
                 return Flux.fromIterable(corrected).concatMap(answers::save).collectList()
-                    .then(finish(simulation, corrected));
+                    .then(finish(simulation, corrected, questions, subjectId));
             });
     }
 
-    private Mono<Simulation> finish(Simulation simulation, List<SimulationAnswer> corrected) {
+    private Mono<Simulation> finish(Simulation simulation, List<SimulationAnswer> corrected,
+            List<Question> questions, Long subjectId) {
         double score = corrected.stream().filter(answer -> answer.getScoreObtained() != null)
                 .mapToDouble(SimulationAnswer::getScoreObtained).sum();
         LocalDateTime finishedAt = LocalDateTime.now(clock);
@@ -179,7 +199,13 @@ public class SimulationSubmissionService {
                 Duration.between(simulation.getStartedAt(), finishedAt).getSeconds()));
         simulation.setStatus(SimulationStatus.FINISHED);
         simulation.setUpdatedAt(finishedAt);
-        return simulations.save(simulation);
+        return simulations.save(simulation).flatMap(saved -> {
+            if (gamification == null) return Mono.just(saved);
+            double maximumScore = questions.stream().filter(question -> question.getMaxScore() != null)
+                    .mapToDouble(Question::getMaxScore).sum();
+            return gamification.simulationFinished(saved.getId(), saved.getAccountId(), subjectId,
+                    score, maximumScore, saved.getTimeSpentSeconds(), finishedAt, true).thenReturn(saved);
+        });
     }
 
     @Transactional
@@ -239,7 +265,17 @@ public class SimulationSubmissionService {
                 double score = tuple.getT2().stream().filter(answer -> answer.getScoreObtained() != null)
                         .mapToDouble(SimulationAnswer::getScoreObtained).sum();
                 simulation.setFinalScore(score);
-                return simulations.save(simulation).then();
+                if (gamification == null) return simulations.save(simulation).then();
+                return Mono.zip(
+                        questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList(),
+                        statementOrDefault(simulation.getStatementId()))
+                    .flatMap(context -> simulations.save(simulation).flatMap(saved -> {
+                        double maximumScore = context.getT1().stream().filter(question -> question.getMaxScore() != null)
+                                .mapToDouble(Question::getMaxScore).sum();
+                        return gamification.simulationFinished(saved.getId(), saved.getAccountId(),
+                                context.getT2().getSubjectId(), score, maximumScore, saved.getTimeSpentSeconds(),
+                                saved.getFinishedAt(), false);
+                    }));
             });
     }
 
