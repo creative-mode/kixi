@@ -13,6 +13,11 @@ package ao.creativemode.kixi.chat.service;
  * <p>The one thing that survives everything is the length cut. A style that keeps
  * rewriting the instructions after truncation is still just a style, because the
  * instructions were written before it and the closing note after it says so again.</p>
+ *
+ * <p>It sanitizes the student's own written answer too, and for the same reason: both
+ * texts sit inside the system prompt, so both arrive with the authority of the tutor's
+ * rules. Only the length differs — a teacher writes a hundred characters into a
+ * {@code VARCHAR(100)}, a student may write two thousand into an open answer.</p>
  */
 public final class TutorStyleSanitizer {
 
@@ -48,6 +53,17 @@ public final class TutorStyleSanitizer {
      * an empty voice: it is the same situation as never having had one.</p>
      */
     public static String sanitize(String raw) {
+        return sanitize(raw, MAX_LENGTH);
+    }
+
+    /**
+     * The same text, cut at {@code maxLength} instead of {@link #MAX_LENGTH}.
+     *
+     * <p>Only the length is the caller's: what counts as a role marker or a delimiter
+     * is the same wherever the text came from, and a second implementation for the
+     * student's answer would be a second answer to drift from this one.</p>
+     */
+    public static String sanitize(String raw, int maxLength) {
         if (raw == null || raw.isBlank()) {
             return "";
         }
@@ -70,8 +86,8 @@ public final class TutorStyleSanitizer {
         // Newlines become spaces so the style cannot start a paragraph of its own.
         text = text.replaceAll("\\s+", " ").trim();
 
-        if (text.length() > MAX_LENGTH) {
-            text = text.substring(0, MAX_LENGTH).trim();
+        if (maxLength > 0 && text.length() > maxLength) {
+            text = text.substring(0, maxLength).trim();
         }
         return text;
     }

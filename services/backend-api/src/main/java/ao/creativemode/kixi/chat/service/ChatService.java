@@ -73,6 +73,10 @@ public class ChatService {
     /** Real catalog questions offered per answer in "exercícios semelhantes" (#115). */
     static final int SIMILAR_LIMIT = 3;
 
+    /** Same cap as {@code ChatSessionRequest.studentAnswer}, applied again where the
+     *  text enters the prompt. */
+    static final int MAX_STUDENT_ANSWER = 2000;
+
     public ChatService(ChatSessionRepository sessionRepository,
                        ChatMessageRepository messageRepository,
                        StatementService statementService,
@@ -166,7 +170,7 @@ public class ChatService {
                                 "AI tutor is not configured: set APP_GROQ_API_KEY."));
                     }
                     return rateLimiter.check(accountId)
-                            .then(Mono.defer(() -> answer(session, content)));
+                            .then(Mono.defer(() -> answer(accountId, session, content)));
                 });
     }
 
@@ -176,7 +180,7 @@ public class ChatService {
      * part of what the model sees — no separate append that could drift.
      */
     private Mono<Flux<ServerSentEvent<ChatStreamEvent>>> answer(
-            ChatSession session, String content) {
+            Long accountId, ChatSession session, String content) {
         return messageRepository.save(new ChatMessage(session.getId(), ChatRole.USER, content))
                 .then(statementService.findByIdWithQuestionsVisible(session.getStatementId()))
                 .flatMap(withQuestions -> {
@@ -190,7 +194,7 @@ public class ChatService {
                             // the prompt without a voice is still a working tutor.
                             .onErrorResume(error -> Mono.just(""));
                     Mono<List<SimilarQuestion>> similar = mode == TutorMode.SIMILAR_EXERCISES && focus != null
-                            ? similarQuestions.similarTo(withQuestions.statement(), focus, SIMILAR_LIMIT)
+                            ? similarQuestions.similarTo(accountId, withQuestions.statement(), focus, SIMILAR_LIMIT)
                                     .defaultIfEmpty(List.of())
                                     // No catalog is not a reason to fail: the tutor then makes
                                     // new exercises, and says so.
@@ -379,10 +383,11 @@ public class ChatService {
                     .append(chosen.getOptionLabel() != null ? chosen.getOptionLabel() + ") " : "")
                     .append(orEmpty(chosen.getOptionText())).append('\n');
         }
-        if (hasText(session.getStudentAnswer())) {
-            // The student's own words, flattened: they are data about the attempt.
-            context.append("Resposta escrita pelo aluno: ")
-                    .append(session.getStudentAnswer().replaceAll("\\s+", " ").strip()).append('\n');
+        // The student's own words, sanitized like the teacher's style: this text goes
+        // into the system prompt, and a student can type anything into an open answer.
+        String written = TutorStyleSanitizer.sanitize(session.getStudentAnswer(), MAX_STUDENT_ANSWER);
+        if (!written.isEmpty()) {
+            context.append("Resposta escrita pelo aluno: ").append(written).append('\n');
         }
         return context.toString();
     }
