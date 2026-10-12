@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.academic.repository.ClassRepository;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomInvitationResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantRequest;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomRequest;
@@ -171,9 +172,38 @@ public class ExamRoomService implements ExamRoomAccess {
         return rooms.findByTeacherAccountIdOrderByCreatedAtDesc(teacherAccountId).map(ExamRoomService::toResponse);
     }
 
-    public Flux<ExamRoomParticipantResponse> mineAsStudent(Long accountId) {
+    /**
+     * The student's invitations, newest first, with the room's state and window and
+     * the server time, so the student page can show "abre em", "a decorrer" or
+     * "terminou" without a request per room.
+     */
+    public Flux<ExamRoomInvitationResponse> mineAsStudent(Long accountId) {
+        LocalDateTime now = LocalDateTime.now(clock);
         return participants.findByAccountIdOrderByCreatedAtDesc(accountId)
-                .map(ExamRoomService::toParticipantResponse);
+                .concatMap(participant -> rooms.findById(participant.getExamRoomId())
+                        .flatMap(room -> Mono.zip(
+                                        statements.findByIdAndDeletedAtIsNull(room.getStatementId())
+                                                .map(statement -> statement.getTitle() == null ? "" : statement.getTitle())
+                                                .defaultIfEmpty(""),
+                                        participant.getSimulationId() == null
+                                                ? Mono.just("")
+                                                : simulations.findById(participant.getSimulationId())
+                                                        .map(simulation -> simulation.getStatus() == null
+                                                                ? "" : simulation.getStatus().name())
+                                                        .defaultIfEmpty(""))
+                                .map(tuple -> new ExamRoomInvitationResponse(
+                                        participant.getExamRoomId(),
+                                        participant.getAccountId(),
+                                        participant.getSimulationId(),
+                                        participant.getJoinedAt(),
+                                        room.getStatementId(),
+                                        tuple.getT1().isEmpty() ? null : tuple.getT1(),
+                                        room.getStatus(),
+                                        room.getStartsAt(),
+                                        room.getEndsAt(),
+                                        room.getDurationMinutes(),
+                                        tuple.getT2().isEmpty() ? null : tuple.getT2(),
+                                        now))));
     }
 
     @Transactional

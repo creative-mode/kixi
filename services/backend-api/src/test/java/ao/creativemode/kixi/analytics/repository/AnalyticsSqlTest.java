@@ -73,13 +73,32 @@ class AnalyticsSqlTest {
 
     @Test
     void eachQueryUsesOnlyTheBindsTheRepositoryProvides() {
-        assertThat(binds(AnalyticsSql.overview())).containsExactlyInAnyOrder("accountId", "admin");
-        assertThat(binds(AnalyticsSql.activity())).containsExactlyInAnyOrder("accountId", "admin", "days");
-        assertThat(binds(AnalyticsSql.statements())).containsExactlyInAnyOrder("accountId", "admin", "limit");
-        assertThat(binds(AnalyticsSql.statementQuestions())).containsExactlyInAnyOrder("accountId", "admin", "statementId");
-        assertThat(binds(AnalyticsSql.classWeekly())).containsExactlyInAnyOrder("accountId", "admin", "classId", "weeks");
+        List<String> base = List.of("accountId", "admin", "filterInstitution", "filterClass");
+        assertThat(binds(AnalyticsSql.overview())).containsExactlyInAnyOrderElementsOf(with(base, "wide"));
+        assertThat(binds(AnalyticsSql.institutions())).containsExactlyInAnyOrderElementsOf(with(base, "wide"));
+        assertThat(binds(AnalyticsSql.activity())).containsExactlyInAnyOrderElementsOf(with(base, "days"));
+        assertThat(binds(AnalyticsSql.statements())).containsExactlyInAnyOrderElementsOf(with(base, "limit"));
+        assertThat(binds(AnalyticsSql.statementQuestions())).containsExactlyInAnyOrderElementsOf(with(base, "statementId"));
+        assertThat(binds(AnalyticsSql.classWeekly())).containsExactlyInAnyOrderElementsOf(with(base, "classId", "weeks"));
         assertThat(binds(AnalyticsSql.classHardestQuestions()))
-                .containsExactlyInAnyOrder("accountId", "admin", "classId", "limit");
+                .containsExactlyInAnyOrderElementsOf(with(base, "classId", "limit"));
+    }
+
+    @Test
+    void filtersOnlyNarrowTheScope() {
+        // The filters sit next to the role check, never instead of it.
+        assertThat(AnalyticsSql.SCOPE)
+                .contains("(:admin OR c.id IN (SELECT class_id FROM scope_pairs))\n"
+                        + "      AND (CAST(:filterInstitution AS bigint) = 0");
+        assertThat(new AnalyticsScope(1, true).wide()).isTrue();
+        assertThat(new AnalyticsScope(1, true).filtered(4L, null).wide()).isFalse();
+        assertThat(new AnalyticsScope(1, false).wide()).isFalse();
+    }
+
+    private static List<String> with(List<String> base, String... extra) {
+        List<String> out = new java.util.ArrayList<>(base);
+        out.addAll(List.of(extra));
+        return out;
     }
 
     @Test

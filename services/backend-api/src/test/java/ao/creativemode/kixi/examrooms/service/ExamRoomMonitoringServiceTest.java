@@ -178,6 +178,101 @@ class ExamRoomMonitoringServiceTest {
         assertThat(started).hasValue(2);
     }
 
+    @Test
+    void gradesForManyParticipantsUseBatchQueries() {
+        // #188: one simulation, one answer and one question query for the whole room.
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.CLOSED);
+        List<ExamRoomParticipant> participantRows = new ArrayList<>();
+        List<Simulation> simulationRows = new ArrayList<>();
+        List<SimulationAnswer> answerRows = new ArrayList<>();
+        for (long account = 1; account <= 120; account++) {
+            participantRows.add(participant(account, account, true));
+            Simulation simulation = simulation(account, SimulationStatus.FINISHED);
+            simulation.setFinalScore((double) account);
+            simulationRows.add(simulation);
+            SimulationAnswer right = answer(account, 10L, 2L, null);
+            right.setIsCorrect(true);
+            answerRows.add(right);
+            if (account % 2 == 0) {
+                SimulationAnswer open = answer(account, 11L, null, "texto");
+                open.setReviewStatus(ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW);
+                answerRows.add(open);
+            }
+        }
+        participantRows.add(participantWithoutSimulation(121L));
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.fromIterable(participantRows));
+        when(simulations.findAllById(anyIterable())).thenReturn(Flux.fromIterable(simulationRows));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(any())).thenReturn(Flux.fromIterable(answerRows));
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenReturn(Flux.just(new Question(), new Question()));
+
+        StepVerifier.create(service.grades(7L, 99L, false))
+                .assertNext(grades -> {
+                    assertThat(grades).hasSize(121);
+                    assertThat(grades.get(0).correctAnswers()).isEqualTo(1);
+                    assertThat(grades.get(0).pendingReviewCount()).isZero();
+                    assertThat(grades.get(1).pendingReviewCount()).isEqualTo(1);
+                    assertThat(grades.get(1).finalScore()).isEqualTo(2d);
+                    assertThat(grades.get(119).totalQuestions()).isEqualTo(2);
+                    assertThat(grades.get(120).status()).isEqualTo("NOT_STARTED");
+                })
+                .verifyComplete();
+        verify(simulations, times(1)).findAllById(anyIterable());
+        verify(simulations, never()).findByIdAndDeletedAtIsNull(any());
+        verify(answers, times(1)).findAllBySimulationIdInAndDeletedAtIsNull(argThat(ids -> ids.size() == 120));
+        verify(questions, times(1)).findAllByStatementIdAndDeletedAtIsNull(5L);
+    }
+
+    @Test
+    void aParticipantWithAMissingSimulationStillFailsTheGrades() {
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.CLOSED);
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(participant(1L, 1L, true), participant(2L, 2L, true)));
+        Simulation gone = simulation(2L, SimulationStatus.FINISHED);
+        gone.setDeletedAt(now);
+        when(simulations.findAllById(anyIterable())).thenReturn(Flux.just(simulation(1L, SimulationStatus.FINISHED), gone));
+
+        StepVerifier.create(service.grades(7L, 99L, false))
+                .expectErrorMatches(error -> error.getMessage().contains("Simulation not found"))
+                .verify();
+    }
+
+    @Test
+    void theStreamOfAnAuthorizedRoomBuildsTheFirstSnapshotOnlyOnce() {
+        // #188: the endpoint authorizes with the room alone, so the first event
+        // costs one snapshot and one room lookup, not two of each.
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.RUNNING);
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(participant(1L, 1L, true)));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenReturn(Flux.just(new Question()));
+
+        StepVerifier.create(service.authorize(7L, 99L, false)
+                        .flatMapMany(authorized -> service.stream(authorized, 99L, false)).take(1))
+                .assertNext(snapshot -> assertThat(snapshot.totalParticipants()).isEqualTo(1))
+                .verifyComplete();
+
+        verify(rooms, times(1)).findByIdAndTeacherAccountId(7L, 99L);
+        verify(participants, times(1)).findByExamRoomId(7L);
+        verify(questions, times(1)).findAllByStatementIdAndDeletedAtIsNull(5L);
+    }
+
+    @Test
+    void anotherTeacherCannotStartTheStream() {
+        when(rooms.findByIdAndTeacherAccountId(7L, 41L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.authorize(7L, 41L, false))
+                .expectErrorMatches(error -> error.getMessage().contains("room owner"))
+                .verify();
+        verifyNoInteractions(participants);
+    }
+
+    private ExamRoomParticipant participantWithoutSimulation(long accountId) {
+        ExamRoomParticipant participant = participant(accountId, 0L, false);
+        participant.setSimulationId(null);
+        return participant;
+    }
+
     private ExamRoom room(Long id, Long teacherId, ExamRoomStatus status) {
         ExamRoom room = new ExamRoom();
         room.setId(id);
