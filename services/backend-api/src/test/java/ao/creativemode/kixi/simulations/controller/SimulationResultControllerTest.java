@@ -24,6 +24,7 @@ import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -74,6 +75,9 @@ class SimulationResultControllerTest {
 
     @MockBean
     private SimulationResultService simulationResultService;
+
+    @MockBean
+    private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
     private SimulationRepository simulations;
@@ -127,6 +131,30 @@ class SimulationResultControllerTest {
     }
 
     @Test
+    void openRoomResultBodyOmitsAllCorrectionFields() {
+        when(simulationResultService.findResult(SIMULATION_ID, STUDENT_ID, false))
+                .thenReturn(Mono.just(hiddenResult()));
+
+        client.mutateWith(studentJwt()).get()
+                .uri("/api/v1/simulations/" + SIMULATION_ID + "/result")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.finalScore").doesNotExist()
+                .jsonPath("$.correctAnswers").doesNotExist()
+                .jsonPath("$.pendingReviewCount").doesNotExist()
+                .jsonPath("$.questions[0].scoreObtained").doesNotExist()
+                .jsonPath("$.questions[0].isCorrect").doesNotExist()
+                .jsonPath("$.questions[0].reviewStatus").doesNotExist()
+                .jsonPath("$.questions[0].correctOptionId").doesNotExist()
+                .jsonPath("$.questions[0].modelAnswer").doesNotExist()
+                .jsonPath("$.questions[0].options[0].isCorrect").doesNotExist();
+    }
+
+    @Test
+    void runningRoomResultBodyUsesTheSameRedactedContract() {
+        openRoomResultBodyOmitsAllCorrectionFields();
+    }
+
+    @Test
     void somebodyElsesSimulationIsNotFound() {
         when(simulationResultService.findResult(SIMULATION_ID, STUDENT_ID, false))
                 .thenReturn(Mono.error(ao.creativemode.kixi.shared.exception.ApiException.notFound(
@@ -177,14 +205,24 @@ class SimulationResultControllerTest {
                 SIMULATION_ID,
                 SimulationStatus.FINISHED,
                 5.0,
+                1,
+                1,
+                0,
                 1800,
                 LocalDateTime.now(),
                 List.of(new SimulationResultResponse.QuestionResult(
                         20L, 1, "Qual?", "multiple_choice", 5.0, "because B is right",
-                        31L, 30L, null, 0.0f,
+                        31L, 30L, null, 0.0f, false, null,
                         List.of(
                             new SimulationResultResponse.OptionResult(30L, "A", "A text", false),
                             new SimulationResultResponse.OptionResult(31L, "B", "B text", true)))));
+    }
+
+    private SimulationResultResponse hiddenResult() {
+        return new SimulationResultResponse(SIMULATION_ID, SimulationStatus.FINISHED, null, null, 1, null,
+                1800, LocalDateTime.now(), List.of(new SimulationResultResponse.QuestionResult(
+                        20L, 1, "Qual?", "multiple_choice", 5.0, null, null, 30L, null, null, null, null,
+                        List.of(new SimulationResultResponse.OptionResult(30L, "A", "A text", null)))));
     }
 
     private static WebTestClientConfigurer teacherJwt() {

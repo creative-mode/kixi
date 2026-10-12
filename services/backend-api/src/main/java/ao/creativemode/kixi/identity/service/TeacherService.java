@@ -47,6 +47,18 @@ public class TeacherService {
         return repository.findAllByDeletedAtIsNotNull().map(this::toResponse);
     }
 
+    /**
+     * The teacher record of the signed-in account (#176). Without it a teacher with
+     * no assignment yet had no way to learn their own teacherId: the list of
+     * teachers is ADMIN-only and the token only carries the account and roles.
+     */
+    public Mono<TeacherResponse> findMine(Long accountId) {
+        return repository
+            .findByAccountIdAndDeletedAtIsNull(accountId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("The account has no teacher record")))
+            .map(this::toResponse);
+    }
+
     public Mono<TeacherResponse> findByIdActive(Long id) {
         return findActive(id).map(this::toResponse);
     }

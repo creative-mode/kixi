@@ -16,7 +16,14 @@ public record MeResponse(
         List<String> roles,
         SchoolInfo school,
         CourseInfo course,
-        ClassInfo currentClass
+        ClassInfo currentClass,
+        /**
+         * Issue #107: read-only. The account is entitled to +25% of the time of
+         * a simulation. Only an administrator writes it, through
+         * PATCH /api/v1/accounts/{id}/accessibility.
+         */
+        @JsonProperty("accessibility_extra_time")
+        Boolean accessibilityExtraTime
 ) {
     public record SchoolInfo(Long id, String code, String name) { }
 

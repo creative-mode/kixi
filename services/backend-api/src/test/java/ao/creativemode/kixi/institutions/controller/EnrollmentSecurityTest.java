@@ -133,7 +133,8 @@ class EnrollmentSecurityTest {
                 List.of("STUDENT"),
                 new MeResponse.SchoolInfo(11L, "ITEL", "ITEL"),
                 new MeResponse.CourseInfo(3L, "INFO", "Informática"),
-                new MeResponse.ClassInfo(7L, "10A", 10, 2024L, "2024/2025"));
+                new MeResponse.ClassInfo(7L, "10A", 10, 2024L, "2024/2025"),
+                false);
     }
 
     private static WebTestClientConfigurer studentJwt() {
@@ -141,6 +142,60 @@ class EnrollmentSecurityTest {
                 "42",
                 null,
                 List.of(new SimpleGrantedAuthority("ROLE_STUDENT"))
+        ));
+    }
+
+    @Test
+    void anAdministratorWithoutAccountIdListsEveryEnrollment() {
+        // #146: the manager's enrollments screen was empty for the administrator.
+        when(enrollmentService.findAllActive())
+            .thenReturn(Flux.just(new EnrollmentResponse(1L, 42L, 7L, 2024L, "ACTIVE"),
+                    new EnrollmentResponse(2L, 43L, 7L, 2024L, "ACTIVE")));
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("http://localhost/api/v1/enrollments")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.length()").isEqualTo(2);
+
+        org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never())
+                .findVisible(any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+    }
+
+    @Test
+    void anAdministratorWithAccountIdStillGetsThatAccountOnly() {
+        when(enrollmentService.findVisible(eq(1L), eq(true), eq(43L))).thenReturn(Flux.empty());
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("http://localhost/api/v1/enrollments?accountId=43")
+                .exchange()
+                .expectStatus().isOk();
+
+        org.mockito.Mockito.verify(enrollmentService).findVisible(1L, true, 43L);
+        org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never()).findAllActive();
+    }
+
+    @Test
+    void aStudentNeverReachesTheFullListing() {
+        when(enrollmentService.findVisible(eq(42L), eq(false), any())).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/enrollments")
+                .exchange()
+                .expectStatus().isOk();
+
+        org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never()).findAllActive();
+    }
+
+    private static WebTestClientConfigurer adminJwt() {
+        return mockAuthentication(new UsernamePasswordAuthenticationToken(
+                "1",
+                null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))
         ));
     }
 }

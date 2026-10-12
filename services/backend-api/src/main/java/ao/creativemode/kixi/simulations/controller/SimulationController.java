@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
@@ -23,41 +24,41 @@ public class SimulationController {
     private final SimulationService service;
     private final SimulationResultService resultService;
     private final CurrentAccountService currentAccountService;
+    private final SimulationSubmissionService submissionService;
 
     public SimulationController(
             SimulationService service,
             SimulationResultService resultService,
-            CurrentAccountService currentAccountService
+            CurrentAccountService currentAccountService,
+            SimulationSubmissionService submissionService
     ) {
         this.service = service;
         this.resultService = resultService;
         this.currentAccountService = currentAccountService;
+        this.submissionService = submissionService;
     }
 
     @GetMapping
     public Mono<ResponseEntity<List<SimulationResponse>>> findAll() {
-        return accountScoped(
-                service::findAllActive,
-                service::findAllActiveForAccount
-        )
+        return authorizedContext().flatMapMany(context -> context.admin() || context.teacher()
+                ? service.findAllAuthorized(context.accountId(), context.admin(), context.teacher())
+                : service.findAllActiveForAccount(context.accountId()))
                 .collectList()
                 .map(ResponseEntity::ok);
     }
 
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<SimulationResponse>>> findAllTrashed() {
-        return service.findAllTrashed()
+        return authorizedContext().flatMapMany(context -> service.findAllTrashedAuthorized(
+                context.accountId(), context.admin(), context.teacher()))
                 .collectList()
                 .map(ResponseEntity::ok);
     }
 
     @GetMapping("/{id}")
     public Mono<ResponseEntity<SimulationResponse>> findById(@PathVariable Long id) {
-        return accountScoped(
-                () -> service.findById(id).flux(),
-                accountId -> service.findByIdForAccount(id, accountId).flux()
-        )
-                .next()
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(service.findById(id)))
                 .map(ResponseEntity::ok)
                 .defaultIfEmpty(ResponseEntity.<SimulationResponse>notFound().build());
     }
@@ -76,19 +77,29 @@ public class SimulationController {
      */
     @GetMapping("/{id}/result")
     public Mono<ResponseEntity<SimulationResultResponse>> findResult(@PathVariable Long id) {
-        return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMap(tuple -> resultService.findResult(id, tuple.getT1(), tuple.getT2()))
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(resultService.findResult(id, context.accountId(), context.admin() || context.teacher())))
+                .map(ResponseEntity::ok);
+    }
+
+    @PostMapping("/{id}/submit")
+    public Mono<ResponseEntity<SimulationResultResponse>> submit(@PathVariable Long id) {
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(submissionService.submit(id, context.accountId(), context.admin() || context.teacher())
+                        .then(resultService.findResult(id, context.accountId(), context.admin() || context.teacher()))))
                 .map(ResponseEntity::ok);
     }
 
     @PostMapping
     public Mono<ResponseEntity<SimulationResponse>> create(@Valid @RequestBody SimulationRequest dto) {
         return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMap(tuple -> tuple.getT2()
-                        ? service.create(dto)
-                        : service.createForAccount(dto, tuple.getT1()))
+                .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+                .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+                .flatMap(tuple -> tuple.getT1().getT2()
+                        ? service.create(dto, tuple.getT1().getT1(), true)
+                        : tuple.getT2()
+                            ? service.create(dto, tuple.getT1().getT1(), false)
+                            : service.createForAccount(dto, tuple.getT1().getT1()))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
 
@@ -96,40 +107,53 @@ public class SimulationController {
     public Mono<ResponseEntity<SimulationResponse>> update(
             @PathVariable Long id,
             @Valid @RequestBody SimulationRequest dto) {
-        return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMap(tuple -> tuple.getT2()
-                        ? service.update(id, dto)
-                        : service.updateForAccount(id, dto, tuple.getT1()))
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(context.admin() || context.teacher() ? service.update(id, dto)
+                        : service.updateForAccount(id, dto, context.accountId())))
                 .map(ResponseEntity::ok);
     }
 
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return service.softDelete(id)
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(service.softDelete(id)))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @PutMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return service.restore(id)
+        return authorizedContext().flatMap(context -> authorized(id, context, true)
+                .then(service.restore(id)))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @DeleteMapping("/{id}/permanent")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return service.hardDelete(id)
+        return authorizedContext().flatMap(context -> service.authorize(id, context.accountId(), context.admin(), context.teacher(), true)
+                .then(service.hardDelete(id)))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
-    private <T> Flux<T> accountScoped(
-            java.util.function.Supplier<Flux<T>> staffQuery,
-            java.util.function.Function<Long, Flux<T>> accountQuery
-    ) {
+    private Mono<Context> authorizedContext() {
         return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMapMany(tuple -> tuple.getT2()
-                        ? staffQuery.get()
-                        : accountQuery.apply(tuple.getT1()));
+                .zipWith(role("ADMIN"))
+                .zipWith(role("TEACHER"))
+                .map(tuple -> new Context(tuple.getT1().getT1(), tuple.getT1().getT2(), tuple.getT2()));
     }
+
+    private Mono<Boolean> role(String name) {
+        Mono<Boolean> result = currentAccountService.hasAnyRole(name);
+        return result == null ? Mono.just(false) : result.defaultIfEmpty(false);
+    }
+
+    private Mono<Void> authorized(Long id, Context context) {
+        return authorized(id, context, false);
+    }
+
+    private Mono<Void> authorized(Long id, Context context, boolean includeDeleted) {
+        Mono<?> result = service.authorize(id, context.accountId(), context.admin(), context.teacher(), includeDeleted);
+        return (result == null ? Mono.empty() : result).then();
+    }
+
+    private record Context(Long accountId, boolean admin, boolean teacher) {}
 }

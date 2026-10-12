@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.identity.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.identity.model.Account;
@@ -39,6 +40,21 @@ public class AccountService {
     public Flux<AccountResponse> findAllActive() {
         return repository.findAllByDeletedAtIsNull()
                 .map(this::toResponse);
+    }
+
+    /**
+     * Live accounts holding {@code role} (#147), for the manager's pickers: the
+     * enrollments screen only makes sense with STUDENT accounts. The name is
+     * matched the way roles are stored (upper case, no {@code ROLE_} prefix), so
+     * {@code student} and {@code ROLE_STUDENT} also work. An unknown role is an
+     * empty list, not an error.
+     */
+    public Flux<AccountResponse> findAllActiveWithRole(String role) {
+        String name = role.trim().toUpperCase(java.util.Locale.ROOT);
+        if (name.startsWith("ROLE_")) {
+            name = name.substring("ROLE_".length());
+        }
+        return repository.findAllWithRoleAndDeletedAtIsNull(name).map(this::toResponse);
     }
 
     public Flux<AccountResponse> findAllDeleted() {
@@ -102,6 +118,23 @@ public class AccountService {
                 .map(this::toResponse);
     }
 
+    /**
+     * Issue #107: turns the accessibility extra time of an account on or off
+     * without touching anything else about it. The flag only changes how long
+     * the server lets a simulation run, so it is deliberately not part of the
+     * full account update, which would re-encode the password.
+     */
+    public Mono<AccountResponse> updateAccessibility(Long id, AccountAccessibilityRequest dto) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
+                .flatMap(entity -> {
+                    entity.setAccessibilityExtraTime(dto.accessibilityExtraTime());
+                    entity.setUpdatedAt(LocalDateTime.now());
+                    return repository.save(entity);
+                })
+                .map(this::toResponse);
+    }
+
     public Mono<Void> softDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
@@ -147,6 +180,7 @@ public class AccountService {
             entity.getEmail(),
             entity.getEmailVerified(),
             entity.getActive(),
+            entity.getAccessibilityExtraTime(),
             entity.getLastLogin(),
             entity.getCreatedAt(),
             entity.getUpdatedAt(),

@@ -202,6 +202,19 @@ A **PR** is the proposal to merge the Issue branch into the main branch.
 
 * Never merge without review
 
+### Promotion `qua` → `prod`
+
+`prod` is the release branch: a push to it publishes the images. Promotion is therefore automated but **never blind**.
+
+* The *Promotor qua → prod* workflow keeps a single PR `qua` → `prod` open, listing the PRs that are about to ship
+* It merges that PR only when the gate passes:
+  * required checks (`Backend tests`, `OCR tests`) are green on the current head of `qua`
+  * at least one approval, on the current head, from someone with write access who is not the PR author
+  * no requested changes, no conflicts, not a draft
+* After the merge it triggers `publish.yml` (merges made with `GITHUB_TOKEN` do not trigger workflows)
+* Requirement (PM): enable *Allow GitHub Actions to create and approve pull requests* in Settings → Actions, or provide a `PROMOTE_TOKEN` secret
+* Manual run: *Actions → Promotor qua → prod → Run workflow* (`merge=false` only prepares the PR)
+
 ### Post-Merge
 
 * Automatically or manually close the Issue

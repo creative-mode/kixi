@@ -2,6 +2,7 @@ package ao.creativemode.kixi.identity.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -16,6 +17,10 @@ import ao.creativemode.kixi.exams.controller.StatementController;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
+import ao.creativemode.kixi.identity.controller.AccountController;
+import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
+import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
+import ao.creativemode.kixi.identity.service.AccountService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.identity.service.JwtService;
@@ -23,6 +28,7 @@ import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -45,6 +51,7 @@ import reactor.core.publisher.Mono;
         ao.creativemode.kixi.simulations.controller.SimulationController.class,
         ao.creativemode.kixi.simulations.controller.SimulationAnswerController.class,
         OcrController.class,
+        AccountController.class,
         StatementController.class,
         ao.creativemode.kixi.institutions.controller.TeachingAssignmentController.class
 })
@@ -69,7 +76,13 @@ class AuthorizationIntegrationTest {
     private ao.creativemode.kixi.simulations.service.SimulationResultService simulationResultService;
 
     @MockBean
+    private SimulationSubmissionService simulationSubmissionService;
+
+    @MockBean
     private SimulationAnswerService simulationAnswerService;
+
+    @MockBean
+    private AccountService accountService;
 
     @MockBean
     private OcrServiceClient ocrServiceClient;
@@ -82,6 +95,17 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private ao.creativemode.kixi.exams.service.ManualStatementService manualStatementService;
+
+    /** #174: a teacher's reads go through their scope. None of these tests is about it. */
+    @MockBean
+    private ao.creativemode.kixi.exams.service.StatementReadAccessService statementReadAccess;
+
+    @org.junit.jupiter.api.BeforeEach
+    void teachersReadTheStatementsNoClassOwns() {
+        when(statementReadAccess.teacherScope(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(reactor.core.publisher.Mono.just(
+                        ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
+    }
 
     @MockBean
     private ao.creativemode.kixi.institutions.service.TeachingAssignmentService teachingAssignmentService;
@@ -118,6 +142,64 @@ class AuthorizationIntegrationTest {
                 .uri("/api/v1/simulations")
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void protectsExamRoomLiveStreamFromAnonymousAndStudents() {
+        client.get()
+                .uri("/api/v1/exam-rooms/1/live")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/exam-rooms/1/live")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void rejectsStudentPatchingAccountAccessibility() {
+        client.mutateWith(studentJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("accessibility_extra_time", true))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    void validatesAccessibilityPatchBodyForAdmin() {
+        client.mutateWith(adminJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{}")
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    void adminAccessibilityPatchBindsDocumentedPayloadAndCallsService() {
+        AccountResponse response = new AccountResponse(1L, "student", "student@kixi.ao", true,
+                true, true, null, null, null, null);
+        when(accountService.updateAccessibility(eq(1L), any(AccountAccessibilityRequest.class)))
+                .thenReturn(Mono.just(response));
+
+        client.mutateWith(adminJwt())
+                .patch()
+                .uri("/api/v1/accounts/1/accessibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("accessibility_extra_time", true))
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(accountService).updateAccessibility(eq(1L), eq(new AccountAccessibilityRequest(true)));
     }
 
     @Test
@@ -286,6 +368,22 @@ class AuthorizationIntegrationTest {
 
         verify(statementService).findAllActive();
         org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findAllVisible();
+    }
+
+    @Test
+    void theAccountListingFiltersByRoleWhenAsked() {
+        // #147: the manager's enrollment picker only wants STUDENT accounts.
+        when(accountService.findAllActiveWithRole("STUDENT")).thenReturn(Flux.empty());
+
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/accounts?role=STUDENT")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("[]");
+
+        verify(accountService).findAllActiveWithRole("STUDENT");
+        org.mockito.Mockito.verify(accountService, org.mockito.Mockito.never()).findAllActive();
     }
 
     private static OcrResponse successfulOcrResponse() {
@@ -492,6 +590,57 @@ class AuthorizationIntegrationTest {
                 .uri("/api/v1/teaching-assignments/1")
                 .exchange()
                 .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void aTeacherMayWriteTheTutorStyleButNothingElseOfAnAssignment() {
+        // #206: the service checks that the assignment is the teacher's.
+        when(teachingAssignmentService.updateTutorStyle(1L, "explica com exemplos", 7L, false))
+                .thenReturn(Mono.just(new ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentResponse(
+                        1L, 3L, 2L, 3L, 4L, "explica com exemplos", null, null)));
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "explica com exemplos"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.tutorStyle").isEqualTo("explica com exemplos");
+
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(assignmentPayload())
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void aStudentCannotWriteATutorStyle() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x"))
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verifyNoInteractions(teachingAssignmentService);
+    }
+
+    @Test
+    void aTutorStyleOverTheLimitIsRejected() {
+        client.mutateWith(teacherJwt())
+                .put()
+                .uri("/api/v1/teaching-assignments/1/tutor-style")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("tutorStyle", "x".repeat(101)))
+                .exchange()
+                .expectStatus().isBadRequest();
 
         verifyNoInteractions(teachingAssignmentService);
     }

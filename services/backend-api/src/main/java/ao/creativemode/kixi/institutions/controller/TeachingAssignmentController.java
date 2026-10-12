@@ -2,6 +2,7 @@ package ao.creativemode.kixi.institutions.controller;
 
 import ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentRequest;
 import ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentResponse;
+import ao.creativemode.kixi.institutions.dto.assignment.TutorStyleRequest;
 import ao.creativemode.kixi.institutions.service.TeachingAssignmentService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
@@ -87,6 +88,20 @@ public class TeachingAssignmentController {
         @Valid @RequestBody TeachingAssignmentRequest request
     ) {
         return service.update(id, request).map(ResponseEntity::ok);
+    }
+
+    /**
+     * The tutor style of one assignment (#206): TEACHER on their own, ADMIN on any.
+     * Opened to TEACHER in SecurityConfig by a rule for this path only.
+     */
+    @PutMapping("/{id}/tutor-style")
+    public Mono<ResponseEntity<TeachingAssignmentResponse>> updateTutorStyle(
+        @PathVariable Long id,
+        @Valid @RequestBody TutorStyleRequest request
+    ) {
+        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN"))
+            .flatMap(caller -> service.updateTutorStyle(id, request.tutorStyle(), caller.getT1(), caller.getT2()))
+            .map(ResponseEntity::ok);
     }
 
     @DeleteMapping("/{id}")

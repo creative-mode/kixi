@@ -320,4 +320,40 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
         "SELECT AVG(ocr_confidence) FROM questions WHERE statement_id = :statementId AND ocr_confidence IS NOT NULL AND deleted_at IS NULL"
     )
     Mono<Double> getAverageOcrConfidence(Long statementId);
+
+    /**
+     * Candidate questions for the tutor's "exercícios semelhantes" (issue #115): live,
+     * reviewed questions of other published statements of the same subject, of the
+     * caller's own school. Ranked by similarity in {@code SimilarQuestionService};
+     * capped here so a big subject does not pull the whole catalog into memory.
+     *
+     * <p>The school is not decoration: subjects are shared across the platform, so
+     * without it a student in one school is offered published questions — and their
+     * statement titles, which travel to the client in the sources — from another. The
+     * school is resolved the way {@code StatementCatalogRepository} resolves it,
+     * because {@code statements.institution_id} is nullable and is inherited from the
+     * class or the course when it is missing.</p>
+     */
+    @Query("""
+        SELECT q.* FROM questions q
+          JOIN statements s ON s.id = q.statement_id
+          LEFT JOIN classes cl ON cl.id = s.class_id
+          LEFT JOIN courses co ON co.id = COALESCE(s.course_id, cl.course_id)
+         WHERE s.subject_id = :subjectId
+           AND COALESCE(s.institution_id, cl.institution_id, co.institution_id) = :institutionId
+           AND s.id <> :statementId
+           AND s.visible = TRUE
+           AND s.deleted_at IS NULL
+           AND COALESCE(s.needs_review, FALSE) = FALSE
+           AND q.deleted_at IS NULL
+           AND COALESCE(q.needs_review, FALSE) = FALSE
+         ORDER BY s.created_at DESC, q.id
+         LIMIT :limit
+        """)
+    Flux<Question> findCatalogCandidates(
+        @org.springframework.data.repository.query.Param("subjectId") Long subjectId,
+        @org.springframework.data.repository.query.Param("institutionId") Long institutionId,
+        @org.springframework.data.repository.query.Param("statementId") Long statementId,
+        @org.springframework.data.repository.query.Param("limit") int limit
+    );
 }

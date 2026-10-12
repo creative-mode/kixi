@@ -23,6 +23,7 @@ import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
+import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import reactor.core.publisher.Flux;
 
 @WebFluxTest(controllers = {
@@ -48,6 +49,9 @@ class CorsSecurityIntegrationTest {
 
     @MockBean
     private ao.creativemode.kixi.simulations.service.SimulationResultService simulationResultService;
+
+    @MockBean
+    private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
     private SimulationAnswerService simulationAnswerService;

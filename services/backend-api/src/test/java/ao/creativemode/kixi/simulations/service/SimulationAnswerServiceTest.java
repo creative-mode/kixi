@@ -3,20 +3,25 @@ package ao.creativemode.kixi.simulations.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.dao.DataIntegrityViolationException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,6 +41,7 @@ class SimulationAnswerServiceTest {
     private SimulationAnswerRepository repository;
     private SimulationRepository simulationRepository;
     private QuestionRepository questionRepository;
+    private SimulationDeadlineService deadlineService;
     private SimulationAnswerService service;
 
     @BeforeEach
@@ -43,7 +49,12 @@ class SimulationAnswerServiceTest {
         repository = mock(SimulationAnswerRepository.class);
         simulationRepository = mock(SimulationRepository.class);
         questionRepository = mock(QuestionRepository.class);
-        service = new SimulationAnswerService(repository, simulationRepository, questionRepository);
+        deadlineService = mock(SimulationDeadlineService.class);
+        when(deadlineService.expired(any(Simulation.class), any())).thenReturn(Mono.just(false));
+        when(simulationRepository.lockForAnswerWrite(any())).thenReturn(Mono.just(inProgressSimulation()));
+        when(simulationRepository.lockForAnswerWriteByAnswerId(any())).thenReturn(Mono.empty());
+        service = new SimulationAnswerService(repository, simulationRepository, questionRepository,
+                deadlineService);
     }
 
     @Test
@@ -67,7 +78,7 @@ class SimulationAnswerServiceTest {
 
     @Test
     void createRejectsNonexistentQuestionWithoutTouchingRepository() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(9999L)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 9999L, null, null, null)))
@@ -83,12 +94,13 @@ class SimulationAnswerServiceTest {
 
     @Test
     void createSavesAnswerWhenSimulationAndQuestionExist() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
-        when(repository.save(any(SimulationAnswer.class))).thenAnswer(invocation -> {
-            SimulationAnswer entity = invocation.getArgument(0);
-            entity.setId(7L);
-            return Mono.just(entity);
+        when(repository.insertIfInProgress(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            SimulationAnswer saved = answer(7L);
+            saved.setSimulationId(invocation.getArgument(0));
+            saved.setQuestionId(invocation.getArgument(1));
+            return Mono.just(saved);
         });
 
         StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 1L, 3L, null, null)))
@@ -98,13 +110,88 @@ class SimulationAnswerServiceTest {
                     assertThat(response.questionId()).isEqualTo(1L);
                 })
                 .verifyComplete();
+
+        InOrder order = inOrder(simulationRepository, repository);
+        order.verify(simulationRepository).lockForAnswerWrite(1L);
+        order.verify(repository).insertIfInProgress(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void studentAnswerListingHidesIsCorrectWhileRoomIsRunning() {
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        Simulation roomSimulation = inProgressSimulation();
+        roomSimulation.setId(1L);
+        roomSimulation.setAccountId(7L);
+        roomSimulation.setExamRoomId(9L);
+        SimulationAnswer saved = answer(7L);
+        saved.setIsCorrect(true);
+        when(simulationRepository.findByAccountIdAndDeletedAtIsNull(7L))
+                .thenReturn(Flux.just(roomSimulation));
+        when(repository.findAllBySimulationIdInAndDeletedAtIsNull(any()))
+                .thenReturn(Flux.just(saved));
+        when(simulationRepository.findById(1L)).thenReturn(Mono.just(roomSimulation));
+        when(rooms.answerKeyVisible(9L)).thenReturn(Mono.just(false));
+        SimulationAnswerService roomService = new SimulationAnswerService(repository, simulationRepository,
+                questionRepository, mock(QuestionOptionRepository.class), deadlineService, null, rooms);
+
+        StepVerifier.create(roomService.findAllActiveForAccount(7L))
+                .assertNext(response -> assertThat(response.isCorrect()).isNull())
+                .verifyComplete();
+    }
+
+    @Test
+    void createRejectsAnswersForFinishedSimulation() {
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(finished));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
+
+        StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                })
+                .verify();
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createRejectsQuestionFromAnotherStatementBeforeWriting() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        SimulationAnswerService scopedService = new SimulationAnswerService(repository, simulationRepository,
+                questionRepository, options, deadlineService, null);
+        Simulation simulation = inProgressSimulation();
+        simulation.setStatementId(10L);
+        Question question = new Question();
+        question.setId(1L);
+        question.setStatementId(11L);
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(simulation));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(question));
+
+        StepVerifier.create(scopedService.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+        verify(repository, never()).insertIfInProgress(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createRejectsExpiredSimulationBeforeWriting() {
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
+        when(deadlineService.expired(any(Simulation.class), any())).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).insertIfInProgress(any(), any(), any(), any(), any());
     }
 
     @Test
     void createReportsRealDuplicateAsConflictAfterReferencesAreValid() {
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
-        when(repository.save(any(SimulationAnswer.class)))
+        when(repository.insertIfInProgress(any(), any(), any(), any(), any()))
                 .thenReturn(Mono.error(new DataIntegrityViolationException("duplicate key")));
 
         StepVerifier.create(service.create(new SimulationAnswerRequest(1L, 1L, null, null, null)))
@@ -161,13 +248,57 @@ class SimulationAnswerServiceTest {
     void updateAppliesNewFieldsToExistingAnswer() {
         SimulationAnswer existing = answer(1L);
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
-        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(new Simulation()));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
-        when(repository.save(any(SimulationAnswer.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(repository.updateIfInProgress(any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    existing.setSelectedOptionId(invocation.getArgument(3));
+                    return Mono.just(existing);
+                });
 
         StepVerifier.create(service.update(1L, new SimulationAnswerRequest(1L, 1L, 2L, "resposta", null)))
                 .assertNext(response -> assertThat(response.selectedOptionId()).isEqualTo(2L))
                 .verifyComplete();
+    }
+
+    @Test
+    void updateCannotMoveAnAnswerToAnotherSimulation() {
+        SimulationAnswer existing = answer(1L);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.update(1L, new SimulationAnswerRequest(2L, 1L, null, null, null)))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 403)
+                .verify();
+        verify(repository, never()).updateIfInProgress(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void lifecycleRejectsFinishedSimulation() {
+        SimulationAnswer existing = answer(1L);
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(simulationRepository.lockForAnswerWrite(1L)).thenReturn(Mono.just(finished));
+
+        StepVerifier.create(service.softDelete(1L))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 409)
+                .verify();
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void updateRejectsExpiredSimulationBeforeWriting() {
+        SimulationAnswer existing = answer(1L);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(questionRepository.findById(1L)).thenReturn(Mono.just(new Question()));
+        when(deadlineService.expired(any(Simulation.class), any())).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.update(1L, new SimulationAnswerRequest(1L, 1L, null, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).updateIfInProgress(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -184,12 +315,17 @@ class SimulationAnswerServiceTest {
     @Test
     void softDeleteMarksEntityAsDeleted() {
         SimulationAnswer existing = answer(1L);
+        when(simulationRepository.lockForAnswerWrite(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(repository.save(existing)).thenReturn(Mono.just(existing));
 
         StepVerifier.create(service.softDelete(1L)).verifyComplete();
 
         assertThat(existing.isDeleted()).isTrue();
+        InOrder order = inOrder(repository, simulationRepository);
+        order.verify(simulationRepository).lockForAnswerWrite(1L);
+        order.verify(repository).findByIdAndDeletedAtIsNull(1L);
+        order.verify(repository).save(existing);
     }
 
     @Test
@@ -207,12 +343,14 @@ class SimulationAnswerServiceTest {
     void restoreClearsDeletedAt() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
+        when(simulationRepository.lockForAnswerWrite(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.save(deleted)).thenReturn(Mono.just(deleted));
 
         StepVerifier.create(service.restore(1L)).verifyComplete();
 
         assertThat(deleted.isDeleted()).isFalse();
+        verify(simulationRepository).lockForAnswerWrite(1L);
     }
 
     @Test
@@ -230,12 +368,95 @@ class SimulationAnswerServiceTest {
     void hardDeleteRemovesTrashedAnswer() {
         SimulationAnswer deleted = answer(1L);
         deleted.markAsDeleted();
+        when(simulationRepository.lockForAnswerWrite(1L)).thenReturn(Mono.just(inProgressSimulation()));
         when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
         when(repository.delete(deleted)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.hardDelete(1L)).verifyComplete();
 
         verify(repository).delete(deleted);
+        verify(simulationRepository).lockForAnswerWrite(1L);
+    }
+
+    @Test
+    void hardDeleteCannotDeleteAfterSimulationIsFinished() {
+        SimulationAnswer deleted = answer(1L);
+        deleted.markAsDeleted();
+        Simulation finished = inProgressSimulation();
+        finished.setStatus(SimulationStatus.FINISHED);
+        when(repository.findByIdAndDeletedAtIsNotNull(1L)).thenReturn(Mono.just(deleted));
+        when(simulationRepository.lockForAnswerWrite(1L)).thenReturn(Mono.just(finished));
+
+        StepVerifier.create(service.hardDelete(1L))
+                .expectErrorMatches(error -> error instanceof ApiException api && api.getStatusCode() == 409)
+                .verify();
+        verify(repository, never()).delete(any(SimulationAnswer.class));
+    }
+
+    @Test
+    void anOpenQuestionWithOptionsAcceptsItsOwnOption() {
+        // #184: graded as a choice question since #169, so its option has to be accepted.
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 5L)));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "open"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .assertNext(response -> assertThat(response.questionId()).isEqualTo(5L))
+                .verifyComplete();
+    }
+
+    @Test
+    void aQuestionWithoutOptionsStillRefusesAnOption() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 99L)));
+        when(options.countByQuestionIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(0L));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "MULTIPLE_CHOICE"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .isEqualTo("Open questions cannot select an option"))
+                .verify();
+        verify(repository, never()).insertIfInProgress(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anOptionOfAnotherQuestionIsRefused() {
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        when(options.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(option(30L, 99L)));
+        when(options.countByQuestionIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(3L));
+        SimulationAnswerService withOptions = serviceWith(options, question(5L, "open"));
+
+        StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage())
+                        .isEqualTo("Option does not belong to the question"))
+                .verify();
+    }
+
+    private SimulationAnswerService serviceWith(QuestionOptionRepository options, Question question) {
+        when(simulationRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(inProgressSimulation()));
+        when(questionRepository.findByIdAndDeletedAtIsNull(question.getId())).thenReturn(Mono.just(question));
+        when(repository.insertIfInProgress(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            SimulationAnswer saved = answer(7L);
+            saved.setQuestionId(invocation.getArgument(1));
+            saved.setSelectedOptionId(invocation.getArgument(2));
+            return Mono.just(saved);
+        });
+        return new SimulationAnswerService(repository, simulationRepository, questionRepository, options,
+                deadlineService, null, null);
+    }
+
+    private static Question question(Long id, String type) {
+        Question question = new Question();
+        question.setId(id);
+        question.setQuestionType(type);
+        return question;
+    }
+
+    private static ao.creativemode.kixi.exams.model.QuestionOption option(Long id, Long questionId) {
+        ao.creativemode.kixi.exams.model.QuestionOption option = new ao.creativemode.kixi.exams.model.QuestionOption();
+        option.setId(id);
+        option.setQuestionId(questionId);
+        return option;
     }
 
     private SimulationAnswer answer(Long id) {
@@ -244,5 +465,11 @@ class SimulationAnswerServiceTest {
         answer.setSimulationId(1L);
         answer.setQuestionId(1L);
         return answer;
+    }
+
+    private Simulation inProgressSimulation() {
+        Simulation simulation = new Simulation();
+        simulation.setStatus(SimulationStatus.IN_PROGRESS);
+        return simulation;
     }
 }

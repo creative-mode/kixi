@@ -73,6 +73,17 @@ class StatementFullResponseTest {
     @MockBean
     private ManualStatementService manualStatementService;
 
+    /** #174: a teacher's reads go through their scope. None of these tests is about it. */
+    @MockBean
+    private ao.creativemode.kixi.exams.service.StatementReadAccessService statementReadAccess;
+
+    @org.junit.jupiter.api.BeforeEach
+    void teachersReadTheStatementsNoClassOwns() {
+        when(statementReadAccess.teacherScope(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(reactor.core.publisher.Mono.just(
+                        ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
+    }
+
     private Statement statement;
 
     @BeforeEach
@@ -173,6 +184,28 @@ class StatementFullResponseTest {
                 .expectStatus().isOk();
 
         org.mockito.Mockito.verify(statementService).findByIdWithQuestions(STATEMENT_ID);
+    }
+
+    @Test
+    void theReadsCarryTheSchoolAndTheCourseThePutWrites() {
+        // #183: the PUT replaces courseId, so a client that reads and writes back
+        // has to get it from the read, or the course is wiped without a word.
+        statement.setInstitutionId(100L);
+        statement.setCourseId(5L);
+        givenAFullStatement();
+        when(statementService.findById(STATEMENT_ID)).thenReturn(Mono.just(statement));
+
+        assertThat(bodyAsJson(adminJwt()))
+                .contains("\"institutionId\":100")
+                .contains("\"courseId\":5");
+        client.mutateWith(adminJwt())
+                .get()
+                .uri("/api/v1/statements/" + STATEMENT_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.institutionId").isEqualTo(100)
+                .jsonPath("$.courseId").isEqualTo(5);
     }
 
     // ── Fixtures ────────────────────────────────────────────────────────────

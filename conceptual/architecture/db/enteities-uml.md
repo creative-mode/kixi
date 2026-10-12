@@ -193,6 +193,7 @@ classDiagram
         +String questionType
         +int maxScore
         +int orderIndex
+        +String modelAnswer
         +Date createdAt
         +Date updatedAt
         +Date deletedAt
@@ -250,6 +251,34 @@ classDiagram
         +Date deletedAt
     }
 
+    class TeachingAssignment {
+        +Long id
+        +Long teacherId
+        +Long classId
+        +Long subjectId
+        +Long schoolYearId
+        +String tutorStyle
+        +Date createdAt
+        +Date deletedAt
+    }
+
+    class ChatSession {
+        +Long id
+        +Long accountId
+        +Long statementId
+        +Date createdAt
+    }
+
+    class ChatMessage {
+        +Long id
+        +Long sessionId
+        +ChatRole role
+        +String content
+        +String model
+        +Integer tokensUsed
+        +Date createdAt
+    }
+
     %% RELATIONS
     Term --> SchoolYear : "belongsTo"
     Class --> Course : "belongsTo"
@@ -285,4 +314,11 @@ classDiagram
     SimulationAnswer --> Simulation : "simulationId"
     SimulationAnswer --> Question : "questionId"
     SimulationAnswer --> QuestionOption : "selectedOptionId"
+    TeachingAssignment --> Teacher : "teacherId"
+    TeachingAssignment --> Class : "classId"
+    TeachingAssignment --> Subject : "subjectId"
+    TeachingAssignment --> SchoolYear : "schoolYearId"
+    ChatSession --> Account : "accountId"
+    ChatSession --> Statement : "statementId"
+    ChatMessage --> ChatSession : "sessionId"
 ```

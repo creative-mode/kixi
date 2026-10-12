@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.dto.simulationresult;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import java.time.LocalDateTime;
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
  * The outcome of a finished simulation, with the answer key.
@@ -16,10 +17,14 @@ import java.util.List;
  * client renders the corrected paper from one response instead of walking back to
  * {@code /statements/{id}/full} and joining by hand.
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record SimulationResultResponse(
         Long simulationId,
         SimulationStatus status,
         Double finalScore,
+        Integer correctAnswers,
+        Integer totalQuestions,
+        Integer pendingReviewCount,
         Integer timeSpentSeconds,
         LocalDateTime finishedAt,
         List<QuestionResult> questions
@@ -36,6 +41,7 @@ public record SimulationResultResponse(
      *                         option marked correct, which the approval gate
      *                         permits for an open question
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record QuestionResult(
             Long questionId,
             Integer number,
@@ -47,9 +53,12 @@ public record SimulationResultResponse(
             Long selectedOptionId,
             String answerText,
             Float scoreObtained,
+            Boolean isCorrect,
+            ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
             List<OptionResult> options
     ) { }
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record OptionResult(
             Long id,
             String optionLabel,

@@ -49,6 +49,10 @@ public class SecurityConfig {
                         // SPRINGDOC_SWAGGER_UI_ENABLED (false fora de dev).
                         .pathMatchers("/v3/api-docs/**", "/swagger-ui.html",
                                 "/swagger-ui/**", "/webjars/**").permitAll()
+                        // #176: a teacher reads their own record; every other
+                        // /teachers route stays ADMIN-only below.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
@@ -68,6 +72,10 @@ public class SecurityConfig {
                         .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET, "/api/v1/teaching-assignments/me")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // #206: a teacher writes the tutor style of their own
+                        // assignments; the service checks the ownership.
+                        .pathMatchers(HttpMethod.PUT, "/api/v1/teaching-assignments/*/tutor-style")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
                         .hasRole("ADMIN")
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
@@ -81,6 +89,18 @@ public class SecurityConfig {
                         // material it should not (teaching-assignments, gabarito).
                         .pathMatchers("/api/v1/chat/**")
                         .authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/mine", "/api/exam-rooms/mine",
+                                "/api/v1/exam-rooms/*/student", "/api/exam-rooms/*/student")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.POST, "/api/v1/exam-rooms/*/join", "/api/exam-rooms/*/join")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/*/live", "/api/exam-rooms/*/grades",
+                                "/api/v1/exam-rooms/*/grades.csv", "/api/exam-rooms/*/live",
+                                "/api/exam-rooms/*/grades", "/api/exam-rooms/*/grades.csv")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/exam-rooms", "/api/v1/exam-rooms/**",
+                                "/api/exam-rooms", "/api/exam-rooms/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
@@ -136,6 +156,18 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Social learning (issue #119): revoking is an explicit act
+                        // of the simulation's owner, and without its own rule the
+                        // DELETE would fall through to the staff-only catch-all
+                        // and lock students out of revoking their own consent.
+                        // (The POST is already covered by the three-role
+                        // simulations rule below.)
+                        .pathMatchers(HttpMethod.DELETE,
+                                "/api/v1/simulations/*/share")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        .pathMatchers(HttpMethod.PATCH,
+                                "/api/v1/simulation-answers/*/grade")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
@@ -157,6 +189,32 @@ public class SecurityConfig {
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Dashboard (BE-14): staff only. What each one sees is narrowed
+                        // by AnalyticsService, from the account, not from a parameter.
+                        .pathMatchers("/api/v1/analytics", "/api/v1/analytics/**")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        // The relative ranking (issue #117). Any signed-in account may
+                        // read it; the cohort comes from /me and never from a query
+                        // parameter, so what keeps a ranking relative is the service,
+                        // not this rule. It is spelled out because leaving it to
+                        // anyExchange() would work by accident, and the two bugs this
+                        // file already carries were both accidents of the same kind.
+                        .pathMatchers("/api/v1/leaderboard", "/api/v1/leaderboard/**")
+                        .authenticated()
+                        // Social feed (issue #120). Hiding, un-hiding and the
+                        // reported-post queue are moderation and stay out of
+                        // anyExchange(): a role rule here, not inside the
+                        // service alone, is what stops a student reaching
+                        // them at all rather than being refused by business
+                        // logic after the fact.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/feed/posts/reported")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.PATCH,
+                                "/api/v1/feed/posts/*/hide",
+                                "/api/v1/feed/posts/*/unhide")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/feed/**")
+                        .authenticated()
                         .anyExchange().authenticated()
                 )
                 .exceptionHandling(handling -> handling

@@ -4,6 +4,7 @@ import ao.creativemode.kixi.identity.model.User;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.util.Collection;
 
 public interface UserRepository extends ReactiveCrudRepository<User, Long> {
 
@@ -13,6 +14,7 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     Mono<User> findByIdAndDeletedAtIsNotNull(Long id);
     Flux<User> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Mono<Long> countByAccountIdAndDeletedAtIsNull(Long accountId);
+    Flux<User> findByAccountIdInAndDeletedAtIsNull(Collection<Long> accountIds);
 
     /**
      * Hard delete every profile bound to an account. A profile row holds the
