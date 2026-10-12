@@ -180,7 +180,7 @@ public class SecurityConfig {
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
                         .hasAnyRole("ADMIN", "TEACHER")
-// Dashboard (BE-14): staff only. What each one sees is narrowed
+                        // Dashboard (BE-14): staff only. What each one sees is narrowed
                         // by AnalyticsService, from the account, not from a parameter.
                         .pathMatchers("/api/v1/analytics", "/api/v1/analytics/**")
                         .hasAnyRole("ADMIN", "TEACHER")
@@ -191,6 +191,20 @@ public class SecurityConfig {
                         // anyExchange() would work by accident, and the two bugs this
                         // file already carries were both accidents of the same kind.
                         .pathMatchers("/api/v1/leaderboard", "/api/v1/leaderboard/**")
+                        .authenticated()
+                        // Social feed (issue #120). Hiding, un-hiding and the
+                        // reported-post queue are moderation and stay out of
+                        // anyExchange(): a role rule here, not inside the
+                        // service alone, is what stops a student reaching
+                        // them at all rather than being refused by business
+                        // logic after the fact.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/feed/posts/reported")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.PATCH,
+                                "/api/v1/feed/posts/*/hide",
+                                "/api/v1/feed/posts/*/unhide")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/feed/**")
                         .authenticated()
                         .anyExchange().authenticated()
                 )
