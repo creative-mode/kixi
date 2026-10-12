@@ -1,0 +1,345 @@
+package ao.creativemode.kixi.feed.service;
+
+import ao.creativemode.kixi.feed.dto.post.PostRequest;
+import ao.creativemode.kixi.feed.dto.post.PostResponse;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
+import ao.creativemode.kixi.feed.dto.postModeration.ReportedPostResponse;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionToggleResponse;
+import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
+import ao.creativemode.kixi.feed.dto.postReport.PostReportResponse;
+import ao.creativemode.kixi.feed.model.Post;
+import ao.creativemode.kixi.feed.model.PostComment;
+import ao.creativemode.kixi.feed.model.PostReport;
+import ao.creativemode.kixi.feed.repository.PostCommentRepository;
+import ao.creativemode.kixi.feed.repository.PostFeedRepository;
+import ao.creativemode.kixi.feed.repository.PostReactionRepository;
+import ao.creativemode.kixi.feed.repository.PostReportRepository;
+import ao.creativemode.kixi.feed.repository.PostRepository;
+import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
+import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.ClassScope;
+import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.FeedScope;
+
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.util.Set;
+
+/**
+ * The social feed of issue #120: students and teachers raise doubts and
+ * topics inside their own school, and react to and comment on each other's.
+ *
+ * <p>Isolation is the point of this class, not an afterthought: every read
+ * and every write is scoped through {@link FeedScopeAuthorizer}, which is the
+ * server's own view of which classes, courses, school years and - above all -
+ * which institution an account actually belongs to. Nothing here trusts a
+ * scope id the client supplies; a client-supplied class/course/year is, at
+ * most, a narrowing of what the server already allowed.</p>
+ */
+@Service
+public class PostService {
+
+    private static final int AUTO_HIDE_REPORT_THRESHOLD = 5;
+    private static final int MIN_LIMIT = 1;
+    private static final int MAX_LIMIT = 50;
+
+    private final PostRepository postRepository;
+    private final PostFeedRepository feedRepository;
+    private final PostReactionRepository reactionRepository;
+    private final PostCommentRepository commentRepository;
+    private final PostReportRepository reportRepository;
+    private final FeedScopeAuthorizer scopeAuthorizer;
+    private final FeedRateLimiter rateLimiter;
+    private final Clock clock;
+
+    public PostService(PostRepository postRepository,
+                       PostFeedRepository feedRepository,
+                       PostReactionRepository reactionRepository,
+                       PostCommentRepository commentRepository,
+                       PostReportRepository reportRepository,
+                       FeedScopeAuthorizer scopeAuthorizer,
+                       FeedRateLimiter rateLimiter,
+                       Clock clock) {
+        this.postRepository = postRepository;
+        this.feedRepository = feedRepository;
+        this.reactionRepository = reactionRepository;
+        this.commentRepository = commentRepository;
+        this.reportRepository = reportRepository;
+        this.scopeAuthorizer = scopeAuthorizer;
+        this.rateLimiter = rateLimiter;
+        this.clock = clock;
+    }
+
+    /**
+     * The feed, restricted on the server to the caller's own school. An id the
+     * caller passes to narrow it (one class, one course, one school year) is
+     * accepted only when it is already inside their scope - a forged one is
+     * refused, not silently ignored.
+     */
+    public Flux<PostResponse> getFeed(
+            Long accountId, Long schoolYearId, Long courseId, Long classId, int page, int limit) {
+        return Flux.defer(() -> {
+            validatePagination(page, limit);
+            return scopeAuthorizer.scopeOf(accountId)
+                    .flatMapMany(scope -> {
+                        requireWithinScope(scope, schoolYearId, courseId, classId);
+                        long offset = (long) (page - 1) * limit;
+                        return feedRepository.findFeed(scope, schoolYearId, courseId, classId, limit, offset)
+                                .flatMapSequential(post -> mapToResponse(post, accountId));
+                    });
+        });
+    }
+
+    /** Total count of posts for the given scope, with the same server-side isolation as {@link #getFeed}. */
+    public Mono<Long> getFeedTotalCount(Long accountId, Long schoolYearId, Long courseId, Long classId) {
+        return scopeAuthorizer.scopeOf(accountId)
+                .flatMap(scope -> {
+                    requireWithinScope(scope, schoolYearId, courseId, classId);
+                    return feedRepository.countFeed(scope, schoolYearId, courseId, classId);
+                });
+    }
+
+    /**
+     * A new manual post. The scope is derived entirely from {@code request.classId()}:
+     * the server looks up whether the caller actually belongs to that class and, if so,
+     * fills in the course, school year and institution from the class itself. There is
+     * no "global" post any more - every post sits inside exactly one school.
+     */
+    @Transactional
+    public Mono<PostResponse> createPost(Long accountId, PostRequest request) {
+        if (!request.type().isManual()) {
+            return Mono.error(ApiException.badRequest(
+                    "Only DOUBT or TOPIC posts can be created manually"));
+        }
+        return rateLimiter.check(accountId)
+                .then(Mono.defer(() -> requireClassScope(accountId, request.classId())))
+                .flatMap(classScope -> {
+                    Post post = new Post();
+                    post.setAuthorAccountId(accountId);
+                    post.setInstitutionId(classScope.institutionId());
+                    post.setSchoolYearId(classScope.schoolYearId());
+                    post.setCourseId(classScope.courseId());
+                    post.setClassId(classScope.classId());
+                    post.setType(request.type().getValue());
+                    post.setTitle(request.title() != null ? request.title().trim() : null);
+                    post.setContent(request.content().trim());
+                    post.setIsAutoGenerated(false);
+                    post.setIsHidden(false);
+                    LocalDateTime now = LocalDateTime.now(clock);
+                    post.setCreatedAt(now);
+                    post.setUpdatedAt(now);
+                    return postRepository.save(post);
+                })
+                .flatMap(saved -> mapToResponse(saved, accountId))
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.badRequest("Invalid post request payload"));
+    }
+
+    /**
+     * Adds or removes the caller's reaction. {@code deleteReaction} answers the
+     * number of rows it actually removed, so "there was one and it is gone" and
+     * "there wasn't one" are never confused the way an empty {@code Mono<Void>}
+     * confused them before, and {@code insertReaction}'s {@code ON CONFLICT DO
+     * NOTHING} keeps a second, concurrent tap from ever hitting the unique
+     * constraint as a 500.
+     */
+    @Transactional
+    public Mono<PostReactionToggleResponse> toggleReaction(Long postId, Long accountId, PostReactionRequest request) {
+        String type = request.reaction().getValue();
+        return rateLimiter.check(accountId)
+                .then(scopeAuthorizer.scopeOf(accountId))
+                .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> reactionRepository.deleteReaction(postId, accountId, type)
+                        .flatMap(deleted -> deleted > 0
+                                ? Mono.just(new PostReactionToggleResponse(false))
+                                : reactionRepository.insertReaction(postId, accountId, type)
+                                        .map(inserted -> new PostReactionToggleResponse(inserted > 0))));
+    }
+
+    @Transactional
+    public Mono<PostCommentResponse> addComment(Long postId, Long accountId, PostCommentRequest request) {
+        return rateLimiter.check(accountId)
+                .then(scopeAuthorizer.scopeOf(accountId))
+                .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> {
+                    PostComment comment = new PostComment();
+                    comment.setPostId(postId);
+                    comment.setAuthorAccountId(accountId);
+                    comment.setContent(request.content().trim());
+                    comment.setIsHidden(false);
+                    LocalDateTime now = LocalDateTime.now(clock);
+                    comment.setCreatedAt(now);
+                    comment.setUpdatedAt(now);
+                    return commentRepository.save(comment);
+                })
+                .map(saved -> new PostCommentResponse(
+                        saved.getId(),
+                        saved.getPostId(),
+                        saved.getAuthorAccountId(),
+                        saved.getContent(),
+                        saved.getIsHidden(),
+                        saved.getCreatedAt(),
+                        saved.getUpdatedAt()
+                ));
+    }
+
+    /**
+     * Reports a post. The duplicate check is the unique constraint itself, not
+     * a separate exists-then-insert that a second request could race past: the
+     * insert is attempted directly and a constraint violation becomes 409.
+     * Reaching the auto-hide threshold is safe under concurrency because
+     * hiding is an idempotent update, not a counter of its own.
+     */
+    @Transactional
+    public Mono<PostReportResponse> reportPost(Long postId, Long reporterAccountId, PostReportRequest request) {
+        return rateLimiter.check(reporterAccountId)
+                .then(scopeAuthorizer.scopeOf(reporterAccountId))
+                .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> {
+                    PostReport report = new PostReport();
+                    report.setPostId(postId);
+                    report.setReporterAccountId(reporterAccountId);
+                    report.setReason(request.reason().trim());
+                    report.setCreatedAt(LocalDateTime.now(clock));
+                    return reportRepository.save(report)
+                            .onErrorMap(DataIntegrityViolationException.class,
+                                    e -> ApiException.conflict("You have already reported this post"));
+                })
+                .flatMap(savedReport -> reportRepository.countByPostId(postId)
+                        .flatMap(count -> {
+                            if (count >= AUTO_HIDE_REPORT_THRESHOLD) {
+                                return systemHide(postId).thenReturn(savedReport);
+                            }
+                            return Mono.just(savedReport);
+                        }))
+                .map(saved -> new PostReportResponse(
+                        saved.getId(),
+                        saved.getPostId(),
+                        saved.getReporterAccountId(),
+                        saved.getReason(),
+                        saved.getCreatedAt()
+                ));
+    }
+
+    /**
+     * Hides a post. A TEACHER may only hide a post in a class they teach; an
+     * ADMIN may hide any. Either way the post still has to exist, and a post
+     * outside the caller's reach answers 404, the same as an unknown id -
+     * which class exists where is not something to reveal to a caller who
+     * cannot act on it.
+     */
+    @Transactional
+    public Mono<Void> hidePost(Long postId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> {
+                    post.hide(moderatorAccountId, LocalDateTime.now(clock));
+                    return postRepository.save(post);
+                })
+                .then();
+    }
+
+    /** The counterpart of {@link #hidePost}: a moderator may also show a post again. */
+    @Transactional
+    public Mono<Void> unhidePost(Long postId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> {
+                    post.unhide();
+                    return postRepository.save(post);
+                })
+                .then();
+    }
+
+    /** The reported-post queue a moderator works from: their own classes for a TEACHER, every school for an ADMIN. */
+    public Flux<ReportedPostResponse> listReported(Long moderatorAccountId, boolean admin) {
+        Flux<PostFeedRepository.ReportedPost> reported = admin
+                ? feedRepository.findAllReported()
+                : scopeAuthorizer.taughtClassesOf(moderatorAccountId).flatMapMany(classIds ->
+                        classIds.isEmpty() ? Flux.empty() : feedRepository.findReported(classIds));
+        return reported.map(row -> new ReportedPostResponse(
+                row.postId(), row.authorAccountId(), row.classId(), row.content(),
+                row.isHidden(), row.reportCount(), row.createdAt()));
+    }
+
+    private Mono<Set<Long>> moderatorClassIds(Long moderatorAccountId, boolean admin) {
+        return admin ? Mono.just(Set.of()) : scopeAuthorizer.taughtClassesOf(moderatorAccountId);
+    }
+
+    private Mono<Post> requireModerationTarget(Long postId, Set<Long> classIds, boolean admin) {
+        return postRepository.findByIdAndDeletedAtIsNull(postId)
+                .filter(post -> admin || classIds.contains(post.getClassId()))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")));
+    }
+
+    /** Used only by the auto-hide path, which already knows the post is visible and in range. */
+    private Mono<Void> systemHide(Long postId) {
+        return postRepository.findByIdAndDeletedAtIsNull(postId)
+                .flatMap(post -> {
+                    post.hide(null, LocalDateTime.now(clock));
+                    return postRepository.save(post);
+                })
+                .then();
+    }
+
+    private Mono<Post> requireVisible(Long postId, FeedScope scope) {
+        return postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(postId)
+                .filter(post -> scope.covers(
+                        post.getInstitutionId(), post.getClassId(), post.getCourseId(), post.getSchoolYearId()))
+                .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")));
+    }
+
+    private Mono<ClassScope> requireClassScope(Long accountId, Long classId) {
+        return scopeAuthorizer.classScope(accountId, classId)
+                .switchIfEmpty(Mono.error(ApiException.notFound(
+                        "Class not found, or you do not belong to it")));
+    }
+
+    /** A requested id that is not already inside the caller's scope is refused, not silently dropped. */
+    private void requireWithinScope(FeedScope scope, Long schoolYearId, Long courseId, Long classId) {
+        if (classId != null && !scope.classIds().contains(classId)
+                || courseId != null && !scope.courseIds().contains(courseId)
+                || schoolYearId != null && !scope.schoolYearIds().contains(schoolYearId)) {
+            throw ApiException.notFound("Class, course or school year not found, or you do not belong to it");
+        }
+    }
+
+    private void validatePagination(int page, int limit) {
+        if (page < 1) {
+            throw ApiException.badRequest("page must be at least 1");
+        }
+        if (limit < MIN_LIMIT || limit > MAX_LIMIT) {
+            throw ApiException.badRequest("limit must be between " + MIN_LIMIT + " and " + MAX_LIMIT);
+        }
+    }
+
+    private Mono<PostResponse> mapToResponse(Post post, Long currentAccountId) {
+        Mono<Long> commentCountMono = commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(post.getId());
+        Mono<Boolean> hasReactedMono = reactionRepository.existsByPostIdAndAccountId(post.getId(), currentAccountId);
+
+        return Mono.zip(commentCountMono, hasReactedMono)
+                .map(tuple -> new PostResponse(
+                        post.getId(),
+                        post.getAuthorAccountId(),
+                        post.getInstitutionId(),
+                        post.getSchoolYearId(),
+                        post.getCourseId(),
+                        post.getClassId(),
+                        post.getType(),
+                        post.getTitle(),
+                        post.getContent(),
+                        post.getIsAutoGenerated(),
+                        tuple.getT1(), // commentCount
+                        tuple.getT2(), // hasReacted
+                        post.getCreatedAt(),
+                        post.getUpdatedAt()
+                ));
+    }
+}
