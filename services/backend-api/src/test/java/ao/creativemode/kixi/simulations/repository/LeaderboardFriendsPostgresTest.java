@@ -45,6 +45,9 @@ class LeaderboardFriendsPostgresTest {
     private static final long CLASS = 940001L;
     private static final long STATEMENT = 940001L;
     private static final long YEAR = 940001L;
+    private static final long INSTITUTION = 940001L;
+    private static final long OTHER_CLASS = 940002L;
+    private static final long OTHER_INSTITUTION = 940002L;
 
     @Autowired LeaderboardRepository leaderboard;
     @Autowired DatabaseClient database;
@@ -104,7 +107,21 @@ class LeaderboardFriendsPostgresTest {
                 + " VALUES (" + CLASS + ", 'T" + CLASS + "', 7, " + CLASS + ", " + YEAR + ", "
                 + CLASS + ", now(), now())");
 
-        for (long account : List.of(ANA, BRUNO, CARLA, DANI)) {
+        // Another school in the same school year. school_years is global — one row per
+        // calendar span — so the year alone cannot tell the two apart, which is the whole
+        // point of the next two tests.
+        exec("INSERT INTO institutions (id, code, name, created_at, updated_at)"
+                + " VALUES (" + OTHER_CLASS + ", 'ESC" + OTHER_CLASS + "', 'Escola B', now(), now())");
+        exec("INSERT INTO courses (id, code, name, institution_id)"
+                + " VALUES (" + OTHER_CLASS + ", 'C" + OTHER_CLASS + "', 'Curso B', " + OTHER_CLASS + ")");
+        exec("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id,"
+                + " created_at, updated_at)"
+                + " VALUES (" + OTHER_CLASS + ", 'TB', 7, " + OTHER_CLASS + ", " + YEAR + ", "
+                + OTHER_CLASS + ", now(), now())");
+
+        // Everyone but Dani, who is seated below: the loop gives every account an
+        // enrollment, and Dani needs one in the other school instead.
+        for (long account : List.of(ANA, BRUNO, CARLA)) {
             exec("INSERT INTO accounts (id, username, email, password_hash, email_verified,"
                     + " active, created_at, updated_at, accessibility_extra_time)"
                     + " VALUES (" + account + ", 'u" + account + "', 'u" + account + "@x.pt',"
@@ -128,6 +145,21 @@ class LeaderboardFriendsPostgresTest {
         finished(940002L, BRUNO, 4);
         finished(940003L, CARLA, 6);
 
+        // Dani moved schools: the old enrollment is CANCELLED, not deleted, which is the
+        // state it is really in. The unique index allows one ACTIVE enrollment per
+        // account and year, so this is how a second school ever appears at all.
+        exec("INSERT INTO accounts (id, username, email, password_hash, email_verified,"
+                + " active, created_at, updated_at, accessibility_extra_time)"
+                + " VALUES (" + DANI + ", 'u" + DANI + "', 'u" + DANI + "@x.pt',"
+                + " 'x', true, true, now(), now(), false)");
+        exec("INSERT INTO users (id, account_id, first_name, last_name, created_at, updated_at)"
+                + " VALUES (" + DANI + ", " + DANI + ", 'Aluno" + DANI + "',"
+                + " 'Teste', now(), now())");
+        exec("INSERT INTO enrollments (id, account_id, class_id, school_year_id, status,"
+                + " created_at, updated_at)"
+                + " VALUES (940005, " + DANI + ", " + OTHER_CLASS + ", " + YEAR + ","
+                + " 'ACTIVE', now(), now())");
+
         // Ana and Bruno are friends. The pair is stored the same way round for both.
         friendship(940001L, ANA, BRUNO, BRUNO, "ACCEPTED");
         // Carla asked Ana and was never answered: not a friend, so not ranked.
@@ -141,7 +173,7 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void aCallerRanksTheFriendsAndNobodyElse() {
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
@@ -155,7 +187,7 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void theCallerIsNotInTheirOwnRanking() {
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
@@ -166,7 +198,7 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void theAverageIsAPercentageOfTheStatementMaximum() {
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
@@ -184,7 +216,7 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void theFriendshipWorksFromBothEnds() {
         List<GroupScore> fromBruno = leaderboard
-                .findAverages(Scope.FRIENDS, BRUNO, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, BRUNO, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
@@ -195,11 +227,57 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void aPendingRequestIsNotAFriendYet() {
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
         assertThat(ranked).extracting(GroupScore::accountId).doesNotContain(CARLA);
+    }
+
+    // ── School isolation ─────────────────────────────────────────────────
+
+    /**
+     * A friend who moved to another school leaves the ranking.
+     *
+     * <p>The friendship row is perfectly valid: {@code ACCEPTED}, and both accounts are
+     * active, so every check the friendship itself can make passes. What it cannot make
+     * is the school — and {@code school_years} is one global row per calendar span that
+     * every school shares, so the year filter never separated them. Without the
+     * institution check this school would go on publishing a former student's marks.</p>
+     */
+    @Test
+    void aFriendWhoMovedSchoolsIsNotRankedHere() {
+        Long total = leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR, INSTITUTION).block();
+
+        List<GroupScore> ranked = leaderboard
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
+                .collectList()
+                .block();
+
+        // Bruno is here and sat the paper. Dani is a friend and moved schools: the row
+        // is accepted and the account is active, and neither is enough.
+        assertThat(total).isEqualTo(1L);
+        assertThat(ranked).extracting(GroupScore::accountId).containsExactly(BRUNO);
+    }
+
+    /** Asked against the school they moved to, the same person is exactly who they are. */
+    @Test
+    void theSameFriendIsRankedInTheSchoolTheyMovedTo() {
+        Long total = leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR, OTHER_INSTITUTION).block();
+
+        assertThat(total).isEqualTo(1L);
+    }
+
+    /** A seat in no school has nothing to isolate by, so the cohort is empty. */
+    @Test
+    void aCallerInNoSchoolRanksNoFriends() {
+        List<GroupScore> ranked = leaderboard
+                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null, null)
+                .collectList()
+                .block();
+
+        assertThat(ranked).isEmpty();
+        assertThat(leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR, null).block()).isZero();
     }
 
     // ── The count that decides the podium ───────────────────────────────
@@ -207,20 +285,22 @@ class LeaderboardFriendsPostgresTest {
     /**
      * The count and the rows are read from the same table, under the same conditions.
      *
-     * <p>Two accepted friends, one of them without a score: {@code totalStudents} counts
-     * both, because the count is about who is in the group, and {@code rankedStudents}
-     * is the smaller number. A count that followed only the scored rows would let a
-     * group of two look like a group of one and open a podium nobody is standing in.</p>
+     * <p>One accepted friend, and they sat nothing: {@code totalStudents} counts them,
+     * because the count is about who is in the group, and {@code rankedStudents} is the
+     * smaller number. A count that followed only the scored rows would let a group of
+     * two look like a group of one and open a podium nobody is standing in.</p>
      */
     @Test
     void theCountAndTheRowsAgreeOnWhoIsInTheGroup() {
-        Long total = leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR).block();
+        Long total = leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR, INSTITUTION).block();
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
-        assertThat(total).isEqualTo(2L);
+        // Ana is a friend of Bruno, who sat the paper, and of Dani, who did not and is
+        // at the other school. One is in the group; one has a mark.
+        assertThat(total).isEqualTo(1L);
         assertThat(ranked).hasSize(1);
     }
 
@@ -228,12 +308,12 @@ class LeaderboardFriendsPostgresTest {
     @Test
     void aCallerWithNoFriendsRanksNobody() {
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, 999999L, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, 999999L, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
         assertThat(ranked).isEmpty();
-        assertThat(leaderboard.countMembers(Scope.FRIENDS, 999999L, YEAR).block()).isZero();
+        assertThat(leaderboard.countMembers(Scope.FRIENDS, 999999L, YEAR, INSTITUTION).block()).isZero();
     }
 
     /**
@@ -251,7 +331,7 @@ class LeaderboardFriendsPostgresTest {
         exec("UPDATE simulations SET school_year_id = 1 WHERE id = 940002");
 
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
@@ -261,15 +341,15 @@ class LeaderboardFriendsPostgresTest {
     /** A deactivated account stops being rankable, as it does in a class. */
     @Test
     void aDeactivatedFriendDropsOut() {
-        exec("UPDATE accounts SET active = false WHERE id = " + DANI);
+        exec("UPDATE accounts SET active = false WHERE id = " + BRUNO);
 
         List<GroupScore> ranked = leaderboard
-                .findAverages(Scope.FRIENDS, ANA, YEAR, null, null, null)
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
                 .collectList()
                 .block();
 
-        assertThat(ranked).extracting(GroupScore::accountId).containsExactly(BRUNO);
-        assertThat(leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR).block()).isEqualTo(1L);
+        assertThat(ranked).isEmpty();
+        assertThat(leaderboard.countMembers(Scope.FRIENDS, ANA, YEAR, INSTITUTION).block()).isZero();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

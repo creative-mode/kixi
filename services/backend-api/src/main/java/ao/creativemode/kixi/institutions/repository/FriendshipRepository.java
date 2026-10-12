@@ -52,10 +52,12 @@ public interface FriendshipRepository extends ReactiveCrudRepository<Friendship,
      * entity mapping is what every other repository here relies on, and a projection has
      * no precedent to copy.
      *
-     * <p>Same school and same school year on purpose: a student who moved keeps the old
-     * enrollment ACTIVE, so without the year the search would offer people they no
-     * longer sit with. Excluding both directions of the pair, because a person already
-     * requested is not a colleague to discover.</p>
+     * <p>Same school and same school year, and both are needed. The school year is a
+     * global row that every school shares, so on its own it is not a filter at all; the
+     * institution comes through the class, because an enrollment has none of its own. A
+     * student who moved keeps the old enrollment ACTIVE, which is what the year stops.
+     * Excluding both directions of the pair, because a person already requested is not a
+     * colleague to discover.</p>
      */
     @Query("""
         SELECT DISTINCT u.*
@@ -63,9 +65,11 @@ public interface FriendshipRepository extends ReactiveCrudRepository<Friendship,
           JOIN accounts a ON a.id = e.account_id
                         AND a.deleted_at IS NULL AND a.active = TRUE
           JOIN users u ON u.account_id = a.id AND u.deleted_at IS NULL
+          JOIN classes fc ON fc.id = e.class_id AND fc.deleted_at IS NULL
          WHERE e.deleted_at IS NULL
            AND e.status = 'ACTIVE'
            AND e.school_year_id = :schoolYearId
+           AND fc.institution_id = :institutionId
            AND e.account_id <> :accountId
            AND (:term IS NULL OR (u.first_name || ' ' || u.last_name) ILIKE '%' || :term || '%')
            AND NOT EXISTS (SELECT 1 FROM friendships f
@@ -76,5 +80,6 @@ public interface FriendshipRepository extends ReactiveCrudRepository<Friendship,
          ORDER BY u.first_name, u.last_name
          LIMIT :limit
         """)
-    Flux<User> searchColleagues(Long accountId, Long schoolYearId, String term, int limit);
+    Flux<User> searchColleagues(
+            Long accountId, Long schoolYearId, Long institutionId, String term, int limit);
 }

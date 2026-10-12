@@ -119,9 +119,11 @@ public class FriendshipService {
      * already requested.</p>
      */
     public Flux<ColleagueResponse> searchColleagues(Long accountId, String term) {
-        return currentSchoolYearOf(accountId)
-                .flatMapMany(year -> friendships.searchColleagues(
-                        accountId, year,
+        return currentSeatOf(accountId)
+                .switchIfEmpty(Mono.error(ApiException.forbidden(
+                        "An active enrollment in a school is needed to search colleagues")))
+                .flatMapMany(seat -> friendships.searchColleagues(
+                        accountId, seat.schoolYearId(), seat.institutionId(),
                         term == null || term.isBlank() ? null : term.trim(),
                         SEARCH_LIMIT))
                 .map(user -> new ColleagueResponse(
@@ -136,11 +138,17 @@ public class FriendshipService {
      * is still open in the comparison issue, and this does not quietly pre-empt it.</p>
      */
     private Mono<Void> inSameSchoolYear(Long fromAccountId, Long toAccountId) {
-        return currentSchoolYearOf(fromAccountId)
+        return currentSeatOf(fromAccountId)
                 .switchIfEmpty(Mono.error(ApiException.forbidden(
                         "An active enrollment is needed to follow a colleague")))
-                .flatMap(year -> currentSchoolYearOf(toAccountId)
-                        .filter(other -> other.equals(year))
+                .flatMap(mine -> currentSeatOf(toAccountId)
+                        // Both halves. school_year_id is a global row shared by every
+                        // school, so comparing years alone let a student at one school
+                        // follow a student at another — and the ranking then showed one
+                        // school's marks to the other.
+                        .filter(theirs -> mine.institutionId() != null
+                                && mine.institutionId().equals(theirs.institutionId())
+                                && mine.schoolYearId().equals(theirs.schoolYearId()))
                         .switchIfEmpty(Mono.error(ApiException.badRequest(
                                 "That colleague is not in your school this year"))))
                 .then();
@@ -154,8 +162,11 @@ public class FriendshipService {
      * places deciding that differently would rank friends over a different year than the
      * one they were added in.</p>
      */
-    private Mono<Long> currentSchoolYearOf(Long accountId) {
-        return seats.activeSeatsOf(accountId).map(EnrollmentSeatReader.Seat::schoolYearId).next();
+    private Mono<EnrollmentSeatReader.Seat> currentSeatOf(Long accountId) {
+        // The whole seat, not just the year: the school is the half that isolates.
+        return seats.activeSeatsOf(accountId)
+                .filter(seat -> seat.institutionId() != null)
+                .next();
     }
 
     private Flux<FriendResponse> decorateAll(Flux<Friendship> source, Long viewerAccountId) {

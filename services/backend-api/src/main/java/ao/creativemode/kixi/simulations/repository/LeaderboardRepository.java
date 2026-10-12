@@ -111,6 +111,15 @@ public class LeaderboardRepository {
                        AND (f.account_low = :groupId OR f.account_high = :groupId)
                        AND af.deleted_at IS NULL AND af.active = TRUE
                        AND s.account_id = af.id
+                       AND EXISTS (SELECT 1
+                                     FROM enrollments fe
+                                     JOIN classes fc ON fc.id = fe.class_id
+                                                   AND fc.deleted_at IS NULL
+                                    WHERE fe.account_id = af.id
+                                      AND fe.deleted_at IS NULL
+                                      AND fe.status = 'ACTIVE'
+                                      AND fe.school_year_id = :schoolYearId
+                                      AND fc.institution_id = :institutionId)
             """;
 
     private final DatabaseClient databaseClient;
@@ -136,6 +145,15 @@ public class LeaderboardRepository {
                AND f.status = 'ACCEPTED'
                AND (f.account_low = :groupId OR f.account_high = :groupId)
                AND af.deleted_at IS NULL AND af.active = TRUE
+               AND EXISTS (SELECT 1
+                             FROM enrollments fe
+                             JOIN classes fc ON fc.id = fe.class_id
+                                           AND fc.deleted_at IS NULL
+                            WHERE fe.account_id = af.id
+                              AND fe.deleted_at IS NULL
+                              AND fe.status = 'ACTIVE'
+                              AND fe.school_year_id = :schoolYearId
+                              AND fc.institution_id = :institutionId)
             """;
 
     /**
@@ -159,9 +177,9 @@ public class LeaderboardRepository {
 
     /** One average percentage per account that has a computable score in the group. */
     public Flux<GroupScore> findAverages(
-            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
             LocalDateTime from, LocalDateTime to) {
-        Sql sql = averagesSql(scope, groupId, schoolYearId, statementId, from, to);
+        Sql sql = averagesSql(scope, groupId, schoolYearId, institutionId, statementId, from, to);
         return bindAll(databaseClient.sql(sql.statement()), sql.binds())
                 .map((row, metadata) -> new GroupScore(
                         ((Number) row.get("account_id")).longValue(),
@@ -170,7 +188,8 @@ public class LeaderboardRepository {
     }
 
     /** How many students belong to the group and year, ranked or not. */
-    public Mono<Long> countMembers(Scope scope, Long groupId, Long schoolYearId) {
+    public Mono<Long> countMembers(
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId) {
         DatabaseClient.GenericExecuteSpec spec = databaseClient.sql(membersSql(scope, groupId))
                 .bind("groupId", groupId);
         // Only where the statement mentions it. An unmatched bind is dropped without a
@@ -178,6 +197,9 @@ public class LeaderboardRepository {
         // mismatch that once let the year go missing from this count.
         if (scope != Scope.FRIENDS) {
             spec = spec.bind("schoolYearId", schoolYearId);
+        } else {
+            spec = spec.bind("schoolYearId", schoolYearId)
+                    .bind("institutionId", institutionId == null ? 0L : institutionId);
         }
         return spec
                 .map((row, metadata) -> ((Number) row.get("total")).longValue())
@@ -228,7 +250,7 @@ public class LeaderboardRepository {
     }
 
     static Sql averagesSql(
-            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
             LocalDateTime from, LocalDateTime to) {
         List<String> where = new ArrayList<>();
         Map<String, Object> binds = new LinkedHashMap<>();
@@ -249,6 +271,12 @@ public class LeaderboardRepository {
         where.add(membershipSql(scope, groupId));
 
         binds.put("schoolYearId", schoolYearId);
+        if (scope == Scope.FRIENDS) {
+            // Only friends needs it, and a null one means the caller sits in a class
+            // that belongs to no school: there is nothing to isolate by, so the cohort
+            // is empty rather than every friend of everywhere.
+            binds.put("institutionId", institutionId == null ? 0L : institutionId);
+        }
         if (statementId != null) {
             where.add("s.statement_id = :statementId");
             binds.put("statementId", statementId);

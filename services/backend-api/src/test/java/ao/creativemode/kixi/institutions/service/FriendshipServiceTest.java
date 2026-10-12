@@ -34,6 +34,8 @@ class FriendshipServiceTest {
 
     private static final Long ANA = 12L;
     private static final Long BRUNO = 34L;
+    private static final Long SCHOOL = 1L;
+    private static final Long OTHER_SCHOOL = 2L;
     private static final Long YEAR = 3L;
     private static final Long OTHER_YEAR = 4L;
 
@@ -243,12 +245,78 @@ class FriendshipServiceTest {
                 .verify();
     }
 
+    // === school isolation ==================================================
+
+    /**
+     * Two schools, one school year.
+     *
+     * <p>{@code school_years} is global — one row per calendar span, shared by every
+     * school — so comparing years alone let a student at one school follow a student at
+     * another, and the friends ranking then showed one school's marks to the other. This
+     * is the whole reason the seat is read whole rather than by year.</p>
+     */
+    @Test
+    void aColleagueFromAnotherSchoolIsNotFollowable() {
+        seatedIn(ANA, YEAR, SCHOOL);
+        seatedIn(BRUNO, YEAR, OTHER_SCHOOL);
+
+        StepVerifier.create(service.request(ANA, new FriendRequest(BRUNO)))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+    }
+
+    /** Same school, same year: the request is allowed, as it always was. */
+    @Test
+    void aColleagueInTheSameSchoolIsFollowable() {
+        seatedIn(ANA, YEAR, SCHOOL);
+        seatedIn(BRUNO, YEAR, SCHOOL);
+        when(friendships.findBetween(ANA, BRUNO)).thenReturn(Mono.empty());
+        when(friendships.save(any(Friendship.class))).thenAnswer(call ->
+                Mono.just(call.getArgument(0)));
+
+        assertThat(service.request(ANA, new FriendRequest(BRUNO)).block()).isNotNull();
+    }
+
+    /**
+     * A class that belongs to no school has no school to isolate by.
+     *
+     * <p>Refused on both sides: there is nothing to compare, and treating a null school
+     * as "compatible with anything" is how two unrelated schools end up on each other's
+     * ranking.</p>
+     */
+    @Test
+    void aSeatWithNoSchoolCannotBeFriend() {
+        seatedIn(ANA, YEAR, null);
+        seatedIn(BRUNO, YEAR, SCHOOL);
+
+        StepVerifier.create(service.request(ANA, new FriendRequest(BRUNO)))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+    }
+
+    /** The search is scoped to the caller's school, not only to their year. */
+    @Test
+    void theSearchCarriesTheSchoolOfTheCaller() {
+        seatedIn(ANA, YEAR, OTHER_SCHOOL);
+        when(friendships.searchColleagues(anyLong(), anyLong(), anyLong(), any(), anyInt()))
+                .thenReturn(Flux.empty());
+
+        service.searchColleagues(ANA, null).collectList().block();
+
+        verify(friendships).searchColleagues(
+                eq(ANA), eq(YEAR), eq(OTHER_SCHOOL), isNull(), anyInt());
+    }
+
     // === discovery =========================================================
 
     @Test
     void theSearchIsOverTheCallersOwnSchoolYear() {
         seatedIn(ANA, YEAR);
-        when(friendships.searchColleagues(eq(ANA), eq(YEAR), isNull(), anyInt()))
+        when(friendships.searchColleagues(eq(ANA), eq(YEAR), eq(SCHOOL), isNull(), anyInt()))
                 .thenReturn(Flux.just(new User(BRUNO, "Bruno", "Sali")));
 
         var found = service.searchColleagues(ANA, "  ").collectList().block();
@@ -271,7 +339,7 @@ class FriendshipServiceTest {
     @Test
     void aColleagueWithoutANameStillGetsOne() {
         seatedIn(ANA, YEAR);
-        when(friendships.searchColleagues(anyLong(), anyLong(), any(), anyInt()))
+        when(friendships.searchColleagues(anyLong(), anyLong(), anyLong(), any(), anyInt()))
                 .thenReturn(Flux.just(new User(BRUNO, null, null)));
 
         var found = service.searchColleagues(ANA, "bruno").collectList().block();
@@ -284,7 +352,7 @@ class FriendshipServiceTest {
     @Test
     void theSearchMasksTheSurnameLikeTheRanking() {
         seatedIn(ANA, YEAR);
-        when(friendships.searchColleagues(anyLong(), anyLong(), any(), anyInt()))
+        when(friendships.searchColleagues(anyLong(), anyLong(), anyLong(), any(), anyInt()))
                 .thenReturn(Flux.just(new User(BRUNO, "Bruno", "Sali")));
 
         var found = service.searchColleagues(ANA, "bruno").collectList().block();
@@ -299,8 +367,13 @@ class FriendshipServiceTest {
     // === helpers ===========================================================
 
     private void seatedIn(Long accountId, Long schoolYearId) {
+        seatedIn(accountId, schoolYearId, SCHOOL);
+    }
+
+    /** A seat in a named school, which is the half that isolates. */
+    private void seatedIn(Long accountId, Long schoolYearId, Long institutionId) {
         when(seats.activeSeatsOf(accountId))
-                .thenReturn(Flux.just(new Seat(7L, schoolYearId, 1L)));
+                .thenReturn(Flux.just(new Seat(7L, schoolYearId, institutionId)));
     }
 
     private void named(Long accountId, String first, String last) {
