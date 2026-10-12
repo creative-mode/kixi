@@ -21,6 +21,7 @@ import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.model.Statement;
+import ao.creativemode.kixi.exams.service.SimilarQuestionService;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.TutorStyleService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
@@ -59,7 +60,7 @@ class ChatServiceTest {
         when(tutorStyles.styleOf(any(Statement.class))).thenReturn(Mono.just(""));
         service = new ChatService(
                 sessionRepository, messageRepository, statementService, rateLimiter,
-                groqClient, tutorStyles);
+                groqClient, tutorStyles, mock(SimilarQuestionService.class));
     }
 
     // === createSession ====================================================

@@ -48,14 +48,17 @@ public class ChatController {
         this.currentAccountService = currentAccountService;
     }
 
-    /** Open a session bound to a statement the caller may read. */
+    /**
+     * Open a session bound to a statement the caller may read, optionally in one of
+     * the tutor modes of issue #115 (see {@link ChatSessionRequest}).
+     */
     @PostMapping
     public Mono<ResponseEntity<ChatSessionResponse>> createSession(
             @Valid @RequestBody ChatSessionRequest request,
             UriComponentsBuilder uriBuilder) {
         return currentAccountService.requiredAccountId()
                 .flatMap(accountId ->
-                        chatService.createSession(accountId, request.statementId()))
+                        chatService.createSession(accountId, request))
                 .map(session -> {
                     URI location = uriBuilder
                             .path("/api/v1/chat/sessions/{id}")
