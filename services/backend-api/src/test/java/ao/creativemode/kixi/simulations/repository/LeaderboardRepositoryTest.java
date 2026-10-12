@@ -18,7 +18,7 @@ class LeaderboardRepositoryTest {
 
     @Test
     void ranksPercentagesSoPapersOfDifferentLengthsStayComparable() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         // DECIMAL(10,2) on both sides, so this division and the AVG over it are exact
         // numeric arithmetic. No ROUND: rounding here would average each paper first and
@@ -31,7 +31,7 @@ class LeaderboardRepositoryTest {
 
     @Test
     void onlyFinishedScoresCount() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql)
                 .contains("s.status = 'FINISHED'")
@@ -45,7 +45,7 @@ class LeaderboardRepositoryTest {
     void theCohortIsPinnedToTheSchoolYear() {
         // A student who moves keeps their old row ACTIVE forever, so without the year on
         // both sides they go on being ranked where they no longer are — under their name.
-        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null);
+        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null, null);
 
         assertThat(sql.statement())
                 .contains("e.school_year_id = :schoolYearId")
@@ -62,7 +62,7 @@ class LeaderboardRepositoryTest {
      */
     @Test
     void theStatementDoesNotWeldTheWhereToTheFirstCondition() {
-        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null);
+        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null, null);
 
         assertThat(sql.statement()).containsPattern("WHERE\\s+\\S");
         assertThat(sql.statement())
@@ -83,7 +83,7 @@ class LeaderboardRepositoryTest {
             for (Long statementId : new Long[] {null, 7L}) {
                 for (boolean window : new boolean[] {false, true}) {
                     Sql sql = LeaderboardRepository.averagesSql(
-                            scope, 7L, 3L, statementId,
+                            scope, 7L, 3L, 1L, statementId,
                             window ? LocalDateTime.now() : null,
                             window ? LocalDateTime.now().plusDays(7) : null);
 
@@ -146,7 +146,7 @@ class LeaderboardRepositoryTest {
         // Since #169 an open question is PENDING_REVIEW and final_score only adds up what
         // has been marked. Ranking that against the whole total would park a student below
         // their peers until the teacher got round to them, and the class would see it.
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null)
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null)
                 .statement();
 
         assertThat(sql)
@@ -157,7 +157,7 @@ class LeaderboardRepositoryTest {
 
     @Test
     void anInactiveAccountIsNotRanked() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null)
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null)
                 .statement();
 
         assertThat(sql)
@@ -168,28 +168,28 @@ class LeaderboardRepositoryTest {
 
     @Test
     void aStatementTakenDownStopsCounting() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql).contains("st.deleted_at IS NULL");
     }
 
     @Test
     void theClassScopeFiltersOnTheClass() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql).contains("e.class_id = :groupId");
     }
 
     @Test
     void theSchoolScopeFiltersOnTheInstitutionOfTheClass() {
-        String sql = LeaderboardRepository.averagesSql(Scope.SCHOOL, 1L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.SCHOOL, 1L, 1L, null, null, null, null).statement();
 
         assertThat(sql).contains("cl.institution_id = :groupId");
     }
 
     @Test
     void membershipIsAnExistsSoOneEnrollmentCannotDoubleAStudentsScore() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql)
                 .contains("EXISTS (SELECT 1")
@@ -199,7 +199,7 @@ class LeaderboardRepositoryTest {
 
     @Test
     void theStatementAndPeriodFiltersAppearOnlyWhenAskedFor() {
-        Sql bare = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null);
+        Sql bare = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null);
         assertThat(bare.statement())
                 .doesNotContain("s.statement_id = :statementId")
                 .doesNotContain("s.finished_at");
@@ -207,7 +207,7 @@ class LeaderboardRepositoryTest {
 
         LocalDateTime from = LocalDateTime.of(2026, 9, 10, 0, 0);
         LocalDateTime to = LocalDateTime.of(2026, 10, 10, 0, 0);
-        Sql filtered = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, 42L, from, to);
+        Sql filtered = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, 42L, from, to);
 
         assertThat(filtered.statement())
                 .contains("s.statement_id = :statementId")
@@ -222,7 +222,7 @@ class LeaderboardRepositoryTest {
 
     @Test
     void tiesAlwaysBreakOnTheAccountSoACachedRankingIsStable() {
-        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null).statement();
+        String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql).contains("ORDER BY average DESC NULLS LAST, s.account_id ASC");
     }

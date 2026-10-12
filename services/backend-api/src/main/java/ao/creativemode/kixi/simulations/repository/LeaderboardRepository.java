@@ -62,6 +62,9 @@ public class LeaderboardRepository {
 
     /** {@link #MEMBERSHIP} with the group's own conditions inside the parentheses. */
     private static String membershipSql(Scope scope, Long groupId) {
+        if (scope == Scope.FRIENDS) {
+            return FRIENDSHIP + ")";
+        }
         return MEMBERSHIP + " AND " + groupPredicate(scope, groupId, "e", "cl")
                 + " AND e.school_year_id = :schoolYearId)";
     }
@@ -84,11 +87,74 @@ public class LeaderboardRepository {
                            AND sa.review_status = 'PENDING_REVIEW')
             """;
 
+    /**
+     * An accepted friendship with the caller.
+     *
+     * <p>A third shape, and the reason the other two do not stretch to cover it: a class
+     * and a school are answered by a column comparison, and a friend is a pair of ids on
+     * another table. {@code :groupId} carries the caller's account here rather than a
+     * group, because the ranking and the friendship list have to be over the same people
+     * — a count that disagrees with the rows would decide the podium on the wrong number.
+     *
+     * <p>The other account is picked with a CASE rather than by two OR branches, so the
+     * join to {@code accounts} has one key: a deactivated or deleted friend drops out at
+     * the account, the same way it does for a class.</p>
+     */
+    private static final String FRIENDSHIP = """
+            EXISTS (SELECT 1
+                      FROM friendships f
+                      JOIN accounts af ON af.id = CASE WHEN f.account_low = :groupId
+                                                        THEN f.account_high
+                                                        ELSE f.account_low END
+                     WHERE f.deleted_at IS NULL
+                       AND f.status = 'ACCEPTED'
+                       AND (f.account_low = :groupId OR f.account_high = :groupId)
+                       AND af.deleted_at IS NULL AND af.active = TRUE
+                       AND s.account_id = af.id
+                       AND EXISTS (SELECT 1
+                                     FROM enrollments fe
+                                     JOIN classes fc ON fc.id = fe.class_id
+                                                   AND fc.deleted_at IS NULL
+                                    WHERE fe.account_id = af.id
+                                      AND fe.deleted_at IS NULL
+                                      AND fe.status = 'ACTIVE'
+                                      AND fe.school_year_id = :schoolYearId
+                                      AND fc.institution_id = :institutionId)
+            """;
+
     private final DatabaseClient databaseClient;
 
     public LeaderboardRepository(DatabaseClient databaseClient) {
         this.databaseClient = databaseClient;
     }
+
+    /**
+     * How many friends the ranking may show.
+     *
+     * <p>Not the enrollment count with a different filter: friends are counted on the
+     * friendships table, under the same conditions as {@link #FRIENDSHIP}. If the two
+     * disagreed, {@code totalStudents} would decide the small-group floor from a number
+     * that is not the number of rows behind it.</p>
+     */
+    private static final String FRIEND_COUNT = """
+            SELECT COUNT(*) AS total
+              FROM friendships f
+              JOIN accounts af ON af.id = CASE WHEN f.account_low = :groupId
+                                                THEN f.account_high ELSE f.account_low END
+             WHERE f.deleted_at IS NULL
+               AND f.status = 'ACCEPTED'
+               AND (f.account_low = :groupId OR f.account_high = :groupId)
+               AND af.deleted_at IS NULL AND af.active = TRUE
+               AND EXISTS (SELECT 1
+                             FROM enrollments fe
+                             JOIN classes fc ON fc.id = fe.class_id
+                                           AND fc.deleted_at IS NULL
+                            WHERE fe.account_id = af.id
+                              AND fe.deleted_at IS NULL
+                              AND fe.status = 'ACTIVE'
+                              AND fe.school_year_id = :schoolYearId
+                              AND fc.institution_id = :institutionId)
+            """;
 
     /**
      * Whether the statement is there to be ranked.
@@ -111,9 +177,9 @@ public class LeaderboardRepository {
 
     /** One average percentage per account that has a computable score in the group. */
     public Flux<GroupScore> findAverages(
-            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
             LocalDateTime from, LocalDateTime to) {
-        Sql sql = averagesSql(scope, groupId, schoolYearId, statementId, from, to);
+        Sql sql = averagesSql(scope, groupId, schoolYearId, institutionId, statementId, from, to);
         return bindAll(databaseClient.sql(sql.statement()), sql.binds())
                 .map((row, metadata) -> new GroupScore(
                         ((Number) row.get("account_id")).longValue(),
@@ -122,10 +188,20 @@ public class LeaderboardRepository {
     }
 
     /** How many students belong to the group and year, ranked or not. */
-    public Mono<Long> countMembers(Scope scope, Long groupId, Long schoolYearId) {
-        return databaseClient.sql(membersSql(scope, groupId))
-                .bind("groupId", groupId)
-                .bind("schoolYearId", schoolYearId)
+    public Mono<Long> countMembers(
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId) {
+        DatabaseClient.GenericExecuteSpec spec = databaseClient.sql(membersSql(scope, groupId))
+                .bind("groupId", groupId);
+        // Only where the statement mentions it. An unmatched bind is dropped without a
+        // word by DatabaseClient, which is harmless — and hides exactly the kind of
+        // mismatch that once let the year go missing from this count.
+        if (scope != Scope.FRIENDS) {
+            spec = spec.bind("schoolYearId", schoolYearId);
+        } else {
+            spec = spec.bind("schoolYearId", schoolYearId)
+                    .bind("institutionId", institutionId == null ? 0L : institutionId);
+        }
+        return spec
                 .map((row, metadata) -> ((Number) row.get("total")).longValue())
                 .one()
                 .defaultIfEmpty(0L);
@@ -140,6 +216,9 @@ public class LeaderboardRepository {
      * the count silently went on adding up every year.</p>
      */
     static String membersSql(Scope scope, Long groupId) {
+        if (scope == Scope.FRIENDS) {
+            return FRIEND_COUNT;
+        }
         return """
                 SELECT COUNT(DISTINCT e.account_id) AS total
                   FROM enrollments e
@@ -171,7 +250,7 @@ public class LeaderboardRepository {
     }
 
     static Sql averagesSql(
-            Scope scope, Long groupId, Long schoolYearId, Long statementId,
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
             LocalDateTime from, LocalDateTime to) {
         List<String> where = new ArrayList<>();
         Map<String, Object> binds = new LinkedHashMap<>();
@@ -192,6 +271,12 @@ public class LeaderboardRepository {
         where.add(membershipSql(scope, groupId));
 
         binds.put("schoolYearId", schoolYearId);
+        if (scope == Scope.FRIENDS) {
+            // Only friends needs it, and a null one means the caller sits in a class
+            // that belongs to no school: there is nothing to isolate by, so the cohort
+            // is empty rather than every friend of everywhere.
+            binds.put("institutionId", institutionId == null ? 0L : institutionId);
+        }
         if (statementId != null) {
             where.add("s.statement_id = :statementId");
             binds.put("statementId", statementId);
@@ -206,8 +291,8 @@ public class LeaderboardRepository {
         }
 
         // The newline matters: a text block strips trailing spaces, so "WHERE " alone
-                // would arrive as "WHERE" and weld itself to the first condition.
-String statement = """
+        // would arrive as "WHERE" and weld itself to the first condition.
+        String statement = """
                 SELECT s.account_id AS account_id,
                        AVG(s.final_score * 100.0 / st.total_max_score) AS average
                   FROM simulations s
@@ -228,6 +313,11 @@ String statement = """
         return switch (scope) {
             case CLASS -> enrollment + ".class_id = :groupId";
             case SCHOOL -> klass + ".institution_id = :groupId";
+            // Unreachable: FRIENDS never reaches here — membershipSql returns FRIENDSHIP
+            // whole, because a friendship is not a column on enrollments. Failing loudly
+            // beats emitting `null.class_id = :groupId` and finding out at runtime.
+            case FRIENDS -> throw new IllegalArgumentException(
+                    "Friends are not a group on enrollments; use membershipSql");
         };
     }
 
@@ -241,7 +331,7 @@ String statement = """
 
     /** Which cohort the caller is compared against. */
     public enum Scope {
-        CLASS, SCHOOL;
+        CLASS, SCHOOL, FRIENDS;
 
         public static Scope of(String value) {
             for (Scope scope : values()) {

@@ -89,11 +89,6 @@ public class LeaderboardService {
     public Mono<LeaderboardResponse> leaderboard(
             Long accountId, String scope, Long statementId, String period) {
         return Mono.defer(() -> {
-            if ("friends".equalsIgnoreCase(scope)) {
-                return Mono.error(ApiException.notFound(
-                        "The friends ranking is not available yet; it arrives with friendships (issue #121)"));
-            }
-
             Scope resolved;
             Period window;
             try {
@@ -106,7 +101,7 @@ public class LeaderboardService {
             return cohortOf(accountId, resolved)
                     .flatMap(cohort -> checkStatementExists(statementId)
                             .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
-                                    statementId, window)
+                                    cohort.institutionId(), statementId, window)
                                     .flatMap(ranked -> windowAround(
                                             accountId, ranked, resolved, cohort.id(),
                                             statementId, window))));
@@ -122,15 +117,28 @@ public class LeaderboardService {
      */
     private Mono<Cohort> cohortOf(Long accountId, Scope scope) {
         return seats.activeSeatsOf(accountId)
-                .filter(seat -> scope != Scope.SCHOOL || seat.institutionId() != null)
+                // A school is what a ranking is isolated by, and a friends ranking is
+                // isolated too: school_year_id is global — one row serves every school —
+                // so a seat with no institution is not enough to rank against.
+                .filter(seat -> scope == Scope.CLASS || seat.institutionId() != null)
                 .next()
+                // A school is what a ranking is isolated by, and a friends ranking is
+                // isolated too: school_year_id is global — one row serves every school —
+                // so a seat with no institution is not enough to rank against.
+                .filter(seat -> scope == Scope.CLASS || seat.institutionId() != null)
                 .switchIfEmpty(Mono.error(ApiException.forbidden(switch (scope) {
                     case CLASS -> "A class ranking needs an active enrollment in a class";
                     case SCHOOL -> "A school ranking needs an active enrollment in a school";
+                    case FRIENDS -> "The friends ranking needs an active enrollment in a school";
                 })))
                 .map(seat -> new Cohort(
-                        scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
-                        seat.schoolYearId()));
+                        // Friends are not a group: the "group id" the repository wants is
+                        // the caller's own account, because a friendship is a pair of ids
+                        // and not a column on enrollments.
+                        scope == Scope.FRIENDS ? accountId
+                                : scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
+                        seat.schoolYearId(),
+                        seat.institutionId()));
     }
 
     /**
@@ -156,7 +164,8 @@ public class LeaderboardService {
      * it — and not the response — is what gets cached.
      */
     private Mono<Ranking> ranking(
-            Scope scope, Long groupId, Long schoolYearId, Long statementId, Period period) {
+            Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
+            Period period) {
         CacheKey key = new CacheKey(scope, groupId, schoolYearId, statementId, period);
 
         Entry running = cache.get(key);
@@ -165,10 +174,10 @@ public class LeaderboardService {
         }
 
         Mono<Ranking> computed = Mono.defer(() -> Mono.zip(
-                        repository.findAverages(scope, groupId, schoolYearId, statementId,
-                                period.from(), period.to())
+                        repository.findAverages(scope, groupId, schoolYearId,
+                                institutionId, statementId, period.from(), period.to())
                                 .collectList(),
-                        repository.countMembers(scope, groupId, schoolYearId))
+                        repository.countMembers(scope, groupId, schoolYearId, institutionId))
                         .map(tuples -> rank(tuples.getT1(), tuples.getT2())));
 
         prune();
@@ -242,7 +251,15 @@ public class LeaderboardService {
         List<Ranked> ranked = ranking.ranked();
         // Both numbers matter. Too few enrolled, or too few with a score to rank, and the
         // table is short enough that naming its bottom says something about real people.
-        boolean smallGroup = Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
+        //
+        // Friends are the exception, and the acceptance criterion of issue #121 is the
+        // reason: "two students become friends and appear in each other's ranking" cannot
+        // hold if the floor hides every row of a two-person table. The floor exists because
+        // a student is ranked beside people they were placed with, and the teacher can see
+        // the table. A friend was asked and answered — that is the consent the floor was
+        // standing in for, and here it has actually been given.
+        boolean smallGroup = scope != Scope.FRIENDS
+                && Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
 
         int mine = -1;
         for (int i = 0; i < ranked.size(); i++) {
@@ -350,7 +367,7 @@ public class LeaderboardService {
      * papers have to be from the same school year, or the average belongs to another
      * cohort altogether.</p>
      */
-    record Cohort(Long id, Long schoolYearId) { }
+    record Cohort(Long id, Long schoolYearId, Long institutionId) { }
 
     /** The time window a ranking covers. */
     enum Period {

@@ -78,6 +78,15 @@ class AnalyticsPostgresTest {
                 "DELETE FROM teaching_assignments WHERE teacher_id BETWEEN 920000 AND 929999",
                 "DELETE FROM teachers WHERE id BETWEEN 920000 AND 929999",
                 "DELETE FROM account_roles WHERE account_id BETWEEN 920000 AND 929999",
+                // users before accounts, and present at all: users.account_id is a
+                // foreign key on accounts, so a suite that seeds users and forgets to
+                // delete them fails on every run after the first — which is why this
+                // only ever showed up against a database that was not fresh.
+                "DELETE FROM users WHERE id BETWEEN 920000 AND 929999",
+                // friendships points at accounts from both ends; a suite that cleans
+                // accounts without this fails on whoever seeded a friendship last.
+                "DELETE FROM friendships WHERE account_low BETWEEN 920000 AND 929999"
+                        + " OR account_high BETWEEN 920000 AND 929999",
                 "DELETE FROM accounts WHERE id BETWEEN 920000 AND 929999",
                 "DELETE FROM classes WHERE id BETWEEN 920000 AND 929999",
                 "DELETE FROM courses WHERE id BETWEEN 920000 AND 929999",

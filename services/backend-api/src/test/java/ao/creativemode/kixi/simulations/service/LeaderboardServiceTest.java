@@ -41,6 +41,7 @@ class LeaderboardServiceTest {
 
     private static final Long ACCOUNT_ID = 12L;
     private static final Long CLASS_ID = 7L;
+    private static final Long FRIEND_ID = 34L;
     private static final Long SCHOOL_ID = 1L;
     private static final Long OTHER_SCHOOL_ID = 2L;
     private static final Long YEAR = 1L;
@@ -88,7 +89,7 @@ class LeaderboardServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR);
+        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR, SCHOOL_ID);
     }
 
     @Test
@@ -99,7 +100,7 @@ class LeaderboardServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR);
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR, SCHOOL_ID);
     }
 
     @Test
@@ -110,8 +111,8 @@ class LeaderboardServiceTest {
 
         // The year travels into both queries and into the cache key. Without it a student
         // who moved keeps their old row ACTIVE and goes on being ranked where they left.
-        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR);
-        verify(repository).findAverages(eq(Scope.CLASS), eq(CLASS_ID), eq(YEAR),
+        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR, SCHOOL_ID);
+        verify(repository).findAverages(eq(Scope.CLASS), eq(CLASS_ID), eq(YEAR), eq(SCHOOL_ID),
                 nullable(Long.class), nullable(LocalDateTime.class), nullable(LocalDateTime.class));
     }
 
@@ -136,7 +137,7 @@ class LeaderboardServiceTest {
                 })
                 .verify();
 
-        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -162,7 +163,7 @@ class LeaderboardServiceTest {
 
         one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
 
-        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID, YEAR);
+        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID, YEAR, OTHER_SCHOOL_ID);
     }
 
     private static final Long OTHER_CLASS = 9L;
@@ -389,7 +390,7 @@ class LeaderboardServiceTest {
         LeaderboardResponse theirs = one(service.leaderboard(30L, "class", null, "all"));
 
         // One read of the cohort...
-        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
         // ...but two different neighbourhoods.
         assertThat(mine.myPosition()).isEqualTo(15);
         assertThat(theirs.myPosition()).isEqualTo(30);
@@ -407,9 +408,9 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
         one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
 
-        verify(repository).countMembers(Scope.CLASS, SCHOOL_ID, YEAR);
-        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR);
-        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository).countMembers(Scope.CLASS, SCHOOL_ID, YEAR, SCHOOL_ID);
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR, SCHOOL_ID);
+        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -421,7 +422,7 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
 
         // Two years, two rankings: last year's average is not this year's result.
-        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -433,14 +434,14 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
         one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month"));
 
-        verify(repository, times(4)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(4)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void aDatabaseBlipIsNotRememberedForTheWholeCohort() {
-        when(repository.findAverages(any(), any(), any(), any(), any(), any()))
+        when(repository.findAverages(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.error(new IllegalStateException("connection reset")));
-        when(repository.countMembers(any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(1L));
 
         for (int attempt = 0; attempt < 3; attempt++) {
             StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
@@ -450,7 +451,7 @@ class LeaderboardServiceTest {
 
         // cache() holds the error as well as the value. If the key survived, one reset of
         // the connection would answer this class with the same failure for 45 seconds.
-        verify(repository, times(3)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(3)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -471,12 +472,66 @@ class LeaderboardServiceTest {
     // ── The parts not built yet ─────────────────────────────────────────────
 
     @Test
-    void theFriendsScopeIsNotFoundUntilFriendshipsExist() {
+    void theFriendsScopeRanksTheFriendsOfTheCaller() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.scope()).isEqualTo("friends");
+        assertThat(response.entries()).hasSize(2);
+        // The group id handed to the repository is the caller's own account: a friendship
+        // is a pair of ids, and there is no column on enrollments that could carry it.
+        verify(repository).findAverages(
+                eq(Scope.FRIENDS), eq(ACCOUNT_ID), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * A group of two friends is still readable.
+     *
+     * <p>The small-group floor would hide every row of a two-person table, and the
+     * acceptance criterion of issue #121 is that the two of them appear to each other.
+     * Mutual consent is what the floor was standing in for, and here it was given.</p>
+     */
+    @Test
+    void twoFriendsStillSeeEachOther() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.entries()).hasSize(2);
+        assertThat(response.entries()).anySatisfy(row -> {
+            assertThat(row.position()).isEqualTo(2);
+            assertThat(row.displayName()).isNotBlank();
+        });
+    }
+
+    /**
+     * The floor still applies to a class of the same size.
+     *
+     * <p>The exception is for friends, not for small tables: a class of two is the case
+     * the rule was written for.</p>
+     */
+    @Test
+    void theSmallGroupFloorStillAppliesToAClass() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.entries()).noneSatisfy(row ->
+                assertThat(row.position()).isEqualTo(2));
+    }
+
+    /** A student with no seat has no school year, and friends are counted over it. */
+    @Test
+    void theFriendsScopeNeedsAnActiveEnrollment() {
+        noSeat();
+
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "friends", null, "all"))
-                .expectErrorSatisfies(error -> {
-                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                    assertThat(error).hasMessageContaining("#121");
-                })
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
     }
 
@@ -521,15 +576,15 @@ class LeaderboardServiceTest {
 
         // Nothing was ranked, so nothing was cached and no averages were computed.
         verify(repository, never()).findAverages(
-                any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any());
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private void cohortOf(List<GroupScore> scores, long totalStudents) {
-        when(repository.findAverages(any(), any(), any(), any(), any(), any()))
+        when(repository.findAverages(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.fromIterable(scores));
-        when(repository.countMembers(any(), any(), any())).thenReturn(Mono.just(totalStudents));
+        when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(totalStudents));
         when(repository.findDisplayNames(any())).thenAnswer(call -> {
             Collection<Long> accounts = call.getArgument(0);
             if (accounts == null) {
