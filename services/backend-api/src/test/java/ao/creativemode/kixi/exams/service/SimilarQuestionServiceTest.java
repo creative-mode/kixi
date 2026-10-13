@@ -3,7 +3,6 @@ package ao.creativemode.kixi.exams.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyIterable;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -48,7 +47,8 @@ class SimilarQuestionServiceTest {
         service = new SimilarQuestionService(questions, options, statements, meService);
         when(meService.getMe(ACCOUNT)).thenReturn(Mono.just(meWithSchool(SCHOOL)));
         when(options.findAllByQuestionIdInAndDeletedAtIsNull(anyCollection())).thenReturn(Flux.empty());
-        when(statements.findAllById(anyIterable())).thenReturn(Flux.just(statement(8L, "Exame de 2023")));
+        when(statements.findAllByIdInAndVisibleTrueAndDeletedAtIsNullAndNeedsReviewFalse(anyCollection()))
+                .thenReturn(Flux.just(statement(8L, "Exame de 2023")));
     }
 
     @Test
@@ -123,6 +123,25 @@ class SimilarQuestionServiceTest {
         assertThat(found.choices()).extracting(SimilarQuestionService.Choice::label).containsExactly("A", "B");
         assertThat(SimilarQuestionService.Choice.class.getRecordComponents())
                 .extracting(component -> component.getName()).containsExactly("label", "text");
+    }
+
+    /**
+     * The title read is gated the same way the candidates already were (issue #218): a
+     * plain {@code findAllById} carries none of {@code findCatalogCandidates}'s filters,
+     * so a statement unpublished or deleted between the two reads would still arrive
+     * with a title. Asserting the method called, not just the outcome, is the point —
+     * a mock that returned the same row either way would hide the regression.
+     */
+    @Test
+    void theStatementTitleIsReadUnderTheSameVisibilityGateAsTheCandidates() {
+        when(questions.findCatalogCandidates(anyLong(), anyLong(), anyLong(), anyInt()))
+                .thenReturn(Flux.just(question(72L, 8L, "Quanto é 3+3?", "multiple_choice")));
+
+        service.similarTo(ACCOUNT, statement(7L, "Exame"),
+                question(41L, 7L, "Quanto é 2+2?", "multiple_choice"), 3).block();
+
+        verify(statements).findAllByIdInAndVisibleTrueAndDeletedAtIsNullAndNeedsReviewFalse(List.of(8L));
+        verify(statements, never()).findAllById(org.mockito.ArgumentMatchers.<Iterable<Long>>any());
     }
 
     @Test
