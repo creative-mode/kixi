@@ -255,6 +255,65 @@ nos resultados; uma tentativa de sala só se partilha depois de a sala fechar.
 
 ---
 
+## Fluxo 8 — Ranking relativo
+
+O aluno compara-se com a turma, com a escola, com os amigos ou com alunos de
+outras instituições. O cohort nunca vem na query: é resolvido a partir da
+matrícula ativa de quem pergunta, pelo que nenhuma combinação de parâmetros
+alcança o grupo de outra pessoa.
+
+```bash
+# A turma de quem pergunta (scope por omissão: class)
+curl -s "$HOST/api/v1/leaderboard?scope=class&period=month" \
+  -H "Authorization: Bearer $TOKEN"
+
+# A escola de quem pergunta
+curl -s "$HOST/api/v1/leaderboard?scope=school" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Os amigos aceite de quem pergunta
+curl -s "$HOST/api/v1/leaderboard?scope=friends" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Autorizar (ou revogar) a comparação com outras instituições
+curl -s -X PUT $HOST/api/v1/leaderboard/consent \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"crossInstitution":true}'
+
+# Só depois de autorizado, e com matrícula ativa numa escola
+curl -s "$HOST/api/v1/leaderboard?scope=global" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`period` é `all` (por omissão) ou `month`; `statementId` opcional isola um
+enunciado. A resposta traz a posição e a média de quem pergunta, mais os vizinhos
+imediatos e — em grupos com dez ou mais — o pódio. Um colega nunca leva o
+`accountId`: um id estável numa resposta que existe para esconder quem é alguém
+é um identificador à espera de ser cruzado com as rotas que nomeam pessoas.
+
+`scope=global` é opt-in e responde `403` sem consentimento — uma tabela vazia
+não distingue "recusei" de "ninguém fez nada", e um cliente que não distingue as
+duas não consegue oferecer a opção que resolve. As quatro decisões de produto e
+privacidade estão em [ADR-0013](../../adr/ADR-0013-cross-institution-leaderboard.md):
+
+- **Consentimento.** Só entra quem consentiu, e a ausência de resposta conta como
+  "não". `class`, `school` e `friends` publicam para pares e não são condicionados.
+- **Percentil, não percentagem.** A ordenação é o `CUME_DIST` de cada aluno dentro
+  da sua escola (0–100). A percentagem bruta desempata e é devolvida, mas não
+  decide: provas e curvaturas diferentes não são a mesma escala.
+- **Sem nomes.** Em `global` um par é `"Aluno de outra escola"` — os nomes nem
+  chegam a ser lidos da base de dados. A resposta não traz escola, turma nem ano
+  de mais ninguém, e `groupId` é `null` porque não há grupo por trás.
+- **Escolas pequenas não entram.** Uma instituição só contribui com dez ou mais
+  alunos consentidos com nota no ano letivo; abaixo disso é descartada inteira.
+  Uma escola de três seria identificável por eliminação.
+
+`institutionsCounted` diz de quantas escolas veio a comparação — é o que torna
+uma tabela anónima legível em vez de sinistra.
+
+---
+
 ## Notas de manutenção
 
 - Os caminhos reais de cada operação estão em `/v3/api-docs`; esta página segue os

@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -15,6 +16,7 @@ import static org.mockito.Mockito.when;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.DisplayName;
@@ -27,6 +29,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +44,7 @@ class LeaderboardServiceTest {
 
     private static final Long ACCOUNT_ID = 12L;
     private static final Long CLASS_ID = 7L;
+    private static final Long FRIEND_ID = 34L;
     private static final Long SCHOOL_ID = 1L;
     private static final Long OTHER_SCHOOL_ID = 2L;
     private static final Long YEAR = 1L;
@@ -60,6 +64,20 @@ class LeaderboardServiceTest {
         // not stub this gets a null back and a NullPointerException that says nothing
         // about what it was testing.
         when(repository.statementExists(anyLong())).thenReturn(Mono.just(true));
+
+        // Likewise the consent behind scope=global, stubbed here rather than in another
+        // @BeforeEach because the order two of those run in is not the order they are
+        // written in, and a stub that lands before the mocks is a null repository.
+        consented();
+    }
+
+    /** The caller agreed to be ranked across institutions, unless a test takes it away. */
+    private void consented() {
+        when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(true));
+    }
+
+    private void noConsent() {
+        when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(false));
     }
 
     /** Every account in these tests holds a seat, unless a test takes it away. */
@@ -88,7 +106,7 @@ class LeaderboardServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR);
+        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR, SCHOOL_ID);
     }
 
     @Test
@@ -99,7 +117,7 @@ class LeaderboardServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR);
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR, SCHOOL_ID);
     }
 
     @Test
@@ -110,8 +128,8 @@ class LeaderboardServiceTest {
 
         // The year travels into both queries and into the cache key. Without it a student
         // who moved keeps their old row ACTIVE and goes on being ranked where they left.
-        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR);
-        verify(repository).findAverages(eq(Scope.CLASS), eq(CLASS_ID), eq(YEAR),
+        verify(repository).countMembers(Scope.CLASS, CLASS_ID, YEAR, SCHOOL_ID);
+        verify(repository).findAverages(eq(Scope.CLASS), eq(CLASS_ID), eq(YEAR), eq(SCHOOL_ID),
                 nullable(Long.class), nullable(LocalDateTime.class), nullable(LocalDateTime.class));
     }
 
@@ -136,7 +154,7 @@ class LeaderboardServiceTest {
                 })
                 .verify();
 
-        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -162,7 +180,7 @@ class LeaderboardServiceTest {
 
         one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
 
-        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID, YEAR);
+        verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID, YEAR, OTHER_SCHOOL_ID);
     }
 
     private static final Long OTHER_CLASS = 9L;
@@ -271,11 +289,13 @@ class LeaderboardServiceTest {
             rows.add(mapper.convertValue(row, Map.class));
         }
         assertThat(rows).isNotEmpty();
-        // A position, a masked label and an average. Nothing else: no account id, no
-        // email, no username, no photo, no school of their own.
+        // A position, a masked label, an average and a percentile — which is null outside
+        // scope=global. Nothing else: no account id, no email, no username, no photo, no
+        // school of their own.
         assertThat(rows).allSatisfy(row ->
                 assertThat(row.keySet())
-                        .containsExactlyInAnyOrder("position", "accountId", "displayName", "average", "me"));
+                        .containsExactlyInAnyOrder(
+                                "position", "accountId", "displayName", "average", "percentile", "me"));
         assertThat(rows).filteredOn(row -> row.get("accountId") != null)
                 .singleElement()
                 .satisfies(row -> assertThat(row.get("me")).isEqualTo(true));
@@ -389,7 +409,7 @@ class LeaderboardServiceTest {
         LeaderboardResponse theirs = one(service.leaderboard(30L, "class", null, "all"));
 
         // One read of the cohort...
-        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
         // ...but two different neighbourhoods.
         assertThat(mine.myPosition()).isEqualTo(15);
         assertThat(theirs.myPosition()).isEqualTo(30);
@@ -407,9 +427,9 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
         one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
 
-        verify(repository).countMembers(Scope.CLASS, SCHOOL_ID, YEAR);
-        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR);
-        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository).countMembers(Scope.CLASS, SCHOOL_ID, YEAR, SCHOOL_ID);
+        verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR, SCHOOL_ID);
+        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -421,7 +441,7 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
 
         // Two years, two rankings: last year's average is not this year's result.
-        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -433,14 +453,14 @@ class LeaderboardServiceTest {
         one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
         one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month"));
 
-        verify(repository, times(4)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(4)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void aDatabaseBlipIsNotRememberedForTheWholeCohort() {
-        when(repository.findAverages(any(), any(), any(), any(), any(), any()))
+        when(repository.findAverages(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.error(new IllegalStateException("connection reset")));
-        when(repository.countMembers(any(), any(), any())).thenReturn(Mono.just(1L));
+        when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(1L));
 
         for (int attempt = 0; attempt < 3; attempt++) {
             StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
@@ -450,7 +470,7 @@ class LeaderboardServiceTest {
 
         // cache() holds the error as well as the value. If the key survived, one reset of
         // the connection would answer this class with the same failure for 45 seconds.
-        verify(repository, times(3)).findAverages(any(), any(), any(), any(), any(), any());
+        verify(repository, times(3)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -471,12 +491,66 @@ class LeaderboardServiceTest {
     // ── The parts not built yet ─────────────────────────────────────────────
 
     @Test
-    void theFriendsScopeIsNotFoundUntilFriendshipsExist() {
+    void theFriendsScopeRanksTheFriendsOfTheCaller() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.scope()).isEqualTo("friends");
+        assertThat(response.entries()).hasSize(2);
+        // The group id handed to the repository is the caller's own account: a friendship
+        // is a pair of ids, and there is no column on enrollments that could carry it.
+        verify(repository).findAverages(
+                eq(Scope.FRIENDS), eq(ACCOUNT_ID), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * A group of two friends is still readable.
+     *
+     * <p>The small-group floor would hide every row of a two-person table, and the
+     * acceptance criterion of issue #121 is that the two of them appear to each other.
+     * Mutual consent is what the floor was standing in for, and here it was given.</p>
+     */
+    @Test
+    void twoFriendsStillSeeEachOther() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+
+        assertThat(response.entries()).hasSize(2);
+        assertThat(response.entries()).anySatisfy(row -> {
+            assertThat(row.position()).isEqualTo(2);
+            assertThat(row.displayName()).isNotBlank();
+        });
+    }
+
+    /**
+     * The floor still applies to a class of the same size.
+     *
+     * <p>The exception is for friends, not for small tables: a class of two is the case
+     * the rule was written for.</p>
+     */
+    @Test
+    void theSmallGroupFloorStillAppliesToAClass() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.entries()).noneSatisfy(row ->
+                assertThat(row.position()).isEqualTo(2));
+    }
+
+    /** A student with no seat has no school year, and friends are counted over it. */
+    @Test
+    void theFriendsScopeNeedsAnActiveEnrollment() {
+        noSeat();
+
         StepVerifier.create(service.leaderboard(ACCOUNT_ID, "friends", null, "all"))
-                .expectErrorSatisfies(error -> {
-                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                    assertThat(error).hasMessageContaining("#121");
-                })
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
     }
 
@@ -521,15 +595,333 @@ class LeaderboardServiceTest {
 
         // Nothing was ranked, so nothing was cached and no averages were computed.
         verify(repository, never()).findAverages(
-                any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ── Across institutions (issue #189, ADR-0013) ────────────────────────
+
+    /** n students at one school, evenly spread across the percentiles 100..100/n. */
+    private static List<GroupScore> oneSchool(int first, int count, long institutionId) {
+        List<GroupScore> scores = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            scores.add(globalScore((long) first + i, institutionId,
+                    100.0 - i, 100.0 * (count - i) / count));
+        }
+        return scores;
+    }
+
+    /** Puts the caller in the given place, keeping the school and percentile they had. */
+    private static List<GroupScore> withCallerAt(List<GroupScore> scores, int index) {
+        GroupScore there = scores.get(index);
+        scores.set(index, globalScore(ACCOUNT_ID, there.institutionId(),
+                there.average(), there.percentile()));
+        return scores;
+    }
+
+    /**
+     * A cohort big enough to have a podium, split over two schools with distinct
+     * percentiles so nothing is tied and the positions run 1..total.
+     */
+    private static List<GroupScore> twoSchools(int total) {
+        List<GroupScore> scores = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            boolean own = i % 2 == 0;
+            scores.add(globalScore((long) (own ? 300 : 200) + i / 2,
+                    own ? SCHOOL_ID : OTHER_SCHOOL_ID,
+                    90.0 - i, 100.0 * (total - i) / total));
+        }
+        return scores;
+    }
+
+    @Test
+    void ranksTheCallerAgainstStudentsFromOtherSchools() {
+        List<GroupScore> scores = new ArrayList<>(oneSchool(200, 10, OTHER_SCHOOL_ID));
+        // Above the second school's second student, and behind its first.
+        scores.add(globalScore(ACCOUNT_ID, SCHOOL_ID, 95.0, 95.0));
+        globalCohortOf(scores, 21);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.scope()).isEqualTo("global");
+        assertThat(response.myPosition()).isEqualTo(2);
+        assertThat(response.myPercentile()).isEqualTo(95.0);
+        // 21 students from 2 schools: there is a podium to publish.
+        assertThat(positions(response)).containsExactly(1, 2, 3, 4, 5);
+    }
+
+    /**
+     * The ranking is a percentile, and the percentage would have decided it the other way.
+     *
+     * <p>A student at the bottom of a strong school and the caller near the bottom of a
+     * weak one. Ordered by percentage the caller is comfortably first; ordered by
+     * percentile they are last. This is the whole of decision 2 — 80% on an easy paper
+     * and 80% on a hard paper are different results, and two schools' exam curves are not
+     * the same scale.</p>
+     */
+    @Test
+    void ranksOnThePercentileAndNotOnTheRawPercentage() {
+        globalCohortOf(List.of(
+                // Last of a very strong school: 10% average, but 95th percentile in it.
+                globalScore(201L, OTHER_SCHOOL_ID, 10.0, 95.0),
+                // The caller: 90% average, and only 30th percentile in their own.
+                globalScore(ACCOUNT_ID, SCHOOL_ID, 90.0, 30.0)), 21);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(2);
+        assertThat(response.myAverage()).isEqualTo(90.0);
+        assertThat(response.myPercentile()).isEqualTo(30.0);
+    }
+
+    @Test
+    void tiesOnPercentileShareAPositionAndThePercentageOnlyBreaksThem() {
+        // Two students at percentile 100, having averaged 99 and 90. They share first
+        // place, and the raw percentage decided which of the two is listed first.
+        globalCohortOf(List.of(
+                globalScore(201L, OTHER_SCHOOL_ID, 99.0, 100.0),
+                globalScore(202L, OTHER_SCHOOL_ID, 90.0, 100.0),
+                globalScore(ACCOUNT_ID, SCHOOL_ID, 50.0, 50.0)), 21);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.myPosition()).isEqualTo(3);
+        assertThat(positions(response)).containsExactly(1, 1, 3);
+    }
+
+    @Test
+    void aStudentWhoNeverOptedInIsNotRankedAtAll() {
+        noConsent();
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(error).hasMessageContaining("consent");
+                })
+                .verify();
+
+        // Nothing was asked of the database: no ranking was computed and none was cached.
+        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** An empty table cannot say "you declined" apart from "nobody sat anything". */
+    @Test
+    void withoutConsentTheAnswerIsRefusedRatherThanEmpty() {
+        noConsent();
+
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "global", null, "all")))
+                .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void theOtherScopesDoNotAskForConsent() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+
+        // class and school publish to peers, and were never gated. A consent check that
+        // crept in would refuse every ranking the platform already served.
+        verify(repository, never()).consentedToCrossInstitution(anyLong());
+    }
+
+    @Test
+    void theGlobalScopeNeedsAnActiveSeatInASchool() {
+        noSeat();
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all"))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+    }
+
+    /**
+     * There is no group behind this ranking, so no school is echoed back.
+     *
+     * <p>{@code groupId} is the one field that could name a school. Out here it names
+     * every school, which is no school at all, so it is null.</p>
+     */
+    @Test
+    void theGlobalScopeCarriesNoGroupId() {
+        globalCohortOf(withCaller(oneSchool(200, 10, OTHER_SCHOOL_ID), 4), 11);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.groupId()).isNull();
+    }
+
+    @Test
+    void tellsTheReaderWhichSchoolsTheComparisonCameFrom() {
+        List<GroupScore> scores = new ArrayList<>(oneSchool(200, 10, OTHER_SCHOOL_ID));
+        scores.add(globalScore(ACCOUNT_ID, SCHOOL_ID, 75.0, 75.0));
+        globalCohortOf(scores, 21);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.institutionsCounted()).isEqualTo(2);
+        assertThat(response.totalStudents()).isEqualTo(21);
+        assertThat(response.rankedStudents()).isEqualTo(11);
+    }
+
+    @Test
+    void theOtherScopesReportNoCrossInstitutionProvenance() {
+        cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
+
+        assertThat(one(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+                .institutionsCounted()).isZero();
+    }
+
+    /**
+     * A masked name plus a school is a person.
+     *
+     * <p>A first name and an initial was enough for classmates, who could see the class
+     * anyway. Across institutions it is not, so the peer's name is not read at all — and
+     * this is what proves it, because the repository is only ever asked for the caller.</p>
+     */
+    @Test
+    void aPeerAcrossInstitutionsIsALabelAndTheirNameIsNeverRead() {
+        globalCohortOf(withCaller(oneSchool(200, 10, OTHER_SCHOOL_ID), 4), 11);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.entries())
+                .filteredOn(entry -> !entry.me())
+                .isNotEmpty()
+                .allSatisfy(entry -> {
+                    assertThat(entry.displayName()).isEqualTo("Aluno de outra escola");
+                    assertThat(entry.accountId()).isNull();
+                });
+        assertThat(response.entries())
+                .filteredOn(entry -> entry.me())
+                .singleElement()
+                .satisfies(entry -> assertThat(entry.accountId()).isEqualTo(ACCOUNT_ID));
+
+        // The only id the repository was asked to name.
+        @SuppressWarnings("unchecked")
+        java.util.Collection<Long> asked = (java.util.Collection<Long>)
+                org.mockito.Mockito.mockingDetails(repository).getInvocations().stream()
+                        .filter(invocation -> invocation.getMethod().getName().equals("findDisplayNames"))
+                        .map(invocation -> invocation.getArgument(0))
+                        .findFirst().orElseThrow();
+        assertThat(asked).containsExactly(ACCOUNT_ID);
+    }
+
+    /**
+     * Nothing in the response points at anybody's school.
+     *
+     * <p>Position, label, average, percentile. School + class + school year identifies a
+     * person in a population this size without any of the three, so none of them is in
+     * here. Asserting on field <em>names</em> rather than on values is what makes this
+     * hold: a school id is a small number and appears all over a ranking by coincidence,
+     * so a value check would either pass vacuously or fail on the podium.</p>
+     */
+    @Test
+    void aGlobalRankingCarriesNoTraceOfAPeersSchool() throws Exception {
+        globalCohortOf(withCallerAt(oneSchool(200, 10, OTHER_SCHOOL_ID), 4), 11);
+
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode json = mapper.readTree(mapper.writeValueAsString(
+                one(service.leaderboard(ACCOUNT_ID, "global", null, "all"))));
+
+        // The exact field set, at both levels. A school, a class or a school year added
+        // to either would be new fields, and this is the test that fails the day one is.
+        assertThat(fieldNames(json)).containsExactlyInAnyOrder(
+                "scope", "groupId", "statementId", "period", "totalStudents",
+                "rankedStudents", "institutionsCounted", "smallGroup",
+                "myPosition", "myAverage", "myPercentile", "entries");
+        assertThat(json.get("groupId").isNull())
+                .as("there is no group behind a cross-institution ranking")
+                .isTrue();
+        for (JsonNode entry : json.get("entries")) {
+            assertThat(fieldNames(entry)).containsExactlyInAnyOrder(
+                    "position", "accountId", "displayName", "average", "percentile", "me");
+        }
+    }
+
+    private static List<String> fieldNames(JsonNode node) {
+        List<String> names = new ArrayList<>();
+        node.fieldNames().forEachRemaining(names::add);
+        return names;
+    }
+
+    @Test
+    void theSmallGroupFloorStillAppliesToACrossInstitutionRanking() {
+        // Four strangers. The k-anonymity floor lives in SQL and a database enforcing it
+        // would never return this, but the service must not publish a podium over four
+        // people it cannot name if one ever does.
+        globalCohortOf(List.of(
+                globalScore(ACCOUNT_ID, SCHOOL_ID, 90.0, 100.0),
+                globalScore(201L, SCHOOL_ID, 80.0, 80.0),
+                globalScore(202L, OTHER_SCHOOL_ID, 70.0, 60.0),
+                globalScore(203L, OTHER_SCHOOL_ID, 60.0, 20.0)), 4);
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        assertThat(response.smallGroup()).isTrue();
+        assertThat(response.myPosition()).isEqualTo(1);
+        // The caller's own place and one neighbour above them; not the bottom of the table.
+        assertThat(positions(response)).containsExactly(1, 2).doesNotContain(3, 4);
+    }
+
+    /**
+     * One table, one ranking, everybody's own window.
+     *
+     * <p>There is no group behind a cross-institution ranking, so the cache key has no id
+     * in it and every caller in the country shares one entry — which is correct, and is
+     * the reason the two requests below cost one read between them.</p>
+     */
+    @Test
+    void everyCallerSharesOneCachedGlobalRanking() {
+        List<GroupScore> scores = twoSchools(30);
+        // The caller leads the whole table; account 30 is last in it, at the other school.
+        scores.set(29, globalScore(30L, OTHER_SCHOOL_ID, 10.0, 100.0 / 30));
+        globalCohortOf(withCallerAt(scores, 0), 30);
+
+        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse theirs = one(service.leaderboard(30L, "global", null, "all"));
+
+        // One read of the cohort...
+        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
+        // ...but two different neighbourhoods out of it: the podium and the bottom.
+        assertThat(mine.myPosition()).isEqualTo(1);
+        assertThat(theirs.myPosition()).isEqualTo(30);
+        assertThat(positions(mine)).contains(1, 2, 3, 4, 5).doesNotContain(28, 29, 30);
+        assertThat(positions(theirs)).contains(28, 29, 30).doesNotContain(6);
+    }
+
+    @Test
+    void theGlobalCohortIsCountedOverTheSchoolYearLikeEveryOther() {
+        globalCohortOf(List.of(globalScore(ACCOUNT_ID, SCHOOL_ID, 90.0, 100.0)), 21);
+
+        one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+
+        verify(repository).countMembers(Scope.GLOBAL, null, YEAR, SCHOOL_ID);
+    }
+
+    /** Giving and taking back the consent, in one service so the two cannot drift apart. */
+    @Test
+    void theConsentIsWrittenAndThenReadBackAsTheServerHoldsIt() {
+        when(repository.setCrossInstitutionConsent(anyLong(), anyBoolean())).thenReturn(Mono.just(true));
+        when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(true));
+
+        assertThat(oneConsent(service.consent(ACCOUNT_ID, true)).crossInstitution()).isTrue();
+        verify(repository).setCrossInstitutionConsent(ACCOUNT_ID, true);
+    }
+
+    @Test
+    void revokingConsentIsRecordedAsARefusalRatherThanSilence() {
+        when(repository.setCrossInstitutionConsent(anyLong(), anyBoolean())).thenReturn(Mono.just(true));
+        when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(false));
+
+        assertThat(oneConsent(service.consent(ACCOUNT_ID, false)).crossInstitution()).isFalse();
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private void cohortOf(List<GroupScore> scores, long totalStudents) {
-        when(repository.findAverages(any(), any(), any(), any(), any(), any()))
+        when(repository.findAverages(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.fromIterable(scores));
-        when(repository.countMembers(any(), any(), any())).thenReturn(Mono.just(totalStudents));
+        when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(totalStudents));
         when(repository.findDisplayNames(any())).thenAnswer(call -> {
             Collection<Long> accounts = call.getArgument(0);
             if (accounts == null) {
@@ -539,6 +931,13 @@ class LeaderboardServiceTest {
                     .map(account -> new DisplayName(account, "Rita", "Neto"))
                     .toList());
         });
+    }
+
+    /** A cross-institution cohort: the caller holds a school and has consented. */
+    private void globalCohortOf(List<GroupScore> scores, long totalStudents) {
+        seatedIn(CLASS_ID, SCHOOL_ID, YEAR);
+        cohortOf(scores, totalStudents);
+        consented();
     }
 
     private long averages() {
@@ -577,10 +976,19 @@ class LeaderboardServiceTest {
     }
 
     private static GroupScore score(Long accountId, double average) {
-        return new GroupScore(accountId, average);
+        return new GroupScore(accountId, null, average, null);
+    }
+
+    /** A row from {@code scope=global}: it knows the school, and where the student is in it. */
+    private static GroupScore globalScore(Long accountId, Long institutionId, double average, double percentile) {
+        return new GroupScore(accountId, institutionId, average, percentile);
     }
 
     private static LeaderboardResponse one(Mono<LeaderboardResponse> mono) {
+        return mono.block();
+    }
+
+    private static LeaderboardConsentResponse oneConsent(Mono<LeaderboardConsentResponse> mono) {
         return mono.block();
     }
 
