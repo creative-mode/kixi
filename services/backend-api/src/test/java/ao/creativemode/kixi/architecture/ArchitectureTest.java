@@ -22,7 +22,10 @@ import org.junit.jupiter.api.Test;
  *  |- gamification (XP, streaks, badges) -&gt; shared only
  *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
  *  |- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
- *  '- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
+ *  |- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
+ *  |- analytics  (dashboard queries and scope) -&gt; shared only
+ *  '- examrooms  (live exam rooms and grading) -&gt; shared, academic, exams,
+ *                identity, institutions, simulations
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -132,6 +135,23 @@ class ArchitectureTest {
         noClasses().that().resideInAPackage("..feed..")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..", "..chat..")
+                .check(classes);
+    }
+
+    @Test
+    void analyticsOnlyDependsOnShared() {
+        noClasses().that().resideInAPackage("..analytics..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..",
+                        "..gamification..", "..ocr..", "..chat..", "..feed..", "..examrooms..")
+                .check(classes);
+    }
+
+    @Test
+    void examroomsOnlyDependsOnItsUpstreamModules() {
+        noClasses().that().resideInAPackage("..examrooms..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..analytics..", "..gamification..", "..ocr..", "..chat..", "..feed..")
                 .check(classes);
     }
 
