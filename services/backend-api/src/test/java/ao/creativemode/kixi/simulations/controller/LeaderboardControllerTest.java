@@ -155,7 +155,7 @@ class LeaderboardControllerTest {
 
     @Test
     void theCohortIsNeverAParameter() {
-        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("all")))
+        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("all"), eq("average")))
                 .thenReturn(Mono.just(ranking()));
 
         client.mutateWith(studentJwt())
@@ -167,12 +167,12 @@ class LeaderboardControllerTest {
         // A class id in the query string is not a cohort: there is no request shape that
         // reaches somebody else's group, which is the property #117 rests on.
         verify(service, never()).leaderboard(eq(42L), eq("class"),
-                eq(7L), org.mockito.ArgumentMatchers.any());
+                eq(7L), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void aCrossInstitutionRankingCarriesItsProvenanceToTheClient() {
-        when(service.leaderboard(eq(42L), eq("global"), eq(null), eq("all")))
+        when(service.leaderboard(eq(42L), eq("global"), eq(null), eq("all"), eq("average")))
                 .thenReturn(Mono.just(globalRanking()));
 
         client.mutateWith(studentJwt())
@@ -314,12 +314,12 @@ class LeaderboardControllerTest {
     }
 
     private static LeaderboardResponse ranking() {
-        return new LeaderboardResponse("class", 7L, null, "all", 12, 12, 0, false,
+        return new LeaderboardResponse("class", 7L, null, "all", "average", 12, 12, 0, false,
                 1, 90.0, null, List.of());
     }
 
     private static LeaderboardResponse globalRanking() {
-        return new LeaderboardResponse("global", null, null, "all", 21, 11, 2, false,
+        return new LeaderboardResponse("global", null, null, "all", "average", 21, 11, 2, false,
                 1, 75.0, 75.0, List.of());
     }
 

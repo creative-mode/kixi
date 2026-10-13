@@ -110,7 +110,7 @@ class LeaderboardServiceTest {
     void ranksTheClassTheCallerIsSeatedIn() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -121,7 +121,7 @@ class LeaderboardServiceTest {
     void ranksTheSchoolTheCallerIsSeatedIn() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -132,7 +132,7 @@ class LeaderboardServiceTest {
     void theCohortIsCountedOverTheSchoolYearAndNotOverAllOfThem() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         // The year travels into both queries and into the cache key. Without it a student
         // who moved keeps their old row ACTIVE and goes on being ranked where they left.
@@ -146,7 +146,7 @@ class LeaderboardServiceTest {
         seatedIn(CLASS_ID, null, YEAR);
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"))
                 .expectNextCount(1)
                 .verifyComplete();
     }
@@ -155,7 +155,7 @@ class LeaderboardServiceTest {
     void refusesAClassRankingWithNoSeat() {
         noSeat();
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"))
                 .expectErrorSatisfies(error -> {
                     assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
                     assertThat(error).hasMessageContaining("active enrollment");
@@ -171,7 +171,7 @@ class LeaderboardServiceTest {
         seatedIn(CLASS_ID, null, YEAR);
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.FORBIDDEN))
                 .verify();
@@ -186,7 +186,7 @@ class LeaderboardServiceTest {
                 new Seat(CLASS_ID, YEAR, SCHOOL_ID)));
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"));
 
         verify(repository).countMembers(Scope.SCHOOL, OTHER_SCHOOL_ID, YEAR, OTHER_SCHOOL_ID);
     }
@@ -199,7 +199,7 @@ class LeaderboardServiceTest {
     void doesNotPublishTheBottomOfAClassWithFewerThanTenStudents() {
         cohortOf(withCaller(descending(8), 0), 8);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.smallGroup()).isTrue();
         assertThat(response.totalStudents()).isEqualTo(8);
@@ -212,7 +212,7 @@ class LeaderboardServiceTest {
     void aSmallClassNamesNobodyWhenTheCallerHasNoScore() {
         cohortOf(descending(8), 8);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isNull();
         assertThat(response.entries()).isEmpty();
@@ -222,7 +222,7 @@ class LeaderboardServiceTest {
     void aSmallClassNeverShowsItsLastPlacesToSomebodyNearTheBottom() {
         cohortOf(withCaller(descending(8), 5), 8); // sixth of eight
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(6);
         assertThat(positions(response)).containsExactly(4, 5, 6);
@@ -233,7 +233,7 @@ class LeaderboardServiceTest {
     void theCallerStillSeesTheirOwnPlaceAtTheBottomOfASmallClass() {
         cohortOf(withCaller(descending(8), 7), 8);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(8);
         assertThat(response.entries())
@@ -251,7 +251,7 @@ class LeaderboardServiceTest {
     void theProtectionFollowsTheRowsThatHaveAScoreNotTheEnrolmentCount() {
         cohortOf(withCaller(fiveOfEight(), 2), 8); // third of five marked
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.smallGroup()).isTrue();
         assertThat(response.totalStudents()).isEqualTo(8);
@@ -266,7 +266,7 @@ class LeaderboardServiceTest {
     void aClassWithFewMarkedButManyEnrolledCountsAsSmall() {
         cohortOf(withCaller(fiveOfTwelve(), 2), 12);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.smallGroup()).isTrue();
         assertThat(positions(response)).containsExactly(1, 2, 3);
@@ -276,7 +276,7 @@ class LeaderboardServiceTest {
     void doesNotHandOutTheAccountIdOfAColleague() {
         cohortOf(withCaller(descending(12), 4), 12);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.entries())
                 .filteredOn(entry -> !entry.me())
@@ -290,7 +290,7 @@ class LeaderboardServiceTest {
 
         ObjectMapper mapper = new ObjectMapper();
         String json = mapper.writeValueAsString(
-                one(service.leaderboard(ACCOUNT_ID, "class", null, "all")));
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average")));
 
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Object row : mapper.readTree(json).path("entries")) {
@@ -303,7 +303,8 @@ class LeaderboardServiceTest {
         assertThat(rows).allSatisfy(row ->
                 assertThat(row.keySet())
                         .containsExactlyInAnyOrder(
-                                "position", "accountId", "displayName", "average", "percentile", "me"));
+                                "position", "accountId", "displayName", "average", "percentile",
+                                "xp", "me"));
         assertThat(rows).filteredOn(row -> row.get("accountId") != null)
                 .singleElement()
                 .satisfies(row -> assertThat(row.get("me")).isEqualTo(true));
@@ -315,7 +316,7 @@ class LeaderboardServiceTest {
     void nineStudentsIsStillASmallGroupAndGetsNoPodium() {
         cohortOf(descending(9), 9);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.smallGroup()).isTrue();
         assertThat(response.entries()).isEmpty();
@@ -325,7 +326,7 @@ class LeaderboardServiceTest {
     void exactlyTenStudentsGetsThePodium() {
         cohortOf(descending(10), 10);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.smallGroup()).isFalse();
         assertThat(positions(response)).containsExactly(1, 2, 3, 4, 5);
@@ -335,7 +336,7 @@ class LeaderboardServiceTest {
     void tenStudentsIsBigEnoughThatTheBottomIsNotProtected() {
         cohortOf(withCaller(descending(10), 8), 10); // ninth of ten
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(9);
         assertThat(positions(response)).contains(8, 9, 10);
@@ -345,7 +346,7 @@ class LeaderboardServiceTest {
     void aLargeClassIsNotCutOffAtTheBottom() {
         cohortOf(withCaller(descending(30), 28), 30);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(29);
         assertThat(positions(response)).contains(28, 29, 30);
@@ -355,7 +356,7 @@ class LeaderboardServiceTest {
     void publishesThePodiumOnceTheGroupHasTenStudents() {
         cohortOf(descending(12), 12);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(positions(response)).containsExactly(1, 2, 3, 4, 5);
     }
@@ -364,7 +365,7 @@ class LeaderboardServiceTest {
     void givesTheCallerTheirNeighboursPlusThePodiumInALargeGroup() {
         cohortOf(withCaller(descending(30), 14), 30); // fifteenth
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(15);
         assertThat(positions(response)).containsExactly(1, 2, 3, 4, 5, 13, 14, 15, 16, 17);
@@ -381,7 +382,7 @@ class LeaderboardServiceTest {
                 score(107L, 30.0), score(108L, 20.0), score(109L, 10.0),
                 score(110L, 5.0)), 12);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         // Twelve ranked rows, so the podium is published: 1 to 5, plus the caller in
         // fourth and the two neighbours below them.
@@ -393,12 +394,12 @@ class LeaderboardServiceTest {
     void theSameAveragesRankTheSameWayWhicheverOrderTheyArrive() {
         cohortOf(List.of(
                 score(101L, 70.0), score(102L, 90.0), score(ACCOUNT_ID, 80.0), score(104L, 90.0)), 12);
-        LeaderboardResponse first = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse first = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         service = new LeaderboardService(seats, repository, examRooms);
         cohortOf(List.of(
                 score(104L, 90.0), score(ACCOUNT_ID, 80.0), score(101L, 70.0), score(102L, 90.0)), 12);
-        LeaderboardResponse second = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse second = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(first.myPosition()).isEqualTo(3);
         assertThat(second.myPosition()).isEqualTo(first.myPosition());
@@ -413,8 +414,8 @@ class LeaderboardServiceTest {
         scores.set(29, score(30L, 70.0));
         cohortOf(scores, 30);
 
-        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
-        LeaderboardResponse theirs = one(service.leaderboard(30L, "class", null, "all"));
+        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        LeaderboardResponse theirs = one(service.leaderboard(30L, "class", null, "all", "average"));
 
         // One read of the cohort...
         verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
@@ -432,8 +433,8 @@ class LeaderboardServiceTest {
         seatedIn(SCHOOL_ID, SCHOOL_ID, YEAR);
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
-        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"));
 
         verify(repository).countMembers(Scope.CLASS, SCHOOL_ID, YEAR, SCHOOL_ID);
         verify(repository).countMembers(Scope.SCHOOL, SCHOOL_ID, YEAR, SCHOOL_ID);
@@ -444,9 +445,9 @@ class LeaderboardServiceTest {
     void theCacheKeepsSchoolYearsApart() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
         seatedIn(CLASS_ID, SCHOOL_ID, 2L); // same class, another year
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         // Two years, two rankings: last year's average is not this year's result.
         verify(repository, times(2)).findAverages(any(), any(), any(), any(), any(), any(), any());
@@ -456,10 +457,10 @@ class LeaderboardServiceTest {
     void theCacheKeepsPeriodsAndStatementsApart() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "month"));
-        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
-        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "month", "average"));
+        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all", "average"));
+        one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month", "average"));
 
         verify(repository, times(4)).findAverages(any(), any(), any(), any(), any(), any(), any());
     }
@@ -471,7 +472,7 @@ class LeaderboardServiceTest {
         when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(1L));
 
         for (int attempt = 0; attempt < 3; attempt++) {
-            StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all"))
+            StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"))
                     .expectError(IllegalStateException.class)
                     .verify();
         }
@@ -485,13 +486,13 @@ class LeaderboardServiceTest {
     void aCallerVaryingTheStatementCannotPushAnotherCohortOutOfTheCache() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
         for (long statement = 1; statement <= 600; statement++) {
-            one(service.leaderboard(ACCOUNT_ID, "class", statement, "all"));
+            one(service.leaderboard(ACCOUNT_ID, "class", statement, "all", "average"));
         }
 
         long readsSoFar = averages();
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(averages()).isEqualTo(readsSoFar);
     }
@@ -503,7 +504,7 @@ class LeaderboardServiceTest {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
 
         LeaderboardResponse response =
-                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all", "average"));
 
         assertThat(response.scope()).isEqualTo("friends");
         assertThat(response.entries()).hasSize(2);
@@ -525,7 +526,7 @@ class LeaderboardServiceTest {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
 
         LeaderboardResponse response =
-                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all"));
+                one(service.leaderboard(ACCOUNT_ID, "friends", null, "all", "average"));
 
         assertThat(response.entries()).hasSize(2);
         assertThat(response.entries()).anySatisfy(row -> {
@@ -544,7 +545,7 @@ class LeaderboardServiceTest {
     void theSmallGroupFloorStillAppliesToAClass() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0), score(FRIEND_ID, 70.0)), 2);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
 
         assertThat(response.entries()).noneSatisfy(row ->
                 assertThat(row.position()).isEqualTo(2));
@@ -555,7 +556,7 @@ class LeaderboardServiceTest {
     void theFriendsScopeNeedsAnActiveEnrollment() {
         noSeat();
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "friends", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "friends", null, "all", "average"))
                 .expectErrorSatisfies(error ->
                         assertThat(((ApiException) error).getStatus())
                                 .isEqualTo(HttpStatus.FORBIDDEN))
@@ -564,12 +565,12 @@ class LeaderboardServiceTest {
 
     @Test
     void rejectsAScopeOrPeriodItCannotServe() {
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "country", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "country", null, "all", "average"))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "term"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "term", "average"))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
@@ -579,7 +580,7 @@ class LeaderboardServiceTest {
     void passesTheStatementThroughSoOnePaperCanBeRankedOnItsOwn() {
         cohortOf(List.of(score(ACCOUNT_ID, 75.0)), 1);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", 42L, "month", "average"));
 
         assertThat(response.statementId()).isEqualTo(42L);
         assertThat(response.period()).isEqualTo("month");
@@ -596,7 +597,7 @@ class LeaderboardServiceTest {
     void aStatementThatDoesNotExistIsNotFoundAndTakesNoCacheSlot() {
         when(repository.statementExists(99L)).thenReturn(Mono.just(false));
 
-        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "month")))
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "month", "average")))
                 .isInstanceOf(ApiException.class)
                 .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND));
@@ -648,7 +649,7 @@ class LeaderboardServiceTest {
         scores.add(globalScore(ACCOUNT_ID, SCHOOL_ID, 95.0, 95.0));
         globalCohortOf(scores, 21);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.scope()).isEqualTo("global");
         assertThat(response.myPosition()).isEqualTo(2);
@@ -674,7 +675,7 @@ class LeaderboardServiceTest {
                 // The caller: 90% average, and only 30th percentile in their own.
                 globalScore(ACCOUNT_ID, SCHOOL_ID, 90.0, 30.0)), 21);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(2);
         assertThat(response.myAverage()).isEqualTo(90.0);
@@ -690,7 +691,7 @@ class LeaderboardServiceTest {
                 globalScore(202L, OTHER_SCHOOL_ID, 90.0, 100.0),
                 globalScore(ACCOUNT_ID, SCHOOL_ID, 50.0, 50.0)), 21);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.myPosition()).isEqualTo(3);
         assertThat(positions(response)).containsExactly(1, 1, 3);
@@ -700,7 +701,7 @@ class LeaderboardServiceTest {
     void aStudentWhoNeverOptedInIsNotRankedAtAll() {
         noConsent();
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"))
                 .expectErrorSatisfies(error -> {
                     assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
                     assertThat(error).hasMessageContaining("consent");
@@ -716,7 +717,7 @@ class LeaderboardServiceTest {
     void withoutConsentTheAnswerIsRefusedRatherThanEmpty() {
         noConsent();
 
-        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "global", null, "all")))
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average")))
                 .isInstanceOf(ApiException.class);
     }
 
@@ -724,8 +725,8 @@ class LeaderboardServiceTest {
     void theOtherScopesDoNotAskForConsent() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
-        one(service.leaderboard(ACCOUNT_ID, "school", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        one(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"));
 
         // class and school publish to peers, and were never gated. A consent check that
         // crept in would refuse every ranking the platform already served.
@@ -736,7 +737,7 @@ class LeaderboardServiceTest {
     void theGlobalScopeNeedsAnActiveSeatInASchool() {
         noSeat();
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"))
                 .expectErrorSatisfies(error ->
                         assertThat(((ApiException) error).getStatus())
                                 .isEqualTo(HttpStatus.FORBIDDEN))
@@ -832,7 +833,7 @@ class LeaderboardServiceTest {
     void theGlobalScopeCarriesNoGroupId() {
         globalCohortOf(withCaller(oneSchool(200, 10, OTHER_SCHOOL_ID), 4), 11);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.groupId()).isNull();
     }
@@ -843,7 +844,7 @@ class LeaderboardServiceTest {
         scores.add(globalScore(ACCOUNT_ID, SCHOOL_ID, 75.0, 75.0));
         globalCohortOf(scores, 21);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.institutionsCounted()).isEqualTo(2);
         assertThat(response.totalStudents()).isEqualTo(21);
@@ -854,7 +855,7 @@ class LeaderboardServiceTest {
     void theOtherScopesReportNoCrossInstitutionProvenance() {
         cohortOf(List.of(score(ACCOUNT_ID, 90.0)), 12);
 
-        assertThat(one(service.leaderboard(ACCOUNT_ID, "school", null, "all"))
+        assertThat(one(service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"))
                 .institutionsCounted()).isZero();
     }
 
@@ -869,7 +870,7 @@ class LeaderboardServiceTest {
     void aPeerAcrossInstitutionsIsALabelAndTheirNameIsNeverRead() {
         globalCohortOf(withCaller(oneSchool(200, 10, OTHER_SCHOOL_ID), 4), 11);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.entries())
                 .filteredOn(entry -> !entry.me())
@@ -908,12 +909,12 @@ class LeaderboardServiceTest {
 
         ObjectMapper mapper = new ObjectMapper();
         JsonNode json = mapper.readTree(mapper.writeValueAsString(
-                one(service.leaderboard(ACCOUNT_ID, "global", null, "all"))));
+                one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"))));
 
         // The exact field set, at both levels. A school, a class or a school year added
         // to either would be new fields, and this is the test that fails the day one is.
         assertThat(fieldNames(json)).containsExactlyInAnyOrder(
-                "scope", "groupId", "statementId", "period", "totalStudents",
+                "scope", "groupId", "statementId", "period", "metric", "totalStudents",
                 "rankedStudents", "institutionsCounted", "smallGroup",
                 "myPosition", "myAverage", "myPercentile", "entries");
         assertThat(json.get("groupId").isNull())
@@ -921,7 +922,7 @@ class LeaderboardServiceTest {
                 .isTrue();
         for (JsonNode entry : json.get("entries")) {
             assertThat(fieldNames(entry)).containsExactlyInAnyOrder(
-                    "position", "accountId", "displayName", "average", "percentile", "me");
+                    "position", "accountId", "displayName", "average", "percentile", "xp", "me");
         }
     }
 
@@ -942,7 +943,7 @@ class LeaderboardServiceTest {
                 globalScore(202L, OTHER_SCHOOL_ID, 70.0, 60.0),
                 globalScore(203L, OTHER_SCHOOL_ID, 60.0, 20.0)), 4);
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         assertThat(response.smallGroup()).isTrue();
         assertThat(response.myPosition()).isEqualTo(1);
@@ -964,8 +965,8 @@ class LeaderboardServiceTest {
         scores.set(29, globalScore(30L, OTHER_SCHOOL_ID, 10.0, 100.0 / 30));
         globalCohortOf(withCallerAt(scores, 0), 30);
 
-        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
-        LeaderboardResponse theirs = one(service.leaderboard(30L, "global", null, "all"));
+        LeaderboardResponse mine = one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
+        LeaderboardResponse theirs = one(service.leaderboard(30L, "global", null, "all", "average"));
 
         // One read of the cohort...
         verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
@@ -980,7 +981,7 @@ class LeaderboardServiceTest {
     void theGlobalCohortIsCountedOverTheSchoolYearLikeEveryOther() {
         globalCohortOf(List.of(globalScore(ACCOUNT_ID, SCHOOL_ID, 90.0, 100.0)), 21);
 
-        one(service.leaderboard(ACCOUNT_ID, "global", null, "all"));
+        one(service.leaderboard(ACCOUNT_ID, "global", null, "all", "average"));
 
         verify(repository).countMembers(Scope.GLOBAL, null, YEAR, SCHOOL_ID);
     }
@@ -1021,6 +1022,104 @@ class LeaderboardServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── metric=xp ────────────────────────────────────────────────────────
+
+    /**
+     * The two metrics disagree, and the metric decides.
+     *
+     * <p>The caller's place moves from first to near last, so a test that passed on
+     * either metric would be passing on nothing.</p>
+     */
+    @Test
+    void rankingByXpIsNotTheSameOrderAsRankingByMarks() {
+        cohortOf(aCrowd(), 12);
+
+        LeaderboardResponse byMarks = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        LeaderboardResponse byXp = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "xp"));
+
+        assertThat(byMarks.myPosition()).isEqualTo(1);
+        assertThat(byXp.myPosition()).isEqualTo(12);
+        assertThat(byMarks.metric()).isEqualTo("average");
+        assertThat(byXp.metric()).isEqualTo("xp");
+    }
+
+    /** The XP travels with the row, so a client can show what the position is by. */
+    @Test
+    void theResponseCarriesTheXpThePositionWasDecidedBy() {
+        cohortOf(aCrowd(), 12);
+
+        LeaderboardResponse response = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "xp"));
+
+        assertThat(response.entries()).extracting(LeaderboardResponse.Entry::xp)
+                .contains(20L, 900L);
+        // The marks travel too: the average is still what they scored.
+        assertThat(response.entries()).extracting(LeaderboardResponse.Entry::average)
+                .contains(95.0, 40.0);
+    }
+
+    /**
+     * An account with no XP is last, not absent.
+     *
+     * <p>A {@code LEFT JOIN} written as an inner one drops every student who has not
+     * finished a simulation since the gamification landed, and the ranking quietly
+     * becomes a ranking of the rewarded.</p>
+     */
+    @Test
+    void anAccountWithNoXpKeepsItsPlace() {
+        List<GroupScore> scores = new ArrayList<>(aCrowd());
+        scores.add(score(900L, 30.0));
+        cohortOf(scores, 13);
+
+        assertThat(one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"))
+                .rankedStudents()).isEqualTo(13);
+        assertThat(one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "xp"))
+                .rankedStudents()).isEqualTo(13);
+    }
+
+    /**
+     * The two metrics do not share a cache entry.
+     *
+     * <p>A cache keyed without the metric hands a by-XP table to a caller who asked for
+     * marks, and nothing else in the response would look wrong — the entries are the same
+     * students either way. Only the order and {@code metric} give it away.</p>
+     */
+    @Test
+    void theTwoMetricsDoNotShareACacheEntry() {
+        cohortOf(aCrowd(), 12);
+
+        LeaderboardResponse byXp = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "xp"));
+        LeaderboardResponse byMarks = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(byXp.myPosition()).isEqualTo(12);
+        assertThat(byMarks.myPosition()).isEqualTo(1);
+    }
+
+    /** An unknown metric is a 400 and not a silent fall back to marks. */
+    @Test
+    void anUnknownMetricIsRejected() {
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", null, "all", "medals"))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+    }
+
+    /** Omitting it keeps marks, which is what every existing client already asks for. */
+    @Test
+    void noMetricIsStillMarks() {
+        cohortOf(aCrowd(), 12);
+
+        LeaderboardResponse response = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", null));
+
+        assertThat(response.metric()).isEqualTo("average");
+        assertThat(response.myPosition()).isEqualTo(1);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -1083,12 +1182,36 @@ class LeaderboardServiceTest {
     }
 
     private static GroupScore score(Long accountId, double average) {
-        return new GroupScore(accountId, null, average, null);
+        return new GroupScore(accountId, null, average, null, null);
     }
 
     /** A row from {@code scope=global}: it knows the school, and where the student is in it. */
     private static GroupScore globalScore(Long accountId, Long institutionId, double average, double percentile) {
-        return new GroupScore(accountId, institutionId, average, percentile);
+        return new GroupScore(accountId, institutionId, average, percentile, null);
+    }
+
+    /** The same row with the lifetime XP that {@code metric=xp} orders by. */
+    private static GroupScore scoreWithXp(Long accountId, double average, long xp) {
+        return new GroupScore(accountId, null, average, null, xp);
+    }
+
+    /**
+     * Twelve ranked rows, so the cohort is not a small group.
+     *
+     * <p>The floor is {@code min(totalStudents, ranked.size())}: two ranked rows out of
+     * twelve is two, so a two-row fixture exercises the small-group rule instead of the
+     * ordering and silently asserts the wrong thing.</p>
+     */
+    private static List<GroupScore> aCrowd() {
+        List<GroupScore> scores = new ArrayList<>();
+        // The caller has the best marks and almost the least XP.
+        scores.add(scoreWithXp(ACCOUNT_ID, 95.0, 20L));
+        // A colleague has poor marks and a lot of XP: the row the two metrics split on.
+        scores.add(scoreWithXp(FRIEND_ID, 40.0, 900L));
+        for (int i = 3; i <= 12; i++) {
+            scores.add(scoreWithXp(100L + i, 50.0, 100L * i));
+        }
+        return scores;
     }
 
     private static LeaderboardResponse one(Mono<LeaderboardResponse> mono) {

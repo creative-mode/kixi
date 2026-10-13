@@ -53,10 +53,11 @@ public class LeaderboardController {
     public Mono<ResponseEntity<LeaderboardResponse>> leaderboard(
             @RequestParam(defaultValue = "class") String scope,
             @RequestParam(required = false) Long statementId,
-            @RequestParam(defaultValue = "all") String period) {
+            @RequestParam(defaultValue = "all") String period,
+            @RequestParam(defaultValue = "average") String metric) {
         return currentAccountService.requiredAccountId()
                 .flatMap(accountId ->
-                        leaderboardService.leaderboard(accountId, scope, statementId, period))
+                        leaderboardService.leaderboard(accountId, scope, statementId, period, metric))
                 .map(ResponseEntity::ok);
     }
 
