@@ -15,8 +15,8 @@ de referência.
 | OpenSSL | qualquer | `openssl version` |
 | Node.js | 20+ (22 LTS ou 24) | `node --version` |
 
-Node só é preciso para o **passo 7**, o frontend. Para o backend, o OCR e a base de
-dados, o Docker chega.
+Node.js só é preciso no **passo 7**, para o frontend. Para o backend, o serviço de
+OCR e a base de dados, o Docker chega.
 
 Portas usadas por omissão (todas configuráveis no `.env`):
 
@@ -27,7 +27,7 @@ Portas usadas por omissão (todas configuráveis no `.env`):
 | `5433` | PostgreSQL |
 | `6379` | Redis (`--profile cache`) |
 | `9000` / `9001` | MinIO (`--profile storage`) |
-| `3000` | gateway do frontend (só no passo 7) |
+| `3000` | gateway do frontend (passo 7) |
 
 O `ocr-service` reserva cerca de 4 GB de memória — confirma que tens espaço livre
 antes de arrancar.
@@ -172,32 +172,32 @@ Os restantes fluxos (enunciados, atribuições, matrículas e tutor) estão em
 
 ## 7. O frontend
 
-O frontend vive no repositório à parte, **[kixi-frontend](https://github.com/creative-mode/kixi-frontend)**.
-O README dele é a referência; aqui fica o mínimo para o ligares ao backend que
-acabaste de subir.
+O frontend é um repositório à parte — **[kixi-frontend](https://github.com/creative-mode/kixi-frontend)**.
+O README dele é a referência e não é reproduzido aqui; o que falta saber para o
+ligar **a este** backend é o seguinte.
 
 ```bash
 git clone https://github.com/creative-mode/kixi-frontend.git
 cd kixi-frontend
 
-# São três projectos: a raiz (manager), landing/ e student/.
+# São três projectos: a raiz (gestor), landing/ e student/.
 npm install
 npm install --prefix landing
 npm install --prefix student
 ```
 
-Para falar com o backend real, e não com o simulado:
+Para falar com o backend em vez do simulado, no `.env` da raiz do kixi-frontend:
 
 ```bash
-# .env na raiz do kixi-frontend
 KIXI_MOCK=false
 BACKEND_API_URL=http://localhost:8080/api/v1
-JWT_SECRET=<o mesmo JWT_SECRET do .env do backend>
+JWT_SECRET=<o mesmo APP_JWT_SECRET do .env deste repositório>
 ```
 
-`KIXI_MOCK` vem a `true` — é o backend simulado que aparece por omissão. `JWT_SECRET`
-tem de ser **o mesmo** do backend, senão o token que este emite não é o que aquele
-aceita.
+`KIXI_MOCK` vem a `true` — o backend simulado é o que aparece por omissão, e
+nesse caso o backend pode nem estar a correr. Com `false`, o `JWT_SECRET` tem de
+ser o mesmo do backend: é ele que assina o token que este aceita, e não um token
+doutro.
 
 Arrancar tudo de uma vez:
 
@@ -205,8 +205,7 @@ Arrancar tudo de uma vez:
 npm run dev:all
 ```
 
-Isto sobe a landing, a app do aluno e a do gestor, mais o **gateway**, que é a
-única porta publicada. É por ela que o browser entra:
+O **gateway** é a única porta publicada, e é por ela que o browser entra:
 
 | Endereço | O que é |
 | --- | --- |
@@ -214,12 +213,12 @@ Isto sobe a landing, a app do aluno e a do gestor, mais o **gateway**, que é a
 | http://localhost:3000/aluno | app do aluno |
 | http://localhost:3000/manager | app do gestor |
 
-Cada app corre na sua porta interna (3002 gestor, 3003 aluno, 3004 landing) e não
-se abre directamente — o gateway é que as junta atrás de uma origem só. Para
-debugar uma app isolada, o README do frontend explica como as abrir na porta dela.
+As três apps correm em portas internas (3002 gestor, 3003 aluno, 3004 landing) e
+não se abrem directamente — o gateway junta-as atrás de uma origem só. Para
+debugar uma app isolada, vê o README do frontend.
 
-Com o `KIXI_MOCK=false`, o que o browser mostra passa a vir do backend do passo 3.
-Com o valor por omissão, mostra o simulado e o backend pode nem estar a correr.
+O backend já aceita esta origem: `APP_CORS_ALLOWED_ORIGINS` traz
+`localhost:3000` por omissão, por isso não é preciso mexer nisso.
 
 ---
 
