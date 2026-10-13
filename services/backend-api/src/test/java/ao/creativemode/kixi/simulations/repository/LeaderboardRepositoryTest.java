@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.simulations.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.Scope;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.Sql;
@@ -54,20 +55,29 @@ class LeaderboardRepositoryTest {
     }
 
     /**
- * No keyword ends up welded to the token after it.
+     * No keyword ends up welded to the token after it.
      *
      * <p>A text block strips trailing spaces, so a {@code "WHERE "} on its own line
      * arrives as {@code "WHERE"} and joins the first condition into {@code WHEREs...}.
      * Balanced parentheses and all.</p>
+     *
+     * <p>Over every scope, because it is the scopes that append conditions to a fragment
+     * ending in a keyword that get it — and the cross-institution statements are
+     * assembled from more such fragments than any of the others.</p>
      */
     @Test
     void theStatementDoesNotWeldTheWhereToTheFirstCondition() {
-        Sql sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 3L, null, null, null, null);
+        for (Scope scope : Scope.values()) {
+            Sql sql = LeaderboardRepository.averagesSql(scope, 7L, 3L, 1L, 7L,
+                    LocalDateTime.now(), LocalDateTime.now().plusDays(7));
 
-        assertThat(sql.statement()).containsPattern("WHERE\\s+\\S");
-        assertThat(sql.statement())
-                .as("a keyword welded to the next token")
-                .doesNotContainPattern("\\b(WHERE|AND|FROM|JOIN|ON|SET|GROUP BY|ORDER BY)\\S");
+            assertThat(sql.statement())
+                    .as("scope=%s needs a WHERE followed by something", scope)
+                    .containsPattern("WHERE\\s+\\S");
+            assertThat(sql.statement())
+                    .as("a keyword welded to the next token, scope=%s:%n%s", scope, sql.statement())
+                    .doesNotContainPattern("\\b(WHERE|AND|FROM|JOIN|ON|SET|GROUP BY|ORDER BY)\\S");
+        }
     }
 
     /** The statement has to be something PostgreSQL will parse.
@@ -225,5 +235,126 @@ class LeaderboardRepositoryTest {
         String sql = LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null).statement();
 
         assertThat(sql).contains("ORDER BY average DESC NULLS LAST, s.account_id ASC");
+    }
+
+    // ── Across institutions (issue #189, ADR-0013) ────────────────────────
+
+    private static String globalSql() {
+        return LeaderboardRepository.averagesSql(Scope.GLOBAL, null, 1L, null, null, null, null).statement();
+    }
+
+    /** The group id is what a class or a school is picked by, and there is neither here. */
+    @Test
+    void theGlobalScopeIsNotFilteredByAnySchool() {
+        String sql = globalSql();
+
+        assertThat(sql)
+                .doesNotContain(":groupId")
+                .doesNotContain("e.class_id = ")
+                .doesNotContain("cl.institution_id = ")
+                .doesNotContain("sd.institution_id = :");
+    }
+
+    @Test
+    void theGlobalScopeBindsNoGroupIdAtAll() {
+        Sql sql = LeaderboardRepository.averagesSql(Scope.GLOBAL, null, 1L, null, null, null, null);
+
+        // An unmatched bind is dropped without a word, so this is not a crash — it is a
+        // group id that has quietly stopped meaning anything, which is worse.
+        assertThat(sql.binds()).containsOnlyKeys("schoolYearId", "institutionMinStudents");
+        assertThat(LeaderboardRepository.membersSql(Scope.GLOBAL, 7L))
+                .doesNotContain(":groupId");
+    }
+
+    /** A ranking that crosses the school boundary is the one that needs a yes first. */
+    @Test
+    void theGlobalScopeRanksNobodyWhoHasNotConsented() {
+        assertThat(globalSql())
+                .contains("FROM leaderboard_consents lc")
+                .contains("lc.cross_institution = TRUE")
+                .contains("lc.revoked_at IS NULL");
+        // The other scopes publish to peers and are not gated: they must not grow one.
+        assertThat(LeaderboardRepository.averagesSql(Scope.CLASS, 7L, 1L, null, null, null, null)
+                .statement()).doesNotContain("leaderboard_consents");
+        assertThat(LeaderboardRepository.averagesSql(Scope.SCHOOL, 1L, 1L, null, null, null, null)
+                .statement()).doesNotContain("leaderboard_consents");
+    }
+
+    /** One row per student, newest seat first — the rule the seat reader applies. */
+    @Test
+    void theGlobalScopePicksOneSchoolPerStudentInsteadOfJoiningEverySeat() {
+        String sql = globalSql();
+
+        // Joining enrollments straight into the aggregate would repeat a student's
+        // simulations once per matching row; the DISTINCT ON collapses the seat first.
+        assertThat(sql)
+                .contains("SELECT DISTINCT ON (e.account_id)")
+                .contains("ORDER BY e.account_id, e.created_at DESC, e.id DESC")
+                .contains("JOIN seat sd ON sd.account_id = s.account_id");
+    }
+
+    /**
+     * A school of three is identifiable by elimination — one student has a determinate
+     * rank — so it is dropped whole, before the rows come back, not filtered afterwards.
+     */
+    @Test
+    void theGlobalScopeDropsInstitutionsTooSmallToPublish() {
+        String sql = globalSql();
+
+        assertThat(sql)
+                .contains("HAVING COUNT(*) >= :institutionMinStudents")
+                .contains("FROM per_account")
+                .contains("WHERE pa.institution_id IN (SELECT institution_id FROM big_enough)");
+        assertThat(LeaderboardRepository.membersSql(Scope.GLOBAL, null))
+                .contains("WHERE sd.institution_id IN (SELECT institution_id FROM big_enough)");
+    }
+
+    @Test
+    void theGlobalScopeRanksOnPercentileInsideTheStudentsOwnSchool() {
+        String sql = globalSql();
+
+        assertThat(sql)
+                .contains("PARTITION BY pa.institution_id")
+                .contains("CUME_DIST() OVER")
+                // 80% on an easy paper and 80% on a hard paper are different results.
+                // The raw average may break a tie, and is returned, but must not decide.
+                .contains("ORDER BY percentile DESC, pa.average DESC, pa.account_id ASC")
+                .doesNotContain("ORDER BY pa.average DESC");
+    }
+
+    /**
+     * The count has to be asking the same question as the rows.
+     *
+     * <p>{@code totalStudents} decides the small-group floor, so a count that disagreed
+     * with the rows would decide a protection from a cohort the table is not. Both are
+     * built from one shared block of CTEs, and this is what holds them to it: the count
+     * statement has to contain the rows' CTE block verbatim.</p>
+     */
+    @Test
+    void theGlobalCountIsBuiltFromTheSameConditionsAsTheGlobalRows() {
+        String rows = globalSql();
+        String count = LeaderboardRepository.membersSql(Scope.GLOBAL, null);
+        int firstProjection = rows.indexOf("SELECT pa.account_id");
+
+        assertThat(count).contains(rows.substring(0, firstProjection));
+        // …and the consent gate on both sides, over the column each one hangs off.
+        assertThat(count).contains("lc.account_id = sd.account_id");
+        assertThat(rows).contains("lc.account_id = s.account_id");
+    }
+
+    @Test
+    void theMemberCountForGlobalIsPinnedToTheSchoolYearAndTheThreshold() {
+        assertThat(LeaderboardRepository.membersSql(Scope.GLOBAL, null))
+                .contains("e.school_year_id = :schoolYearId")
+                .contains("HAVING COUNT(*) >= :institutionMinStudents");
+    }
+
+    /** A global ranking has no group id, so the group predicate must refuse it loudly. */
+    @Test
+    void aGlobalRankingCannotBeTurnedIntoAClassOrASchool() {
+        assertThatThrownBy(() -> LeaderboardRepository.groupPredicate(
+                Scope.GLOBAL, 7L, "e", "cl"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("GLOBAL");
     }
 }

@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.DisplayName;
@@ -27,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * The relative leaderboard of issue #117.
+ * The relative leaderboard of issue #117, extended across institutions by #189.
  *
  * <p>Five rules shape it:</p>
  * <ol>
@@ -55,6 +56,23 @@ import java.util.concurrent.atomic.AtomicReference;
  * response meant to hide who somebody is is a correlation handle waiting to be used
  * against the endpoints that do name people.</p>
  *
+ * <p>{@code scope=global} is the exception to the masking rule, and it is the whole of
+ * what #189 adds. It does not rank more people — it ranks the same measure against other
+ * schools, on three conditions taken in ADR-0013:</p>
+ * <ul>
+ *   <li><b>Consent.</b> The caller has to have opted in, and so has every student in the
+ *       table. A student who has never been asked is not in it.</li>
+ *   <li><b>Percentile, not percentage.</b> Students are ordered by where they stand inside
+ *       their own institution. Raw percentages survive as a tie-break and as a field, but
+ *       two schools' exam curves are not the same scale and must not decide a podium.</li>
+ *   <li><b>No name at all.</b> A masked name plus a school is a person; a school plus a
+ *       class plus a school year is a person without needing the name. So a peer is a
+ *       label, their names are never read from the database, and the response carries no
+ *       institution for anybody but the caller. What it does carry is how many students
+ *       and how many schools the comparison drew from — an anonymised table that says
+ *       where it came from is legible, and one that does not is just ominous.</li>
+ * </ul>
+ *
  * <p>{@code scope=friends} is not implemented here: friendships are issue #121, and the
  * ranking is what that issue integrates into, not what it waits for.</p>
  */
@@ -72,6 +90,18 @@ public class LeaderboardService {
 
     /** Under this many students a group is too small to publish a podium. */
     static final int SMALL_GROUP_LIMIT = 10;
+
+    /**
+     * What a peer is called in {@code scope=global}.
+     *
+     * <p>Not the masked name the other scopes use. Shortening a name still hands over the
+     * name, and out here there is no class to read it against — so the rows are not read
+     * at all and the label stands in their place.</p>
+     */
+    static final String OUTSIDE_LABEL = "Aluno de outra escola";
+
+    /** For a row with no name behind it, whichever scope it came from. */
+    private static final String FALLBACK_LABEL = "Aluno";
 
     /** Bound on the cache, so it cannot grow with whatever the caller varies. */
     private static final int MAX_CACHED_COHORTS = 500;
@@ -98,7 +128,8 @@ public class LeaderboardService {
                 return Mono.error(ApiException.badRequest(e.getMessage()));
             }
 
-            return cohortOf(accountId, resolved)
+            return consentedFor(resolved, accountId)
+                    .then(cohortOf(accountId, resolved))
                     .flatMap(cohort -> checkStatementExists(statementId)
                             .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
                                     cohort.institutionId(), statementId, window)
@@ -106,6 +137,37 @@ public class LeaderboardService {
                                             accountId, ranked, resolved, cohort.id(),
                                             statementId, window))));
         });
+    }
+
+    /**
+     * Reads, and changes, the caller's consent to be ranked against other schools.
+     *
+     * <p>The switch itself lives here rather than in a controller so the scope and the
+     * thing that gates it cannot drift apart: there is exactly one caller of
+     * {@code consentedToCrossInstitution} and it is the line below.</p>
+     */
+    public Mono<LeaderboardConsentResponse> consent(Long accountId, boolean crossInstitution) {
+        return repository.setCrossInstitutionConsent(accountId, crossInstitution)
+                .flatMap(written -> repository.consentedToCrossInstitution(accountId)
+                        .map(current -> new LeaderboardConsentResponse(current)));
+    }
+
+    /**
+     * A scope that reads a stranger's performance needs the student to have agreed to it.
+     *
+     * <p>Refused rather than served empty. An empty table cannot tell the client whether
+     * the student declined or whether nobody sat anything, and a client that cannot tell
+     * the two apart cannot offer the opt-in that would fix it. The other scopes publish
+     * to peers, so they are not gated — see ADR-0013, decision 1.</p>
+     */
+    private Mono<Void> consentedFor(Scope scope, Long accountId) {
+        if (scope != Scope.GLOBAL) {
+            return Mono.empty();
+        }
+        return repository.consentedToCrossInstitution(accountId)
+                .flatMap(consented -> consented ? Mono.<Void>empty()
+                        : Mono.error(ApiException.forbidden("A cross-institution ranking needs "
+                                + "consent: PUT /api/v1/leaderboard/consent")));
     }
 
     /**
@@ -117,26 +179,29 @@ public class LeaderboardService {
      */
     private Mono<Cohort> cohortOf(Long accountId, Scope scope) {
         return seats.activeSeatsOf(accountId)
-                // A school is what a ranking is isolated by, and a friends ranking is
-                // isolated too: school_year_id is global — one row serves every school —
-                // so a seat with no institution is not enough to rank against.
+                // A school is what a ranking is isolated by, and so is a cross-institution
+                // one: school_year_id is global — one row serves every school — so a seat
+                // with no institution is not enough to rank against.
                 .filter(seat -> scope == Scope.CLASS || seat.institutionId() != null)
                 .next()
-                // A school is what a ranking is isolated by, and a friends ranking is
-                // isolated too: school_year_id is global — one row serves every school —
-                // so a seat with no institution is not enough to rank against.
-                .filter(seat -> scope == Scope.CLASS || seat.institutionId() != null)
                 .switchIfEmpty(Mono.error(ApiException.forbidden(switch (scope) {
                     case CLASS -> "A class ranking needs an active enrollment in a class";
                     case SCHOOL -> "A school ranking needs an active enrollment in a school";
                     case FRIENDS -> "The friends ranking needs an active enrollment in a school";
+                    case GLOBAL -> "A cross-institution ranking needs an active enrollment in a school";
                 })))
                 .map(seat -> new Cohort(
                         // Friends are not a group: the "group id" the repository wants is
                         // the caller's own account, because a friendship is a pair of ids
                         // and not a column on enrollments.
+                        //
+                        // A cross-institution ranking has no group either, and this null is
+                        // the whole of it: with no id in the cache key, every caller in the
+                        // country shares one cached ranking, which is the correct reading —
+                        // they are all being compared against the same table.
                         scope == Scope.FRIENDS ? accountId
-                                : scope == Scope.CLASS ? seat.classId() : seat.institutionId(),
+                                : scope == Scope.CLASS ? seat.classId()
+                                : scope == Scope.SCHOOL ? seat.institutionId() : null,
                         seat.schoolYearId(),
                         seat.institutionId()));
     }
@@ -215,6 +280,26 @@ public class LeaderboardService {
     }
 
     /**
+     * What the table is ordered by, and what a tie is judged on.
+     *
+     * <p>A cross-institution ranking is ordered by the percentile and every other scope
+     * by the average, and there is never a mix inside one table: {@code scope=global}
+     * computes a percentile for every row it returns, and the other scopes return none.
+     * So one key serves both, and the three scopes from #117 keep the exact order they
+     * had.</p>
+     *
+     * <p>Not "percentage across schools" with a percentile field bolted on. 80% on an easy
+     * paper and 80% on a hard paper are different results, and letting the easier school
+     * win on that is the one comparison the issue is asking not to make.</p>
+     */
+    private static double rankKey(GroupScore score) {
+        if (score.percentile() != null) {
+            return score.percentile();
+        }
+        return score.average() == null ? Double.NEGATIVE_INFINITY : score.average();
+    }
+
+    /**
      * Orders the averages and gives ties the same place, the way a race does: 1, 2, 2, 4.
      * Averages arrive already sorted by SQL, but they are sorted again here so the rule
      * holds whatever the repository returns.
@@ -222,22 +307,30 @@ public class LeaderboardService {
     private static Ranking rank(List<GroupScore> scores, long totalStudents) {
         List<GroupScore> ordered = new ArrayList<>(scores);
         ordered.sort(Comparator
-                .comparingDouble((GroupScore score) -> score.average() == null ? Double.NEGATIVE_INFINITY : score.average())
-                .reversed()
+                .comparingDouble(LeaderboardService::rankKey).reversed()
                 .thenComparing(GroupScore::accountId));
 
+        Set<Long> institutions = new LinkedHashSet<>();
         List<Ranked> ranked = new ArrayList<>(ordered.size());
         int position = 1;
-        Double previous = null;
+        Double previousKey = null;
         for (int i = 0; i < ordered.size(); i++) {
             GroupScore score = ordered.get(i);
-            if (previous == null || Double.compare(score.average(), previous) != 0) {
+            double key = rankKey(score);
+            // The key, not the average, is what decides a tie — and comparing keys means
+            // two students on the same percentile share a place even though their raw
+            // percentages, used only to break it, are different.
+            if (previousKey == null || Double.compare(key, previousKey) != 0) {
                 position = i + 1;
-                previous = score.average();
+                previousKey = key;
             }
-            ranked.add(new Ranked(position, score.accountId(), score.average()));
+            if (score.institutionId() != null) {
+                institutions.add(score.institutionId());
+            }
+            ranked.add(new Ranked(position, score.accountId(), score.average(),
+                    score.percentile()));
         }
-        return new Ranking(ranked, (int) totalStudents);
+        return new Ranking(ranked, (int) totalStudents, institutions.size());
     }
 
     /** The caller's neighbourhood, plus the podium when the group is big enough for one. */
@@ -295,8 +388,17 @@ public class LeaderboardService {
         }
 
         List<Ranked> visible = indexes.stream().sorted().map(ranked::get).toList();
+
+        // Across institutions this is the caller's name and nothing else. The peers' names
+        // are not read from the database and then shortened — they are never asked for,
+        // which is the difference between not publishing a name and publishing half of one
+        // (ADR-0013, decision 3).
         Set<Long> accounts = new LinkedHashSet<>();
-        visible.forEach(entry -> accounts.add(entry.accountId()));
+        if (scope == Scope.GLOBAL) {
+            accounts.add(accountId);
+        } else {
+            visible.forEach(entry -> accounts.add(entry.accountId()));
+        }
 
         int myIndex = mine;
         return repository.findDisplayNames(accounts)
@@ -320,6 +422,10 @@ public class LeaderboardService {
         Map<Long, String> labels = new LinkedHashMap<>();
         names.forEach(name -> labels.put(name.accountId(), mask(name.firstName(), name.lastName())));
 
+        // Outside the caller's own school nobody is named, so the label is fixed rather
+        // than looked up: there is no name in `labels` for them to find.
+        boolean anonymous = scope == Scope.GLOBAL;
+
         List<LeaderboardResponse.Entry> entries = visible.stream()
                 .map(entry -> {
                     boolean caller = entry.accountId().equals(accountId);
@@ -329,35 +435,49 @@ public class LeaderboardService {
                             // masked label back into a person, since the same id answers
                             // half a dozen other endpoints.
                             caller ? accountId : null,
-                            labels.getOrDefault(entry.accountId(), "Aluno"),
+                            caller ? labels.getOrDefault(entry.accountId(), FALLBACK_LABEL)
+                                    : anonymous ? OUTSIDE_LABEL
+                                            : labels.getOrDefault(entry.accountId(), FALLBACK_LABEL),
                             entry.average(),
+                            entry.percentile(),
                             caller);
                 })
                 .toList();
 
         return new LeaderboardResponse(
                 scope.name().toLowerCase(Locale.ROOT),
-                groupId,
+                // Null for scope=global: there is no group behind it, and a value here
+                // would be the one field in the response that names a school.
+                anonymous ? null : groupId,
                 statementId,
                 period.label(),
                 ranking.totalStudents(),
                 ranked.size(),
+                // How many schools the comparison drew from, for the reader to be told
+                // where their place came from. Zero in the scopes that are inside a single
+                // school already, where the question does not arise.
+                ranking.institutionsCounted(),
                 smallGroup,
                 mine >= 0 ? ranked.get(mine).position() : null,
                 mine >= 0 ? ranked.get(mine).average() : null,
+                mine >= 0 ? ranked.get(mine).percentile() : null,
                 entries);
     }
 
     /**
      * A ranking that named classmates whole would republish data the student never
      * agreed to share, so a colleague is a first name and an initial.
+     *
+     * <p>Used by {@code scope=class}, {@code school} and {@code friends}. Not used by
+     * {@code scope=global}, where a first name and an initial next to a position is still
+     * a name — see {@link #OUTSIDE_LABEL}.</p>
      */
     static String mask(String firstName, String lastName) {
         String first = firstName == null ? "" : firstName.trim();
         String last = lastName == null ? "" : lastName.trim();
         String initial = last.isEmpty() ? "" : last.substring(0, 1).toUpperCase(Locale.ROOT) + ".";
         String masked = (first + " " + initial).trim();
-        return masked.isEmpty() ? "Aluno" : masked;
+        return masked.isEmpty() ? FALLBACK_LABEL : masked;
     }
 
     /**
@@ -366,6 +486,9 @@ public class LeaderboardService {
      * <p>The year is part of the cohort, not a filter on it: both the seats and the
      * papers have to be from the same school year, or the average belongs to another
      * cohort altogether.</p>
+     *
+     * @param id the class or institution behind the cohort, the caller's own account for
+     *           {@code friends}, and null for {@code global} — which has no group
      */
     record Cohort(Long id, Long schoolYearId, Long institutionId) { }
 
@@ -401,11 +524,21 @@ public class LeaderboardService {
         }
     }
 
-    /** One member of the cohort. */
-    record Ranked(int position, Long accountId, Double average) { }
+    /**
+     * One member of the cohort.
+     *
+     * @param percentile where the student stands inside their own institution, or null in
+     *                   every scope that has no institution to stand inside
+     */
+    record Ranked(int position, Long accountId, Double average, Double percentile) { }
 
-    /** Everything every member of a cohort is allowed to see. */
-    record Ranking(List<Ranked> ranked, int totalStudents) { }
+    /**
+     * Everything every member of a cohort is allowed to see.
+     *
+     * @param institutionsCounted distinct schools behind the rows, which is the cross
+     *                            institution scope's provenance and is 0 elsewhere
+     */
+    record Ranking(List<Ranked> ranked, int totalStudents, int institutionsCounted) { }
 
     /** What identifies a cached ranking, and nothing that could serve another's. */
     record CacheKey(Scope scope, Long groupId, Long schoolYearId, Long statementId, Period period) { }
