@@ -1,31 +1,27 @@
 package ao.creativemode.kixi.critical;
 
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
+import ao.creativemode.kixi.identity.service.JwtService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.r2dbc.core.DatabaseClient;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import org.springframework.test.web.reactive.server.WebTestClientConfigurer;
 
 /**
  * The critical public flow against PostgreSQL migrated by Flyway.
  *
- * <p>The fixture only supplies persisted entities. Publication, answer-key
+ * <p>The fixture supplies persisted accounts and roles. Publication, answer-key
  * handling, simulation, correction and the result contract all go through the
  * real HTTP application context.</p>
  */
@@ -36,7 +32,6 @@ import org.springframework.test.web.reactive.server.WebTestClientConfigurer;
         "ocr.service.url=http://127.0.0.1:1",
         "ocr.service.api-key=test"
 })
-@EnabledIfEnvironmentVariable(named = "KIXI_POSTGRES_TESTS", matches = "true")
 class CriticalExamFlowPostgresIntegrationTest {
 
     private static final long TEACHER = 122001L;
@@ -52,7 +47,19 @@ class CriticalExamFlowPostgresIntegrationTest {
     @Autowired
     private DatabaseClient database;
 
+    @Autowired
+    private JwtService jwtService;
+
     private WebTestClient client;
+    private String teacherToken;
+    private String studentToken;
+
+    static {
+        if (!"true".equalsIgnoreCase(System.getenv("KIXI_POSTGRES_TESTS"))) {
+            throw new IllegalStateException(
+                    "CriticalExamFlowPostgresIntegrationTest requires KIXI_POSTGRES_TESTS=true and PostgreSQL");
+        }
+    }
 
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
@@ -83,11 +90,16 @@ class CriticalExamFlowPostgresIntegrationTest {
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
+        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ")");
         sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ")");
 
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
                 + "(" + TEACHER + ", 'it-teacher-122', 'it-teacher-122@example.com', 'x', true),"
                 + "(" + STUDENT + ", 'it-student-122', 'it-student-122@example.com', 'x', true)");
+        sql("INSERT INTO account_roles (account_id, role_id) "
+                + "SELECT " + TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
+        sql("INSERT INTO account_roles (account_id, role_id) "
+                + "SELECT " + STUDENT + ", id FROM roles WHERE name = 'STUDENT'");
         sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, "
                 + "created_by, visible, needs_review, source) VALUES (" + STATEMENT
                 + ", 'Prova de integracao #122', 'TEST', 60, 5, " + TEACHER + ", false, true, 'manual')");
@@ -96,11 +108,14 @@ class CriticalExamFlowPostgresIntegrationTest {
         sql("INSERT INTO question_options (id, question_id, option_label, option_text, is_correct, order_index) VALUES "
                 + "(" + WRONG_OPTION + ", " + QUESTION + ", 'A', '3', false, 1),"
                 + "(" + RIGHT_OPTION + ", " + QUESTION + ", 'B', '4', false, 2)");
+
+        teacherToken = jwtService.generateToken(TEACHER, List.of("TEACHER"));
+        studentToken = jwtService.generateToken(STUDENT, List.of("STUDENT"));
     }
 
     @Test
     void teacherPublishesKeyStudentSimulatesAndReceivesCorrectScore() {
-        client.mutateWith(teacherJwt())
+        bearer(teacherToken)
                 .put()
                 .uri("/api/v1/statements/" + STATEMENT + "/questions/" + QUESTION + "/correct-option")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -111,7 +126,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.id").isEqualTo(RIGHT_OPTION)
                 .jsonPath("$.isCorrect").isEqualTo(true);
 
-        client.mutateWith(teacherJwt())
+        bearer(teacherToken)
                 .post()
                 .uri("/api/v1/statements/" + STATEMENT + "/approve")
                 .exchange()
@@ -119,7 +134,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .expectBody()
                 .jsonPath("$.needsReview").isEqualTo(false);
 
-        client.mutateWith(teacherJwt())
+        bearer(teacherToken)
                 .patch()
                 .uri("/api/v1/statements/" + STATEMENT + "/visibility?visible=true")
                 .exchange()
@@ -128,7 +143,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.visible").isEqualTo(true);
 
         AtomicLong simulationId = new AtomicLong();
-        client.mutateWith(studentJwt())
+        bearer(studentToken)
                 .post()
                 .uri("/api/v1/simulations")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -139,7 +154,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
         long simulation = simulationId.get();
 
-        client.mutateWith(studentJwt())
+        bearer(studentToken)
                 .post()
                 .uri("/api/v1/simulation-answers")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -150,7 +165,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .expectBody()
                 .jsonPath("$.selectedOptionId").isEqualTo(RIGHT_OPTION);
 
-        client.mutateWith(studentJwt())
+        bearer(studentToken)
                 .post()
                 .uri("/api/v1/simulations/" + simulation + "/submit")
                 .exchange()
@@ -165,20 +180,55 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.questions[0].isCorrect").isEqualTo(true);
     }
 
+    @Test
+    void studentCannotSetKeyApproveOrPublish() {
+        bearer(studentToken)
+                .put()
+                .uri("/api/v1/statements/" + STATEMENT + "/questions/" + QUESTION + "/correct-option")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"optionId\":" + RIGHT_OPTION + "}")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/statements/" + STATEMENT + "/approve")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        bearer(studentToken)
+                .patch()
+                .uri("/api/v1/statements/" + STATEMENT + "/visibility?visible=true")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void anonymousCannotSetKeyApproveOrPublish() {
+        client.put()
+                .uri("/api/v1/statements/" + STATEMENT + "/questions/" + QUESTION + "/correct-option")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"optionId\":" + RIGHT_OPTION + "}")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.post()
+                .uri("/api/v1/statements/" + STATEMENT + "/approve")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.patch()
+                .uri("/api/v1/statements/" + STATEMENT + "/visibility?visible=true")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
     private void sql(String statement) {
         database.sql(statement).fetch().rowsUpdated().block(Duration.ofSeconds(10));
     }
 
-    private static WebTestClientConfigurer teacherJwt() {
-        return mockAuthentication(new UsernamePasswordAuthenticationToken(
-                String.valueOf(TEACHER), null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEACHER"))));
-    }
-
-    private static WebTestClientConfigurer studentJwt() {
-        return mockAuthentication(new UsernamePasswordAuthenticationToken(
-                String.valueOf(STUDENT), null,
-                List.of(new SimpleGrantedAuthority("ROLE_STUDENT"))));
+    private WebTestClient bearer(String token) {
+        return client.mutate().defaultHeaders(headers -> headers.setBearerAuth(token)).build();
     }
 
     private static String env(String key, String fallback) {
