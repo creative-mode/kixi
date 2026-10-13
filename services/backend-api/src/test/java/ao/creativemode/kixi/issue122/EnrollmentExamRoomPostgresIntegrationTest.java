@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.issue122;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
@@ -31,7 +32,10 @@ import ao.creativemode.kixi.identity.service.JwtService;
 })
 class EnrollmentExamRoomPostgresIntegrationTest {
     private static final long ADMIN = 122101L;
-    private static final long STUDENT = 122102L;
+    private static final long OWNER = 122102L;
+    private static final long OTHER_TEACHER = 122103L;
+    private static final long STUDENT = 122104L;
+    private static final long OTHER_STUDENT = 122105L;
     private static final long INSTITUTION = 122101L;
     private static final long YEAR = 122101L;
     private static final long COURSE = 122101L;
@@ -47,6 +51,8 @@ class EnrollmentExamRoomPostgresIntegrationTest {
 
     private WebTestClient client;
     private String adminToken;
+    private String ownerToken;
+    private String otherTeacherToken;
     private String studentToken;
 
     static {
@@ -74,15 +80,16 @@ class EnrollmentExamRoomPostgresIntegrationTest {
     void fixture() {
         client = WebTestClient.bindToApplicationContext(context).apply(springSecurity())
                 .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
-        sql("DELETE FROM simulation_answers WHERE simulation_id IN (SELECT id FROM simulations WHERE account_id IN (" + ADMIN + "," + STUDENT + "))");
-        sql("UPDATE exam_room_participants SET simulation_id = NULL WHERE account_id IN (" + ADMIN + "," + STUDENT + ")");
-        sql("DELETE FROM simulations WHERE account_id IN (" + ADMIN + "," + STUDENT + ")");
-        sql("DELETE FROM exam_room_participants WHERE account_id IN (" + ADMIN + "," + STUDENT + ")");
+        sql("DELETE FROM simulation_answers WHERE simulation_id IN (SELECT id FROM simulations WHERE account_id IN ("
+                + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + "))");
+        sql("UPDATE exam_room_participants SET simulation_id = NULL WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
+        sql("DELETE FROM simulations WHERE account_id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
+        sql("DELETE FROM exam_room_participants WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM exam_rooms WHERE statement_id = " + STATEMENT);
-        sql("DELETE FROM enrollments WHERE account_id = " + STUDENT);
+        sql("DELETE FROM enrollments WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
-        sql("DELETE FROM account_roles WHERE account_id IN (" + ADMIN + "," + STUDENT + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + ADMIN + "," + STUDENT + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM classes WHERE id = " + CLASS);
         sql("DELETE FROM courses WHERE id = " + COURSE);
         sql("DELETE FROM school_years WHERE id = " + YEAR);
@@ -94,57 +101,111 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES (" + CLASS + ", '12A', 12, " + COURSE + ", " + YEAR + ", " + INSTITUTION + ", now(), now())");
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active) VALUES "
                 + "(" + ADMIN + ", 'admin122', 'admin122@kixi.test', 'x', true, true),"
-                + "(" + STUDENT + ", 'student122', 'student122@kixi.test', 'x', true, true)");
-        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
-        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + STUDENT + ", id FROM roles WHERE name = 'STUDENT'");
-        sql("INSERT INTO enrollments (id, account_id, class_id, school_year_id) VALUES (" + STUDENT + ", " + STUDENT + ", " + CLASS + ", " + YEAR + ")");
+                + "(" + OWNER + ", 'owner122', 'owner122@kixi.test', 'x', true, true),"
+                + "(" + OTHER_TEACHER + ", 'teacher122', 'teacher122@kixi.test', 'x', true, true),"
+                + "(" + STUDENT + ", 'student122', 'student122@kixi.test', 'x', true, true),"
+                + "(" + OTHER_STUDENT + ", 'student-other122', 'student-other122@kixi.test', 'x', true, true)");
+        role(ADMIN, "ADMIN");
+        role(OWNER, "TEACHER");
+        role(OTHER_TEACHER, "TEACHER");
+        role(STUDENT, "STUDENT");
+        role(OTHER_STUDENT, "STUDENT");
         sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, class_id, school_year_id, visible, needs_review, source) VALUES ("
-                + STATEMENT + ", 'Issue 122', 'TEST', 60, 1, " + ADMIN + ", " + CLASS + ", " + YEAR + ", false, false, 'manual')");
+                + STATEMENT + ", 'Issue 122', 'TEST', 60, 1, " + OWNER + ", " + CLASS + ", " + YEAR + ", false, false, 'manual')");
+
         adminToken = jwtService.generateToken(ADMIN, List.of("ADMIN"));
+        ownerToken = jwtService.generateToken(OWNER, List.of("TEACHER"));
+        otherTeacherToken = jwtService.generateToken(OTHER_TEACHER, List.of("TEACHER"));
         studentToken = jwtService.generateToken(STUDENT, List.of("STUDENT"));
     }
 
     @Test
+    void enrollmentApiEnforcesOwnershipCancellationAndRestoration() {
+        AtomicLong ownEnrollment = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated().expectBody().jsonPath("$.accountId").isEqualTo((int) STUDENT)
+                .jsonPath("$.id").value(value -> ownEnrollment.set(((Number) value).longValue()));
+
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isForbidden();
+
+        AtomicLong otherEnrollment = new AtomicLong();
+        bearer(adminToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id")
+                .value(value -> otherEnrollment.set(((Number) value).longValue()));
+
+        bearer(studentToken).delete().uri("/api/v1/enrollments/" + ownEnrollment).exchange().expectStatus().isNoContent();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + ownEnrollment + " AND deleted_at IS NOT NULL")).isEqualTo(1L);
+
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + ownEnrollment + " AND deleted_at IS NULL AND status = 'ACTIVE'")).isEqualTo(1L);
+        assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + otherEnrollment + " AND deleted_at IS NULL")).isEqualTo(1L);
+    }
+
+    @Test
     void enrollmentUniquenessIsEnforcedByPostgresql() {
+        sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES (" + STUDENT + ", " + CLASS + ", " + YEAR + ")");
         assertThatThrownBy(() -> sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES ("
                 + STUDENT + ", " + CLASS + ", " + YEAR + ")"))
                 .hasMessageContaining("uq_enrollments_account_school_year_active");
     }
 
     @Test
-    void adminCreatesRoomStudentJoinsAndGetsOneRoomSimulation() {
+    void ownerManagesRoomOtherTeacherAndStudentAreForbiddenAndAdminClosesIt() {
+        // The student must be enrolled before the real invitation API can validate the class roll.
+        sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES (" + STUDENT + ", " + CLASS + ", " + YEAR + ")");
         LocalDateTime now = LocalDateTime.now().withNano(0);
         AtomicLong roomId = new AtomicLong();
-        bearer(adminToken).post().uri("/api/v1/exam-rooms").contentType(MediaType.APPLICATION_JSON)
+        bearer(ownerToken).post().uri("/api/v1/exam-rooms").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"statementId\":" + STATEMENT + ",\"classId\":" + CLASS
                         + ",\"startsAt\":\"" + now.minusMinutes(1) + "\",\"endsAt\":\"" + now.plusHours(1)
                         + "\",\"durationMinutes\":60}")
                 .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id")
                 .value(value -> roomId.set(((Number) value).longValue()));
+        long room = roomId.get();
 
-        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + roomId + "/participants")
+        bearer(otherTeacherToken).post().uri("/api/v1/exam-rooms/" + room + "/participants")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"accountId\":" + STUDENT + "}")
+                .exchange().expectStatus().isForbidden();
+        bearer(otherTeacherToken).post().uri("/api/v1/exam-rooms/" + room + "/open").exchange().expectStatus().isForbidden();
+        bearer(otherTeacherToken).post().uri("/api/v1/exam-rooms/" + room + "/start").exchange().expectStatus().isForbidden();
+        bearer(studentToken).post().uri("/api/v1/exam-rooms/" + room + "/open").exchange().expectStatus().isForbidden();
+
+        bearer(ownerToken).post().uri("/api/v1/exam-rooms/" + room + "/participants")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"accountId\":" + STUDENT + "}")
                 .exchange().expectStatus().isOk();
-        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + roomId + "/open")
-                .exchange().expectStatus().isOk();
-        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + roomId + "/start")
-                .exchange().expectStatus().isOk();
-        bearer(studentToken).post().uri("/api/v1/exam-rooms/" + roomId + "/join")
-                .exchange().expectStatus().isOk().expectBody().jsonPath("$.simulationId").isNumber();
+        bearer(ownerToken).post().uri("/api/v1/exam-rooms/" + room + "/open").exchange().expectStatus().isOk();
+        bearer(ownerToken).post().uri("/api/v1/exam-rooms/" + room + "/start").exchange().expectStatus().isOk();
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/exam-rooms/" + room + "/join").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.simulationId").value(value -> simulationId.set(((Number) value).longValue()));
 
-        Long count = database.sql("SELECT count(*) AS count FROM simulations WHERE exam_room_id = " + roomId)
-                .map((row, metadata) -> row.get("count", Long.class)).one().block(Duration.ofSeconds(10));
-        if (count == null || count != 1L) {
-            throw new AssertionError("expected one exam-room simulation, got " + count);
-        }
+        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + room + "/close").exchange().expectStatus().isOk();
+        assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = " + room + " AND status = 'CLOSED'")).isEqualTo(1L);
+        assertThat(one("SELECT count(*) FROM simulations WHERE id = " + simulationId + " AND status = 'FINISHED' AND deleted_at IS NULL")).isEqualTo(1L);
+    }
+
+    private void role(long accountId, String role) {
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + accountId + ", id FROM roles WHERE name = '" + role + "'");
     }
 
     private WebTestClient bearer(String token) {
         return client.mutate().defaultHeaders(headers -> headers.setBearerAuth(token)).build();
     }
+
+    private long one(String statement) {
+        return database.sql(statement).map((row, metadata) -> row.get(0, Long.class)).one().block(Duration.ofSeconds(10));
+    }
+
     private void sql(String statement) {
         database.sql(statement).fetch().rowsUpdated().block(Duration.ofSeconds(10));
     }
+
     private static String env(String key, String fallback) {
         String value = System.getenv(key);
         return value == null || value.isBlank() ? fallback : value;
