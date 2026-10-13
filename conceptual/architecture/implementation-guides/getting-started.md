@@ -13,6 +13,10 @@ de referência.
 | Docker Engine | 24+ | `docker --version` |
 | Docker Compose | v2 | `docker compose version` |
 | OpenSSL | qualquer | `openssl version` |
+| Node.js | 20+ (22 LTS ou 24) | `node --version` |
+
+Node só é preciso para o **passo 7**, o frontend. Para o backend, o OCR e a base de
+dados, o Docker chega.
 
 Portas usadas por omissão (todas configuráveis no `.env`):
 
@@ -23,6 +27,7 @@ Portas usadas por omissão (todas configuráveis no `.env`):
 | `5433` | PostgreSQL |
 | `6379` | Redis (`--profile cache`) |
 | `9000` / `9001` | MinIO (`--profile storage`) |
+| `3000` | gateway do frontend (só no passo 7) |
 
 O `ocr-service` reserva cerca de 4 GB de memória — confirma que tens espaço livre
 antes de arrancar.
@@ -120,16 +125,19 @@ Os detalhes do contrato estão em [api.md](api.md).
 
 ## 5. Dados semeados
 
-As migrações Flyway (`V1` … `V33`) correm automaticamente no arranque do backend.
-Das migrações de referência ficas com:
+As migrações Flyway correm automaticamente no arranque do backend: não há
+passo nenhum para as disparar à mão, e a migração de cada revisão já está no
+código.
 
-| Dados | Origem | Conteúdo |
-| --- | --- | --- |
-| Papéis | `V17` | `ADMIN`, `TEACHER`, `STUDENT` |
-| Trimestres | `V17` | 1.º, 2.º e 3.º trimestre |
-| Disciplinas | `V17` | Matemática, Português, Física, Química, Biologia, História, Geografia, Inglês, Filosofia |
-| Ano lectivo | `V17` | 2024/2025 |
-| Instituição | `V26` | ITEL — Instituto de Telecomunicações (com todas as disciplinas associadas) |
+Ficas com estes dados semeados:
+
+| Dados | Conteúdo |
+| --- | --- |
+| Papéis | `ADMIN`, `TEACHER`, `STUDENT` |
+| Trimestres | 1.º, 2.º e 3.º trimestre |
+| Disciplinas | Matemática, Português, Física, Química, Biologia, História, Geografia, Inglês, Filosofia |
+| Ano lectivo | 2024/2025 |
+| Instituição | ITEL — Instituto de Telecomunicações (com todas as disciplinas associadas) |
 
 Não há **contas** semeadas: o primeiro ADMIN vem do passo 2 e os alunos registam-se
 pelo endpoint público.
@@ -162,6 +170,59 @@ Os restantes fluxos (enunciados, atribuições, matrículas e tutor) estão em
 
 ---
 
+## 7. O frontend
+
+O frontend vive no repositório à parte, **[kixi-frontend](https://github.com/creative-mode/kixi-frontend)**.
+O README dele é a referência; aqui fica o mínimo para o ligares ao backend que
+acabaste de subir.
+
+```bash
+git clone https://github.com/creative-mode/kixi-frontend.git
+cd kixi-frontend
+
+# São três projectos: a raiz (manager), landing/ e student/.
+npm install
+npm install --prefix landing
+npm install --prefix student
+```
+
+Para falar com o backend real, e não com o simulado:
+
+```bash
+# .env na raiz do kixi-frontend
+KIXI_MOCK=false
+BACKEND_API_URL=http://localhost:8080/api/v1
+JWT_SECRET=<o mesmo JWT_SECRET do .env do backend>
+```
+
+`KIXI_MOCK` vem a `true` — é o backend simulado que aparece por omissão. `JWT_SECRET`
+tem de ser **o mesmo** do backend, senão o token que este emite não é o que aquele
+aceita.
+
+Arrancar tudo de uma vez:
+
+```bash
+npm run dev:all
+```
+
+Isto sobe a landing, a app do aluno e a do gestor, mais o **gateway**, que é a
+única porta publicada. É por ela que o browser entra:
+
+| Endereço | O que é |
+| --- | --- |
+| http://localhost:3000/ | landing |
+| http://localhost:3000/aluno | app do aluno |
+| http://localhost:3000/manager | app do gestor |
+
+Cada app corre na sua porta interna (3002 gestor, 3003 aluno, 3004 landing) e não
+se abre directamente — o gateway é que as junta atrás de uma origem só. Para
+debugar uma app isolada, o README do frontend explica como as abrir na porta dela.
+
+Com o `KIXI_MOCK=false`, o que o browser mostra passa a vir do backend do passo 3.
+Com o valor por omissão, mostra o simulado e o backend pode nem estar a correr.
+
+---
+
 ## Comandos úteis
 
 ```bash
@@ -180,5 +241,7 @@ docker compose up --build backend-api  # reconstruir só o backend
   `POSTGRES_PORT` no `.env`.
 - **`/api/v1/chat` responde 503** — falta `GROQ_API_KEY`; é opcional, o resto da
   plataforma continua a funcionar.
-- **Migrações falham num volume antigo** — o `init.sql` legado é baselined em
-  `V16`; para começar limpo, `docker compose down -v` e sobe de novo.
+- **Migrações falham num volume antigo** — há um `init.sql` legado que o volume
+  pode ter trazido de uma versão anterior do projecto, com um esquema que a
+  migração já não espera. Para começar limpo, `docker compose down -v` e sobe de
+  novo.
