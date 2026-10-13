@@ -173,6 +173,36 @@ class SimulationServiceTest {
                 .verifyComplete();
     }
 
+    /**
+     * A teacher is refused with a 403, not a 404, for a paper outside their classes. One such
+     * simulation used to fail the whole list; it has to be left out and the rest returned.
+     */
+    @Test
+    void findAllAuthorizedKeepsATeachersOwnSimulationsWhenAnotherIsForbidden() {
+        StatementWriteAccessService writeAccess = mock(StatementWriteAccessService.class);
+        ExamRoomAccess rooms = mock(ExamRoomAccess.class);
+        SimulationService teacherView = new SimulationService(repository, accountRepository,
+                schoolYearRepository, statementRepository, deadlineService, rooms, writeAccess);
+
+        Simulation mine = simulation(1L, SimulationStatus.FINISHED);
+        mine.setStatementId(10L);
+        Simulation others = simulation(2L, SimulationStatus.FINISHED);
+        others.setStatementId(20L);
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.just(mine, others));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(mine));
+        when(repository.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(others));
+        Statement myStatement = new Statement();
+        myStatement.setId(10L);
+        when(statementRepository.findById(10L)).thenReturn(Mono.just(myStatement));
+        when(writeAccess.requireCanWrite(10L, 5L, false)).thenReturn(Mono.empty());
+        when(writeAccess.requireCanWrite(20L, 5L, false)).thenReturn(Mono.error(
+                ApiException.forbidden("Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(teacherView.findAllAuthorized(5L, false, true))
+                .assertNext(response -> assertThat(response.id()).isEqualTo(1L))
+                .verifyComplete();
+    }
+
     @Test
     void findAllTrashedAuthorizedOmitsUnauthorizedSimulation() {
         Simulation deleted = simulation(1L, SimulationStatus.CANCELLED);

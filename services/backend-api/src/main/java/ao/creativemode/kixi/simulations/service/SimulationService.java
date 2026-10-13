@@ -121,7 +121,7 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
-                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                        .onErrorResume(error -> isHiddenFromCaller(error)
                                 ? Mono.empty() : Mono.error(error))
                         .flatMap(this::toResponse));
     }
@@ -129,14 +129,24 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNotNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher, true)
-                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                        .onErrorResume(error -> isHiddenFromCaller(error)
                                 ? Mono.empty() : Mono.error(error))
                         .flatMap(this::toResponse));
     }
 
-    private boolean isAuthorizationNotFound(Throwable error) {
-        return error instanceof ApiException
-                && ((ApiException) error).getStatusCode() == 404;
+    /**
+     * A simulation the caller may not see is left out of a list, whichever way the check
+     * says no. A student's miss is a 404; a teacher's is the 403 of
+     * {@code StatementWriteAccessService} ("not assigned to this class and subject").
+     * Letting the 403 through failed the whole list as soon as one paper belonged to
+     * someone else's class.
+     */
+    private boolean isHiddenFromCaller(Throwable error) {
+        if (!(error instanceof ApiException)) {
+            return false;
+        }
+        int status = ((ApiException) error).getStatusCode();
+        return status == 404 || status == 403;
     }
 
     @Transactional
