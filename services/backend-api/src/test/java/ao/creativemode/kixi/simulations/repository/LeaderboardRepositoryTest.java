@@ -141,6 +141,24 @@ class LeaderboardRepositoryTest {
                 .contains("cl.institution_id = :groupId");
     }
 
+    /**
+     * The statement has to parse, which {@code contains} on separate fragments cannot say.
+     * A text block drops trailing spaces, so a keyword left at the end of a line welds onto
+     * what is appended after it ({@code ANDe.class_id}) and Postgres answers 500.
+     */
+    @Test
+    void noSqlKeywordIsWeldedToTheTokenAfterIt() {
+        for (Scope scope : Scope.values()) {
+            for (String sql : new String[] {
+                    LeaderboardRepository.membersSql(scope, 7L),
+                    LeaderboardRepository.averagesSql(scope, 7L, 1L, 1L, 42L, null, null).statement()}) {
+                assertThat(sql)
+                        .as("%s: a keyword followed directly by an identifier", scope)
+                        .doesNotContainPattern("\\b(AND|OR|WHERE|ON)[a-z]");
+            }
+        }
+    }
+
     @Test
     void theMemberCountExcludesCancelledEnrollmentsAndInactiveAccounts() {
         String sql = LeaderboardRepository.membersSql(Scope.CLASS, 7L);
