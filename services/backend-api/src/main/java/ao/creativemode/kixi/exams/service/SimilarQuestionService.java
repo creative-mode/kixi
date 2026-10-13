@@ -16,6 +16,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -41,6 +43,8 @@ import reactor.core.publisher.Mono;
  */
 @Service
 public class SimilarQuestionService {
+
+    private static final Logger log = LoggerFactory.getLogger(SimilarQuestionService.class);
 
     /** How many candidates are read before ranking. */
     static final int CANDIDATES = 200;
@@ -72,10 +76,20 @@ public class SimilarQuestionService {
      * the caller's affiliation to bound its own search, and failing to do so is not the
      * student's problem to solve. The tutor then invents exercises, which is the same
      * answer an account with no school gets.</p>
+     *
+     * <p>The failure is logged before it is swallowed. Fail-closed is the right
+     * behaviour, but silent: if {@code MeService} starts failing for everyone, the
+     * symptom is "the tutor stopped suggesting similar exercises", which points nowhere
+     * near the actual cause. The warning is what turns that into a traceable fault
+     * instead of a mystery (issue #218).</p>
      */
     private Mono<Long> schoolOf(Long accountId) {
         return meService.getMe(accountId)
                 .flatMap(me -> me.school() == null ? Mono.empty() : Mono.just(me.school().id()))
+                .doOnError(error -> log.warn(
+                        "Could not read the affiliation of account {} for similar exercises; "
+                                + "treating as no school",
+                        accountId, error))
                 .onErrorReturn(0L)
                 .filter(schoolId -> schoolId != null && schoolId != 0L);
     }
@@ -113,7 +127,12 @@ public class SimilarQuestionService {
                 return Mono.zip(
                         options.findAllByQuestionIdInAndDeletedAtIsNull(questionIds)
                             .collect(Collectors.groupingBy(QuestionOption::getQuestionId)),
-                        statements.findAllById(statementIds)
+                        // The same gate findCatalogCandidates already applied to the
+                        // questions, applied again here: a plain findAllById would be a
+                        // second, unguarded read, and a statement unpublished or deleted
+                        // in the gap between the two queries would still arrive with a
+                        // title in the response (issue #218).
+                        statements.findAllByIdInAndVisibleTrueAndDeletedAtIsNullAndNeedsReviewFalse(statementIds)
                             .collectMap(Statement::getId, Function.identity()))
                     .map(tuple -> ranked.stream()
                         .map(question -> toSimilar(question,
