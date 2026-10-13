@@ -6,6 +6,8 @@ import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -55,6 +57,18 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
      * Find a visible active statement by ID.
      */
     Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);
+
+    /**
+     * The same gate {@code QuestionRepository.findCatalogCandidates} already applies,
+     * for the titles that travel alongside the questions it found (issue #218).
+     *
+     * <p>{@code SimilarQuestionService} used to read these titles with a plain
+     * {@code findAllById}, which carries none of the candidate query's filters. Between
+     * the two reads a statement could be unpublished or deleted and still arrive with a
+     * title in the tutor's sources. This closes that gap by asking the same question
+     * twice instead of asking it once and trusting the answer to still hold.</p>
+     */
+    Flux<Statement> findAllByIdInAndVisibleTrueAndDeletedAtIsNullAndNeedsReviewFalse(Collection<Long> ids);
 
     /**
      * Find a deleted statement by ID
