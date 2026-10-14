@@ -15,6 +15,8 @@ import ao.creativemode.kixi.feed.repository.PostReportRepository;
 import ao.creativemode.kixi.feed.repository.PostRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
+import ao.creativemode.kixi.shared.service.InstitutionNameReader;
+import ao.creativemode.kixi.shared.service.SimulationShowcaseReader;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.ClassScope;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.FeedScope;
 
@@ -70,6 +72,8 @@ class PostServiceTest {
     @Mock private PostReportRepository reportRepository;
     @Mock private FeedScopeAuthorizer scopeAuthorizer;
     @Mock private FeedRateLimiter rateLimiter;
+    @Mock private SimulationShowcaseReader showcaseReader;
+    @Mock private InstitutionNameReader institutionNames;
 
     private PostService postService;
 
@@ -79,7 +83,8 @@ class PostServiceTest {
     @BeforeEach
     void setUp() {
         postService = new PostService(postRepository, feedRepository, reactionRepository,
-                commentRepository, reportRepository, scopeAuthorizer, rateLimiter, clock);
+                commentRepository, reportRepository, scopeAuthorizer, rateLimiter,
+                showcaseReader, institutionNames, clock);
         lenient().when(rateLimiter.check(anyLong())).thenReturn(Mono.empty());
     }
 
@@ -219,7 +224,7 @@ class PostServiceTest {
 
     @Test
     void createPostDerivesTheWholeScopeFromTheClassTheAccountActuallyHolds() {
-        PostRequest request = new PostRequest(PostType.TOPIC, MY_CLASS_ID, "Title", "Sample test post content");
+        PostRequest request = new PostRequest(PostType.TOPIC, MY_CLASS_ID, "Title", "Sample test post content", null);
         when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
                 new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
         when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
@@ -241,7 +246,7 @@ class PostServiceTest {
 
     @Test
     void postingIntoAClassTheAccountDoesNotHoldIsRefused() {
-        PostRequest request = new PostRequest(PostType.TOPIC, OTHER_SCHOOL_CLASS_ID, null, "Sample test post content");
+        PostRequest request = new PostRequest(PostType.TOPIC, OTHER_SCHOOL_CLASS_ID, null, "Sample test post content", null);
         when(scopeAuthorizer.classScope(ACCOUNT_ID, OTHER_SCHOOL_CLASS_ID)).thenReturn(Mono.empty());
 
         StepVerifier.create(postService.createPost(ACCOUNT_ID, request))
@@ -253,7 +258,7 @@ class PostServiceTest {
 
     @Test
     void onlyDoubtAndTopicCanBeCreatedManually() {
-        PostRequest request = new PostRequest(PostType.EXAM, MY_CLASS_ID, null, "Sample test post content");
+        PostRequest request = new PostRequest(PostType.EXAM, MY_CLASS_ID, null, "Sample test post content", null);
 
         StepVerifier.create(postService.createPost(ACCOUNT_ID, request))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
@@ -263,8 +268,79 @@ class PostServiceTest {
     }
 
     @Test
+    void aSimulationPostCarriesTheFiguresTheServerReadNotTheOnesTheClientSent() {
+        PostRequest request = new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null, "Corri melhor do que esperava", 77L);
+        when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
+                new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
+        when(showcaseReader.showcaseOf(77L, ACCOUNT_ID)).thenReturn(Mono.just(
+                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800)));
+        when(institutionNames.nameOf(MY_INSTITUTION_ID)).thenReturn(Mono.just("Colégio Kixi"));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(any(), eq(ACCOUNT_ID))).thenReturn(Mono.just(false));
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID, request))
+                .assertNext(response -> {
+                    assertThat(response.type()).isEqualTo("simulation");
+                    assertThat(response.content()).isEqualTo("Corri melhor do que esperava");
+                    assertThat(response.simulation().finalScore()).isEqualTo(14.5);
+                    assertThat(response.simulation().maxScore()).isEqualTo(20.0);
+                    assertThat(response.simulation().schoolName()).isEqualTo("Colégio Kixi");
+                    assertThat(response.simulation().statementTitle()).isEqualTo("Exame de Matemática");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void aSimulationPostWithoutANoteIsAllowedButWithoutASimulationIsNot() {
+        when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
+                new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
+        when(showcaseReader.showcaseOf(77L, ACCOUNT_ID)).thenReturn(Mono.just(
+                new SimulationShowcaseReader.Showcase(77L, "Exame", 10.0, 20.0, 5, 10, 600)));
+        when(institutionNames.nameOf(MY_INSTITUTION_ID)).thenReturn(Mono.empty());
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(any(), eq(ACCOUNT_ID))).thenReturn(Mono.just(false));
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID,
+                        new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null, null, 77L)))
+                .assertNext(response -> assertThat(response.content()).isEmpty())
+                .verifyComplete();
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID,
+                        new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null, "nota", null)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+    }
+
+    @Test
+    void aSimulationThatIsNotTheCallersOrStillRunningIsNotPublished() {
+        when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
+                new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
+        when(showcaseReader.showcaseOf(88L, ACCOUNT_ID)).thenReturn(Mono.error(ApiException.notFound("Simulation not found: 88")));
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID,
+                        new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null, "nota", 88L)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verifyNoInteractions(postRepository);
+    }
+
+    @Test
+    void aTextPostCannotSmuggleInASimulationId() {
+        StepVerifier.create(postService.createPost(ACCOUNT_ID,
+                        new PostRequest(PostType.TOPIC, MY_CLASS_ID, null, "Sample test post content", 77L)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+        verifyNoInteractions(showcaseReader);
+    }
+
+    @Test
     void creatingAPostChecksTheRateLimitFirst() {
-        PostRequest request = new PostRequest(PostType.DOUBT, MY_CLASS_ID, null, "Sample test post content");
+        PostRequest request = new PostRequest(PostType.DOUBT, MY_CLASS_ID, null, "Sample test post content", null);
         when(rateLimiter.check(ACCOUNT_ID)).thenReturn(Mono.error(
                 new ao.creativemode.kixi.feed.exception.FeedRateLimitException(30L)));
 

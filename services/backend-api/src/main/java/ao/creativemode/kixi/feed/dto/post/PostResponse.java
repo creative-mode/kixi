@@ -16,5 +16,18 @@ public record PostResponse(
         Long commentCount,
         Boolean hasReacted,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
-) {}
+        LocalDateTime updatedAt,
+        SimulationCard simulation
+) {
+
+    /** The result card of a SIMULATION post, as it was when published. */
+    public record SimulationCard(
+            Long simulationId,
+            String statementTitle,
+            String schoolName,
+            Double finalScore,
+            Double maxScore,
+            Integer correctAnswers,
+            Integer totalQuestions,
+            Integer timeSpentSeconds) { }
+}
