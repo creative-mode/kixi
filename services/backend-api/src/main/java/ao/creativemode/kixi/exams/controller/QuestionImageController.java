@@ -3,6 +3,8 @@ package ao.creativemode.kixi.exams.controller;
 import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
 import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageResponse;
 import ao.creativemode.kixi.exams.service.QuestionImageService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,9 +22,15 @@ import static org.springframework.http.HttpStatus.NO_CONTENT;
 public class QuestionImageController {
 
     private final QuestionImageService service;
+    private final CurrentAccountService currentAccountService;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
-    public QuestionImageController(QuestionImageService service) {
+    public QuestionImageController(QuestionImageService service,
+                                   CurrentAccountService currentAccountService,
+                                   ApiAbuseRateLimiter abuseRateLimiter) {
         this.service = service;
+        this.currentAccountService = currentAccountService;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /**
@@ -74,7 +82,9 @@ public class QuestionImageController {
             @RequestPart("file") Mono<FilePart> filePartMono,
             UriComponentsBuilder uriBuilder) {
 
-        return service.createWithFile(request, filePartMono)
+        return currentAccountService.requiredAccountId()
+                .flatMap(abuseRateLimiter::checkUpload)
+                .then(service.createWithFile(request, filePartMono))
                 .map(created -> {
                     URI location = uriBuilder
                             .path("/api/v1/question-images/{id}")

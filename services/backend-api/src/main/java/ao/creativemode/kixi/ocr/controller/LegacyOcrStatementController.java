@@ -4,6 +4,7 @@ import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
 import ao.creativemode.kixi.ocr.service.LegacyOcrStatementService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
@@ -51,13 +52,16 @@ public class LegacyOcrStatementController {
 
     private final LegacyOcrStatementService legacyOcrStatementService;
     private final CurrentAccountService currentAccountService;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
     public LegacyOcrStatementController(
         LegacyOcrStatementService legacyOcrStatementService,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        ApiAbuseRateLimiter abuseRateLimiter
     ) {
         this.legacyOcrStatementService = legacyOcrStatementService;
         this.currentAccountService = currentAccountService;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /**
@@ -81,7 +85,8 @@ public class LegacyOcrStatementController {
         log.info("OCR statement creation request received");
 
         return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> files.collectList().flatMap(fileList -> {
+            .flatMap(createdBy -> abuseRateLimiter.checkUpload(createdBy)
+                .then(files.collectList()).flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
                     return Mono.error(
@@ -152,10 +157,7 @@ public class LegacyOcrStatementController {
         @RequestPart("file") FilePart file,
         UriComponentsBuilder uriBuilder
     ) {
-        log.info(
-            "Single-file OCR statement creation request received: {}",
-            safeFilename(file.filename())
-        );
+        log.info("Single-file OCR statement creation request received");
 
         // Validate file type
         if (!isAllowedFileType(file.filename())) {
@@ -165,8 +167,8 @@ public class LegacyOcrStatementController {
         }
 
         return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> legacyOcrStatementService
-                .createFromOcr(List.of(file), createdBy))
+            .flatMap(createdBy -> abuseRateLimiter.checkUpload(createdBy)
+                .then(legacyOcrStatementService.createFromOcr(List.of(file), createdBy)))
             .map(result -> {
                 URI location = uriBuilder
                     .path("/api/v1/statements/{id}")
@@ -207,11 +209,4 @@ public class LegacyOcrStatementController {
             "Invalid file type. Allowed: " + String.join(", ", ALLOWED_EXTENSIONS));
     }
 
-    private static String safeFilename(String filename) {
-        if (filename == null || filename.isBlank()) {
-            return "<unnamed>";
-        }
-        String sanitized = filename.replace("\r", "").replace("\n", "");
-        return sanitized.substring(0, Math.min(sanitized.length(), 255));
-    }
 }

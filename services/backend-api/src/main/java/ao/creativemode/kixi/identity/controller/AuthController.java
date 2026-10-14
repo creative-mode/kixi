@@ -9,6 +9,7 @@ import ao.creativemode.kixi.identity.service.AuthService;
 import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
@@ -24,7 +25,6 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
-import java.util.Locale;
 
 /**
  * Autenticação: login tradicional (username/email + password) e login Google OAuth2.
@@ -43,17 +43,23 @@ public class AuthController {
     private final RegistrationRateLimiter registrationRateLimiter;
     private final LoginRateLimiter loginRateLimiter;
     private final TrustedProxyProperties trustedProxies;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
     public AuthController(AuthService authService,
                           GoogleOAuth2Properties googleProperties,
                           RegistrationRateLimiter registrationRateLimiter,
-                          LoginRateLimiter loginRateLimiter,
-                          TrustedProxyProperties trustedProxies) {
         this.authService = authService;
         this.googleProperties = googleProperties;
         this.registrationRateLimiter = registrationRateLimiter;
         this.loginRateLimiter = loginRateLimiter;
         this.trustedProxies = trustedProxies;
+                          ApiAbuseRateLimiter abuseRateLimiter) {
+        this.authService = authService;
+        this.googleProperties = googleProperties;
+        this.registrationRateLimiter = registrationRateLimiter;
+        this.loginRateLimiter = loginRateLimiter;
+        this.trustedProxies = trustedProxies;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /**
@@ -89,7 +95,6 @@ public class AuthController {
             ServerWebExchange exchange,
             @Valid @RequestBody RegisterRequest request) {
         return registrationRateLimiter.check(clientAddress(exchange))
-                .then(registrationRateLimiter.check(identityKey(request)))
                 .then(authService.register(request))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
@@ -144,10 +149,11 @@ public class AuthController {
         }
         String state = java.util.UUID.randomUUID().toString();
         String url = googleProperties.buildAuthorizationUrl(state);
-        return Mono.just(ResponseEntity.status(302)
-                .header(HttpHeaders.SET_COOKIE, stateCookie(state).toString())
-                .location(URI.create(url))
-                .build());
+        return abuseRateLimiter.checkLogin(clientAddress(exchange))
+                .then(Mono.fromSupplier(() -> ResponseEntity.status(302)
+                        .header(HttpHeaders.SET_COOKIE, stateCookie(state).toString())
+                        .location(URI.create(url))
+                        .build()));
     }
 
     /**
@@ -158,12 +164,14 @@ public class AuthController {
     public Mono<ResponseEntity<LoginResponse>> googleCallback(
             @RequestParam String code,
             @RequestParam(required = false) String state,
-            @CookieValue(name = STATE_COOKIE_NAME, required = false) String expectedState) {
+            @CookieValue(name = STATE_COOKIE_NAME, required = false) String expectedState,
+            ServerWebExchange exchange) {
         if (!isValidState(state, expectedState)) {
             return Mono.error(ApiException.badRequest("Invalid OAuth state"));
         }
 
-        return authService.loginWithGoogle(code)
+        return abuseRateLimiter.checkLogin(clientAddress(exchange))
+                .then(authService.loginWithGoogle(code))
                 .map(response -> ResponseEntity.ok()
                         .header(HttpHeaders.SET_COOKIE, clearStateCookie().toString())
                         .body(response));

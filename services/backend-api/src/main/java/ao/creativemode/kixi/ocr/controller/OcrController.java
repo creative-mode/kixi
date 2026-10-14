@@ -8,6 +8,7 @@ import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,15 +62,18 @@ public class OcrController {
     private final OcrServiceClient ocrServiceClient;
     private final OcrPersistenceService ocrPersistenceService;
     private final CurrentAccountService currentAccountService;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
     public OcrController(
         OcrServiceClient ocrServiceClient,
         OcrPersistenceService ocrPersistenceService,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        ApiAbuseRateLimiter abuseRateLimiter
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.ocrPersistenceService = ocrPersistenceService;
         this.currentAccountService = currentAccountService;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /**
@@ -87,8 +91,9 @@ public class OcrController {
     ) {
         log.info("OCR extraction request received");
 
-        return files
-            .collectList()
+        return currentAccountService.requiredAccountId()
+            .flatMap(abuseRateLimiter::checkUpload)
+            .then(files.collectList())
             .flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
@@ -158,10 +163,7 @@ public class OcrController {
     public Mono<ResponseEntity<OcrResponse>> extractTextSingle(
         @RequestPart("file") FilePart file
     ) {
-        log.info(
-            "Single-file OCR extraction request received: {}",
-            safeFilename(file.filename())
-        );
+        log.info("Single-file OCR extraction request received");
 
         // Validate file type
         if (!isAllowedFileType(file.filename())) {
@@ -170,8 +172,9 @@ public class OcrController {
             );
         }
 
-        return ocrServiceClient
-            .extractText(List.of(file))
+        return currentAccountService.requiredAccountId()
+            .flatMap(abuseRateLimiter::checkUpload)
+            .then(ocrServiceClient.extractText(List.of(file)))
             .map(ocrResponse -> {
                 if (ocrResponse.isSuccess()) {
                     return ResponseEntity.ok(ocrResponse);
@@ -220,8 +223,9 @@ public class OcrController {
     ) {
         log.info("Angolan exam extraction request received");
 
-        return files
-            .collectList()
+        return currentAccountService.requiredAccountId()
+            .flatMap(abuseRateLimiter::checkUpload)
+            .then(files.collectList())
             .flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
@@ -308,7 +312,8 @@ public class OcrController {
         log.info("OCR extraction and persistence request received");
 
         return currentAccountService.requiredAccountId()
-            .flatMap(createdBy -> files.collectList().flatMap(fileList -> {
+            .flatMap(createdBy -> abuseRateLimiter.checkUpload(createdBy)
+                .then(files.collectList()).flatMap(fileList -> {
                 // Validate file count
                 if (fileList.isEmpty()) {
                     return Mono.error(
@@ -580,14 +585,6 @@ public class OcrController {
     private static ApiException invalidFileTypeException() {
         return ApiException.badRequest(
             "Invalid file type. Allowed: " + String.join(", ", ALLOWED_EXTENSIONS));
-    }
-
-    private static String safeFilename(String filename) {
-        if (filename == null || filename.isBlank()) {
-            return "<unnamed>";
-        }
-        String sanitized = filename.replace("\r", "").replace("\n", "");
-        return sanitized.substring(0, Math.min(sanitized.length(), 255));
     }
 
     // =========================================================================
