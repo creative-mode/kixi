@@ -95,7 +95,7 @@ class PostControllerHttpTest {
 
     @Test
     void createsPostAndCoversCommentsReactionsAndReports() {
-        PostRequest postRequest = new PostRequest(PostType.TOPIC, 10L, "Title", "A useful topic");
+        PostRequest postRequest = new PostRequest(PostType.TOPIC, 10L, "Title", "A useful topic", null);
         when(service.createPost(42L, postRequest)).thenReturn(Mono.just(post(9L)));
         when(service.addComment(9L, 42L, new PostCommentRequest("A comment")))
                 .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false,
@@ -123,6 +123,25 @@ class PostControllerHttpTest {
         verify(service).addComment(9L, 42L, new PostCommentRequest("A comment"));
         verify(service).toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE));
         verify(service).reportPost(9L, 42L, new PostReportRequest("Not useful"));
+    }
+
+    @Test
+    void aSimulationPostMayOmitItsNoteButATextPostMayNot() {
+        PostRequest card = new PostRequest(PostType.SIMULATION, 10L, null, null, 77L);
+        when(service.createPost(42L, card)).thenReturn(Mono.just(post(9L)));
+
+        client.mutateWith(studentJwt()).post().uri("/api/v1/feed/posts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("type", "SIMULATION", "classId", 10, "simulationId", 77))
+                .exchange().expectStatus().isCreated();
+        client.mutateWith(studentJwt()).post().uri("/api/v1/feed/posts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("type", "SIMULATION", "classId", 10, "simulationId", 77, "content", "a".repeat(2001)))
+                .exchange().expectStatus().isBadRequest();
+        client.mutateWith(studentJwt()).post().uri("/api/v1/feed/posts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("type", "DOUBT", "classId", 10))
+                .exchange().expectStatus().isBadRequest();
     }
 
     @Test
@@ -180,7 +199,7 @@ class PostControllerHttpTest {
     private static PostResponse post(Long id) {
         LocalDateTime now = LocalDateTime.of(2026, 10, 13, 12, 0);
         return new PostResponse(id, 42L, 1L, 2026L, 20L, 10L, "topic", "Title",
-                "A useful topic", false, 0L, false, now, now);
+                "A useful topic", false, 0L, false, now, now, null);
     }
 
     private static WebTestClientConfigurer studentJwt() {
