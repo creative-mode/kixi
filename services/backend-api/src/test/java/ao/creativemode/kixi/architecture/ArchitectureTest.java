@@ -22,7 +22,10 @@ import org.junit.jupiter.api.Test;
  *  |- gamification (XP, streaks, badges) -&gt; shared only
  *  |- ocr        (OCR client + persistence orchestration) -&gt; shared, academic, exams
  *  |- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
- *  '- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
+ *  |- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
+ *  |- analytics  (dashboard queries and scope) -&gt; shared only
+ *  '- examrooms  (live exam rooms and grading) -&gt; shared, academic, exams,
+ *                identity, institutions, simulations
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -48,7 +51,8 @@ class ArchitectureTest {
     void sharedDoesNotDependOnAnyDomainModule() {
         noClasses().that().resideInAPackage("..shared..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..gamification..", "..ocr..")
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..gamification..",
+                        "..ocr..", "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -56,7 +60,8 @@ class ArchitectureTest {
     void identityOnlyDependsOnShared() {
         noClasses().that().resideInAPackage("..identity..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..academic..", "..institutions..", "..exams..", "..simulations..", "..gamification..", "..ocr..")
+                        "..academic..", "..institutions..", "..exams..", "..simulations..", "..gamification..", "..ocr..",
+                        "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -64,7 +69,8 @@ class ArchitectureTest {
     void academicOnlyDependsOnShared() {
         noClasses().that().resideInAPackage("..academic..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..institutions..", "..exams..", "..simulations..", "..gamification..", "..ocr..")
+                        "..identity..", "..institutions..", "..exams..", "..simulations..", "..gamification..", "..ocr..",
+                        "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -72,22 +78,24 @@ class ArchitectureTest {
     void institutionsOnlyDependsOnSharedIdentityAndAcademic() {
         noClasses().that().resideInAPackage("..institutions..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..exams..", "..simulations..", "..gamification..", "..ocr..")
+                        "..exams..", "..simulations..", "..gamification..", "..ocr..",
+                        "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
     @Test
-    void examsDoesNotDependOnIdentitySimulationsOrOcr() {
+    void examsDoesNotDependOnIdentitySimulationsOcrAnalyticsOrExamrooms() {
         noClasses().that().resideInAPackage("..exams..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..simulations..", "..gamification..", "..ocr..")
+                        "..identity..", "..simulations..", "..gamification..", "..ocr..", "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
     @Test
-    void simulationsDoesNotDependOnOcr() {
+    void simulationsDoesNotDependOnOcrAnalyticsOrExamrooms() {
         noClasses().that().resideInAPackage("..simulations..")
-                .should().dependOnClassesThat().resideInAPackage("..ocr..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..ocr..", "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -96,14 +104,15 @@ class ArchitectureTest {
         noClasses().that().resideInAPackage("..gamification..")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..identity..", "..academic..", "..institutions..", "..exams..",
-                        "..simulations..", "..ocr..", "..chat..")
+                        "..simulations..", "..ocr..", "..chat..", "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
     @Test
     void ocrDoesNotDependOnIdentityOrSimulations() {
         noClasses().that().resideInAPackage("..ocr..")
-                .should().dependOnClassesThat().resideInAnyPackage("..identity..", "..simulations..", "..gamification..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..identity..", "..simulations..", "..gamification..", "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -117,7 +126,8 @@ class ArchitectureTest {
     void chatOnlyDependsOnSharedAndExams() {
         noClasses().that().resideInAPackage("..chat..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..academic..", "..institutions..", "..simulations..", "..gamification..", "..ocr..")
+                        "..identity..", "..academic..", "..institutions..", "..simulations..", "..gamification..", "..ocr..",
+                        "..analytics..", "..examrooms..")
                 .check(classes);
     }
 
@@ -131,7 +141,25 @@ class ArchitectureTest {
     void feedOnlyDependsOnShared() {
         noClasses().that().resideInAPackage("..feed..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..", "..chat..")
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..", "..ocr..", "..chat..",
+                        "..analytics..", "..examrooms..")
+                .check(classes);
+    }
+
+    @Test
+    void analyticsOnlyDependsOnShared() {
+        noClasses().that().resideInAPackage("..analytics..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..identity..", "..academic..", "..institutions..", "..exams..", "..simulations..",
+                        "..gamification..", "..ocr..", "..chat..", "..feed..", "..examrooms..")
+                .check(classes);
+    }
+
+    @Test
+    void examroomsOnlyDependsOnItsUpstreamModules() {
+        noClasses().that().resideInAPackage("..examrooms..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..analytics..", "..gamification..", "..ocr..", "..chat..", "..feed..")
                 .check(classes);
     }
 

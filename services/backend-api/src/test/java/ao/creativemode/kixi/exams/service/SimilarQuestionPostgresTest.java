@@ -25,7 +25,7 @@ import org.springframework.test.context.DynamicPropertySource;
  *
  * <p>The second school inherits its institution from the class, on purpose: that is the
  * shape a statement from before the institution columns existed still has, and the
- * {@code COALESCE} is what has to catch it. Ids from 940001, school year 2193-2194:
+ * {@code COALESCE} is what has to catch it. Ids from 960001, school year 2193-2194:
  * {@code uk_school_years_start_end} is global and shared with the other Postgres tests,
  * which is why these years are far away from theirs.</p>
  */
@@ -40,20 +40,20 @@ import org.springframework.test.context.DynamicPropertySource;
 @EnabledIfEnvironmentVariable(named = "KIXI_POSTGRES_TESTS", matches = "true")
 class SimilarQuestionPostgresTest {
 
-    private static final long SCHOOL_A = 940001L;
-    private static final long SCHOOL_B = 940002L;
-    private static final long COURSE_A = 940001L;
-    private static final long COURSE_B = 940002L;
-    private static final long CLASS_A = 940001L;
-    private static final long CLASS_B = 940002L;
-    private static final long YEAR = 940001L;
-    private static final long SUBJECT = 940001L;
-    private static final long OWN_STATEMENT = 940001L;
-    private static final long OWN_QUESTION = 940001L;
-    private static final long SAME_SCHOOL_STATEMENT = 940002L;
-    private static final long SAME_SCHOOL_QUESTION = 940002L;
-    private static final long OTHER_SCHOOL_STATEMENT = 940003L;
-    private static final long OTHER_SCHOOL_QUESTION = 940003L;
+    private static final long SCHOOL_A = 960001L;
+    private static final long SCHOOL_B = 960002L;
+    private static final long COURSE_A = 960001L;
+    private static final long COURSE_B = 960002L;
+    private static final long CLASS_A = 960001L;
+    private static final long CLASS_B = 960002L;
+    private static final long YEAR = 960001L;
+    private static final long SUBJECT = 960001L;
+    private static final long OWN_STATEMENT = 960001L;
+    private static final long OWN_QUESTION = 960001L;
+    private static final long SAME_SCHOOL_STATEMENT = 960002L;
+    private static final long SAME_SCHOOL_QUESTION = 960002L;
+    private static final long OTHER_SCHOOL_STATEMENT = 960003L;
+    private static final long OTHER_SCHOOL_QUESTION = 960003L;
 
     @Autowired QuestionRepository questions;
     @Autowired DatabaseClient database;
@@ -76,40 +76,50 @@ class SimilarQuestionPostgresTest {
     @BeforeEach
     void data() {
         for (String cleanup : List.of(
-                "DELETE FROM questions WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM statements WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM classes WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM courses WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM subjects WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM school_years WHERE id BETWEEN 940000 AND 949999",
-                "DELETE FROM institutions WHERE id BETWEEN 940000 AND 949999")) {
+                // Answers and simulations before questions and statements, and both keyed on the
+                // statement rather than on the row's own id: the 960000 block is shared with
+                // RoomSimulationSchoolYearPostgresTest, which leaves its rows behind because
+                // its cleanup also only runs in @BeforeEach, and those rows take their id from
+                // the sequence — id 18, say, nowhere near the block. What they do carry in the
+                // block is the statement, and that is what the next delete trips over.
+                "DELETE FROM simulation_answers WHERE simulation_id IN "
+                        + "(SELECT id FROM simulations WHERE statement_id BETWEEN 960000 AND 969999)",
+                "DELETE FROM simulations WHERE statement_id BETWEEN 960000 AND 969999",
+                "DELETE FROM exam_rooms WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM questions WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM statements WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM classes WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM courses WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM subjects WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM school_years WHERE id BETWEEN 960000 AND 969999",
+                "DELETE FROM institutions WHERE id BETWEEN 960000 AND 969999")) {
             sql(cleanup);
         }
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES "
-                + "(940001, 'A940', 'Escola A', now(), now()), (940002, 'B940', 'Escola B', now(), now())");
+                + "(960001, 'A960', 'Escola A', now(), now()), (960002, 'B960', 'Escola B', now(), now())");
         sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) "
-                + "VALUES (940001, 2193, 2194, now(), now())");
+                + "VALUES (960001, 2193, 2194, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES "
-                + "(940001, 'CA940', 'Informática A', 940001, now(), now()), "
-                + "(940002, 'CB940', 'Informática B', 940002, now(), now())");
+                + "(960001, 'CA960', 'Informática A', 960001, now(), now()), "
+                + "(960002, 'CB960', 'Informática B', 960002, now(), now())");
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) "
-                + "VALUES (940001, '12A', 12, 940001, 940001, 940001, now(), now()), "
-                + "(940002, '12B', 12, 940002, 940001, 940002, now(), now())");
+                + "VALUES (960001, '12A', 12, 960001, 960001, 960001, now(), now()), "
+                + "(960002, '12B', 12, 960002, 960001, 960002, now(), now())");
         sql("INSERT INTO subjects (id, code, name, created_at, updated_at) "
-                + "VALUES (940001, 'R940', 'Redes', now(), now())");
+                + "VALUES (960001, 'R960', 'Redes', now(), now())");
         // The paper the student is working on: published, of school A.
         sql("INSERT INTO statements (id, exam_type, title, subject_id, class_id, course_id, school_year_id, "
                 + "institution_id, visible, created_at) "
-                + "VALUES (940001, 'Teste', 'Prova de redes', 940001, 940001, 940001, 940001, 940001, true, now())");
+                + "VALUES (960001, 'Teste', 'Prova de redes', 960001, 960001, 960001, 960001, 960001, true, now())");
         // A published paper of the same school.
         sql("INSERT INTO statements (id, exam_type, title, subject_id, class_id, course_id, school_year_id, "
                 + "institution_id, visible, created_at) "
-                + "VALUES (940002, 'Teste', 'Teste de redes anterior', 940001, 940001, 940001, 940001, 940001, true, now())");
+                + "VALUES (960002, 'Teste', 'Teste de redes anterior', 960001, 960001, 960001, 960001, 960001, true, now())");
         // A published paper of another school, with no institution of its own: it is
         // school B through its class, which is exactly what the COALESCE has to read.
         sql("INSERT INTO statements (id, exam_type, title, subject_id, class_id, course_id, school_year_id, "
                 + "institution_id, visible, created_at) "
-                + "VALUES (940003, 'Teste', 'Teste de redes de outra escola', 940001, 940002, 940002, 940001, NULL, true, now())");
+                + "VALUES (960003, 'Teste', 'Teste de redes de outra escola', 960001, 960002, 960002, 960001, NULL, true, now())");
         for (long[] row : new long[][] {
                 {OWN_QUESTION, OWN_STATEMENT}, {SAME_SCHOOL_QUESTION, SAME_SCHOOL_STATEMENT},
                 {OTHER_SCHOOL_QUESTION, OTHER_SCHOOL_STATEMENT}}) {
