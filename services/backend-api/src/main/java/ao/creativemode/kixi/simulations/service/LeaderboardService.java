@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
@@ -108,12 +109,15 @@ public class LeaderboardService {
 
     private final EnrollmentSeatReader seats;
     private final LeaderboardRepository repository;
+    private final ExamRoomAccess examRooms;
 
     private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
-    public LeaderboardService(EnrollmentSeatReader seats, LeaderboardRepository repository) {
+    public LeaderboardService(
+            EnrollmentSeatReader seats, LeaderboardRepository repository, ExamRoomAccess examRooms) {
         this.seats = seats;
         this.repository = repository;
+        this.examRooms = examRooms;
     }
 
     public Mono<LeaderboardResponse> leaderboard(
@@ -131,6 +135,7 @@ public class LeaderboardService {
             return consentedFor(resolved, accountId)
                     .then(cohortOf(accountId, resolved))
                     .flatMap(cohort -> checkStatementExists(statementId)
+                            .then(requireNoOpenRoom(statementId))
                             .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
                                     cohort.institutionId(), statementId, window)
                                     .flatMap(ranked -> windowAround(
@@ -222,6 +227,50 @@ public class LeaderboardService {
                 .flatMap(exists -> exists
                         ? Mono.<Void>empty()
                         : Mono.error(ApiException.notFound("No statement with id " + statementId)));
+    }
+
+    /**
+     * A paper being sat right now does not get ranked.
+     *
+     * <p>The same rule the community aggregates follow, for the same reason: a score
+     * published while the room is still open tells a student who is halfway through the
+     * paper what everybody else scored on it, and a class average is enough to work out
+     * which options are the right ones. {@code CommunityStatsService} answers 409 to the
+     * aggregate and the solutions listing for exactly this; a per-colleague average is the
+     * same disclosure, spread thinner, so it gets the same status.</p>
+     *
+     * <p>Only for a named paper. Without a {@code statementId} there is no single exam
+     * room to be inside of — the cohort spans whatever everyone happened to sit, closed
+     * rooms included — and refusing the whole ranking because one room somewhere is open
+     * would hide closed papers from students who are done. This is the deliberate limit of
+     * the rule, not an oversight: what stays hidden is the ongoing exam, and the aggregate
+     * of a cohort that finished is not it.</p>
+     *
+     * <p>Null-safe like the community's copy: with no rooms wired in there is no room to
+     * be open, and a default interface that answers {@code false} must not be turned into
+     * a 409 for every request.</p>
+     *
+     * <p>The check goes through {@code ExamRoomAccess} rather than the rooms table, which is
+     * how the community copy reaches the same answer.
+     * {@code CommunityStatsService} keeps its own copy of the check rather than
+     * sharing this one, because it lives in {@code simulations.community.service} and is
+     * package-private — {@code ArchitectureTest} puts both packages in the same slice, so
+     * reusing it would only need a visibility change, not a dependency one. The copies can
+     * drift, so they answer the same status for the same reason on purpose; if the rule
+     * ever changes, it changes in both places.</p>
+     */
+    private Mono<Void> requireNoOpenRoom(Long statementId) {
+        if (statementId == null || examRooms == null) {
+            return Mono.empty();
+        }
+        Mono<Boolean> open = examRooms.hasNonClosedRoom(statementId);
+        return (open == null ? Mono.just(false) : open)
+                .defaultIfEmpty(false)
+                .flatMap(hasOpen -> hasOpen
+                        ? Mono.error(ApiException.conflict(
+                                "The ranking of a paper is only available once the exam rooms "
+                                        + "for it are closed"))
+                        : Mono.empty());
     }
 
     /**

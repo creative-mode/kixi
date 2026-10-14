@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
@@ -51,13 +52,15 @@ class LeaderboardServiceTest {
 
     private EnrollmentSeatReader seats;
     private LeaderboardRepository repository;
+    private ExamRoomAccess examRooms;
     private LeaderboardService service;
 
     @BeforeEach
     void setUp() {
         seats = mock(EnrollmentSeatReader.class);
         repository = mock(LeaderboardRepository.class);
-        service = new LeaderboardService(seats, repository);
+        examRooms = mock(ExamRoomAccess.class);
+        service = new LeaderboardService(seats, repository, examRooms);
 
         // Every statement the ranking is asked about exists, unless a test says otherwise.
         // The service looks the id up before it becomes a cache key, so a test that does
@@ -65,12 +68,17 @@ class LeaderboardServiceTest {
         // about what it was testing.
         when(repository.statementExists(anyLong())).thenReturn(Mono.just(true));
 
+        // No exam room is open, so a paper is rankable unless a test opens one. Mockito
+        // answers null for an unstubbed method, and the null guard reads that as "no open
+        // room" — so these existing tests would pass either way, and the stub is here to
+        // say "closed" out loud rather than to make them pass.
+        when(examRooms.hasNonClosedRoom(anyLong())).thenReturn(Mono.just(false));
+
         // Likewise the consent behind scope=global, stubbed here rather than in another
         // @BeforeEach because the order two of those run in is not the order they are
         // written in, and a stub that lands before the mocks is a null repository.
         consented();
     }
-
     /** The caller agreed to be ranked across institutions, unless a test takes it away. */
     private void consented() {
         when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(true));
@@ -387,7 +395,7 @@ class LeaderboardServiceTest {
                 score(101L, 70.0), score(102L, 90.0), score(ACCOUNT_ID, 80.0), score(104L, 90.0)), 12);
         LeaderboardResponse first = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
 
-        service = new LeaderboardService(seats, repository);
+        service = new LeaderboardService(seats, repository, examRooms);
         cohortOf(List.of(
                 score(104L, 90.0), score(ACCOUNT_ID, 80.0), score(101L, 70.0), score(102L, 90.0)), 12);
         LeaderboardResponse second = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
@@ -735,6 +743,85 @@ class LeaderboardServiceTest {
                 .verify();
     }
 
+    // ── A paper being sat is not ranked ─────────────────────────────────────
+
+    /**
+     * The leak this defends, stated so the test can be read without the code: a student
+     * halfway through a paper asks for that paper's class ranking and is told what the
+     * rest of the class scored on it. From those numbers, which options are the right ones.
+     *
+     * <p>It fails without the gate — the answer used to be 200 with the whole class on it.
+     * It has to be 409 and not 404: the paper is there, it simply is not publishable yet,
+     * which is the status the community aggregates use for the same situation.</p>
+     */
+    @Test
+    void anOpenRoomStopsTheRankingOfThatPaper() {
+        cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
+        when(examRooms.hasNonClosedRoom(42L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatus())
+                            .isEqualTo(HttpStatus.CONFLICT);
+                })
+                .verify();
+
+        // Nothing was ranked, so the cache was not filled with figures a closing room
+        // would have invalidated.
+        verify(repository, never()).findAverages(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** The other side of the same gate: a closed room must not stop the ranking. */
+    @Test
+    void aClosedRoomLetsTheRankingThrough() {
+        cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
+        when(examRooms.hasNonClosedRoom(42L)).thenReturn(Mono.just(false));
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
+
+        assertThat(response.statementId()).isEqualTo(42L);
+        assertThat(response.myPosition()).isNotNull();
+    }
+
+    /**
+     * Without a {@code statementId} there is no paper to be inside of, so the room is
+     * never asked about.
+     *
+     * <p>The stub would answer "open" if it were consulted. The aggregate ranking of a
+     * cohort that includes finished papers stays readable — this is the deliberate limit
+     * of the rule, and this is the test that holds it there rather than letting it drift
+     * into refusing every unscoped request.</p>
+     */
+    @Test
+    void anAggregateRankingIsNotStoppedByAnOpenRoom() {
+        cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
+        when(examRooms.hasNonClosedRoom(anyLong())).thenReturn(Mono.just(true));
+
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+
+        assertThat(response.myPosition()).isNotNull();
+        verify(examRooms, never()).hasNonClosedRoom(any());
+    }
+
+    /**
+     * A room lookup that fails must not be read as "no open room".
+     *
+     * <p>Fail-closed: the alternative is answering 200 on a database error, which is the
+     * one outcome this gate exists to prevent. The error travels rather than being
+     * swallowed into an empty result.</p>
+     */
+    @Test
+    void aRoomThatCannotBeCheckedDoesNotAnswerTheRanking() {
+        cohortOf(List.of(score(ACCOUNT_ID, 75.0)), 12);
+        when(examRooms.hasNonClosedRoom(42L))
+                .thenReturn(Mono.error(new IllegalStateException("the rooms table is down")));
+
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"))
+                .expectErrorMessage("the rooms table is down")
+                .verify();
+    }
+
     /**
      * There is no group behind this ranking, so no school is echoed back.
      *
@@ -914,6 +1001,26 @@ class LeaderboardServiceTest {
         when(repository.consentedToCrossInstitution(anyLong())).thenReturn(Mono.just(false));
 
         assertThat(oneConsent(service.consent(ACCOUNT_ID, false)).crossInstitution()).isFalse();
+    }
+
+     /**
+     * A statement that does not exist is a 404, not a conflict.
+     *
+     * <p>The order is the point: an id that names nothing is a wrong id, and answering
+     * "come back later, a room is open" would send the caller to wait for an exam that
+     * does not exist. The port is built eagerly as an argument to {@code then} — nothing
+     * subscribes to it once the 404 has fired, so no query runs — but the status the
+     * caller gets is what this asserts.</p>
+     */
+    @Test
+    void aStatementThatDoesNotExistIsNotFoundRatherThanConflict() {
+        when(repository.statementExists(99L)).thenReturn(Mono.just(false));
+        when(examRooms.hasNonClosedRoom(99L)).thenReturn(Mono.just(true));
+
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "all")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
