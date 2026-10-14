@@ -136,10 +136,20 @@ public class SimulationService {
 
     /**
      * A simulation the caller may not see is left out of a list, whichever way the check
-     * says no. A student's miss is a 404; a teacher's is the 403 of
-     * {@code StatementWriteAccessService} ("not assigned to this class and subject").
-     * Letting the 403 through failed the whole list as soon as one paper belonged to
-     * someone else's class.
+     * says no. Letting the 403 through failed the whole list as soon as one paper belonged
+     * to someone else's class.
+     *
+     * <p>The two statuses come from different places, and both mean the same thing here —
+     * this simulation is not the caller's to see. A student's miss is a 404. A teacher's is
+     * a 403 that {@code StatementWriteAccessService.requireCanWrite} reaches by asking
+     * {@code InstitutionAccessService.requireAssignedTo}, which is what
+     * {@code TeachingAssignmentService.requireTeaches} refuses with "Teacher is not
+     * assigned to this class and subject". A statement with no class at all is the other
+     * 403 on that path, "Only an administrator may change a statement without a class",
+     * and is likewise not the caller's to see.</p>
+     *
+     * <p>Only 404 and 403 are swallowed. Anything else keeps failing the list, because a
+     * database that is down is not an authorization answer and must not pass for one.</p>
      */
     private boolean isHiddenFromCaller(Throwable error) {
         if (!(error instanceof ApiException)) {
