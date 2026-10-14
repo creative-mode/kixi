@@ -79,6 +79,7 @@ class LeaderboardFriendsPostgresTest {
         exec("DELETE FROM statements WHERE id BETWEEN 940000 AND 949999");
         exec("DELETE FROM friendships WHERE account_low BETWEEN 940000 AND 949999"
                 + " OR account_high BETWEEN 940000 AND 949999");
+        exec("DELETE FROM user_stats WHERE account_id BETWEEN 940000 AND 949999");
         exec("DELETE FROM enrollments WHERE account_id BETWEEN 940000 AND 949999");
         exec("DELETE FROM account_roles WHERE account_id BETWEEN 940000 AND 949999");
         // users before accounts: users.account_id is a foreign key, and deleting the
@@ -160,6 +161,18 @@ class LeaderboardFriendsPostgresTest {
                 + " VALUES (940005, " + DANI + ", " + OTHER_CLASS + ", " + YEAR + ","
                 + " 'ACTIVE', now(), now())");
 
+        // Lifetime XP, which only metric=xp orders by. Bruno has more than Ana despite
+        // scoring half as much, so the two metrics cannot be the same table.
+        exec("INSERT INTO user_stats (account_id, xp, level, streak, longest_streak,"
+                + " free_pauses, created_at, updated_at)"
+                + " VALUES (" + ANA + ", 50, 1, 0, 0, 1, now(), now())"
+                + " ON CONFLICT (account_id) DO UPDATE SET xp = 50");
+        exec("INSERT INTO user_stats (account_id, xp, level, streak, longest_streak,"
+                + " free_pauses, created_at, updated_at)"
+                + " VALUES (" + BRUNO + ", 900, 3, 0, 0, 1, now(), now())"
+                + " ON CONFLICT (account_id) DO UPDATE SET xp = 900");
+        // Carla has no user_stats row at all, which is the LEFT JOIN case.
+
         // Ana and Bruno are friends. The pair is stored the same way round for both.
         friendship(940001L, ANA, BRUNO, BRUNO, "ACCEPTED");
         // Carla asked Ana and was never answered: not a friend, so not ranked.
@@ -232,6 +245,54 @@ class LeaderboardFriendsPostgresTest {
                 .block();
 
         assertThat(ranked).extracting(GroupScore::accountId).doesNotContain(CARLA);
+    }
+
+    // ── metric=xp ────────────────────────────────────────────────────────
+
+    /**
+     * The XP comes back with the row, and only the XP is missing when it is absent.
+     *
+     * <p>An inner join instead of a left one would drop every account with no
+     * {@code user_stats} row — which is every student who has not finished a simulation
+     * since the gamification landed — and the ranking would quietly be of the rewarded.</p>
+     */
+    @Test
+    void theXpTravelsWithTheRowAndItsAbsenceDoesNotDropTheStudent() {
+        List<GroupScore> ranked = leaderboard
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
+                .collectList()
+                .block();
+
+        assertThat(ranked).extracting(GroupScore::accountId).containsExactly(BRUNO);
+        assertThat(ranked).singleElement()
+                .satisfies(score -> assertThat(score.xp()).isEqualTo(900L));
+    }
+
+    /** The row a join would have thrown away is still there, with a null XP. */
+    @Test
+    void aStudentWithNoStatsRowIsStillRanked() {
+        // A fourth account in Ana's own school, accepted as a friend and with no
+        // user_stats row: the one thing a LEFT JOIN exists to keep.
+        exec("INSERT INTO accounts (id, username, email, password_hash, email_verified,"
+                + " active, created_at, updated_at, accessibility_extra_time)"
+                + " VALUES (940007, 'u940007', 'u940007@x.pt', 'x', true, true, now(), now(), false)");
+        exec("INSERT INTO users (id, account_id, first_name, last_name, created_at, updated_at)"
+                + " VALUES (940007, 940007, 'Rui', 'Pires', now(), now())");
+        exec("INSERT INTO enrollments (id, account_id, class_id, school_year_id, status,"
+                + " created_at, updated_at)"
+                + " VALUES (940008, 940007, " + CLASS + ", " + YEAR + ", 'ACTIVE', now(), now())");
+        friendship(940004L, ANA, 940007L, 940007L, "ACCEPTED");
+        finished(940006L, 940007L, 7);
+
+        List<GroupScore> ranked = leaderboard
+                .findAverages(Scope.FRIENDS, ANA, YEAR, INSTITUTION, null, null, null)
+                .collectList()
+                .block();
+
+        assertThat(ranked).extracting(GroupScore::accountId).contains(940007L);
+        assertThat(ranked).filteredOn(score -> score.accountId().equals(940007L))
+                .singleElement()
+                .satisfies(score -> assertThat(score.xp()).isNull());
     }
 
     // ── School isolation ─────────────────────────────────────────────────

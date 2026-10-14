@@ -171,8 +171,10 @@ curl -s $HOST/api/v1/enrollments -H "Authorization: Bearer $TOKEN"
 
 ## Fluxo 5 — Simulações
 
-O aluno inicia uma simulação sobre um enunciado visível, submete respostas e
-consulta o resultado. O gabarito só é devolvido quando a prova termina.
+O aluno inicia uma simulação sobre um enunciado visível, submete respostas,
+**termina a prova** e só depois consulta o resultado. O gabarito só é devolvido
+quando a prova termina — e terminá-la tem um passo próprio, sem o qual o
+`/result` responde `409`.
 
 ```bash
 # Iniciar uma simulação
@@ -187,9 +189,27 @@ curl -s $HOST/api/v1/simulation-answers \
   -H 'Content-Type: application/json' \
   -d "{\"simulationId\":$SIM,\"questionId\":1,\"selectedOptionId\":2}"
 
-# Resultado (após terminar)
+# Terminar a prova — sem este passo o /result responde 409
+curl -s -X POST $HOST/api/v1/simulations/$SIM/submit \
+  -H "Authorization: Bearer $TOKEN"
+
+# Resultado (a prova já terminou)
 curl -s $HOST/api/v1/simulations/$SIM/result -H "Authorization: Bearer $TOKEN"
 ```
+
+O `submit` é o passo que fecha a prova e **devolve já o resultado**. Não é
+idempotente: chamá-lo numa prova já terminada responde `409`, tal como o `/result`
+numa prova por terminar.
+
+**O estado da simulação não se escreve por `PUT`.** Mandar
+`status: "FINISHED"` no `PUT /api/v1/simulations/{id}` é recusado com `400` e a
+resposta diz porque:
+
+```
+Use POST /simulations/{id}/submit to finish a simulation
+```
+
+Pelo `PUT` só passa `CANCELLED`. Qualquer outro estado é `400`.
 
 A rota de simulações existe em `/api/v1/simulations` e no alias legado
 `/api/simulations`.

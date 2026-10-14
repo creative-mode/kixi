@@ -92,6 +92,11 @@ services:
       # JWT Configuration (required; never use a repository default)
       APP_JWT_SECRET: ${APP_JWT_SECRET:?Set APP_JWT_SECRET to a random value of at least 32 characters}
       APP_JWT_EXPIRATION_MS: ${APP_JWT_EXPIRATION_MS:-86400000}
+      # Origins the browser may call from. Compose only interpolates .env into the
+      # variables named here, it does not inject the file, so without this line the
+      # .env value never reaches the backend and CorsProperties stays empty — which
+      # blocks the frontend gateway on :3000.
+      APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
       # First ADMIN bootstrap (optional, see .env.example): creates the first
       # administrator on startup when none exists; without them nothing happens.
       APP_BOOTSTRAP_ADMIN_USERNAME: ${APP_BOOTSTRAP_ADMIN_USERNAME:-}

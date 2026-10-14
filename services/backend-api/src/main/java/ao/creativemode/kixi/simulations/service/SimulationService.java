@@ -121,7 +121,7 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
-                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                        .onErrorResume(error -> isHiddenFromCaller(error)
                                 ? Mono.empty() : Mono.error(error))
                         .flatMap(this::toResponse));
     }
@@ -129,14 +129,34 @@ public class SimulationService {
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
         return repository.findByDeletedAtIsNotNull()
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher, true)
-                        .onErrorResume(error -> isAuthorizationNotFound(error)
+                        .onErrorResume(error -> isHiddenFromCaller(error)
                                 ? Mono.empty() : Mono.error(error))
                         .flatMap(this::toResponse));
     }
 
-    private boolean isAuthorizationNotFound(Throwable error) {
-        return error instanceof ApiException
-                && ((ApiException) error).getStatusCode() == 404;
+    /**
+     * A simulation the caller may not see is left out of a list, whichever way the check
+     * says no. Letting the 403 through failed the whole list as soon as one paper belonged
+     * to someone else's class.
+     *
+     * <p>The two statuses come from different places, and both mean the same thing here —
+     * this simulation is not the caller's to see. A student's miss is a 404. A teacher's is
+     * a 403 that {@code StatementWriteAccessService.requireCanWrite} reaches by asking
+     * {@code InstitutionAccessService.requireAssignedTo}, which is what
+     * {@code TeachingAssignmentService.requireTeaches} refuses with "Teacher is not
+     * assigned to this class and subject". A statement with no class at all is the other
+     * 403 on that path, "Only an administrator may change a statement without a class",
+     * and is likewise not the caller's to see.</p>
+     *
+     * <p>Only 404 and 403 are swallowed. Anything else keeps failing the list, because a
+     * database that is down is not an authorization answer and must not pass for one.</p>
+     */
+    private boolean isHiddenFromCaller(Throwable error) {
+        if (!(error instanceof ApiException)) {
+            return false;
+        }
+        int status = ((ApiException) error).getStatusCode();
+        return status == 404 || status == 403;
     }
 
     @Transactional

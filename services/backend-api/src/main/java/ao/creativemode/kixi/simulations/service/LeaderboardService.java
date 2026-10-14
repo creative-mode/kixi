@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
+import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
@@ -108,22 +109,27 @@ public class LeaderboardService {
 
     private final EnrollmentSeatReader seats;
     private final LeaderboardRepository repository;
+    private final ExamRoomAccess examRooms;
 
     private final Map<CacheKey, Entry> cache = new ConcurrentHashMap<>();
 
-    public LeaderboardService(EnrollmentSeatReader seats, LeaderboardRepository repository) {
+    public LeaderboardService(
+            EnrollmentSeatReader seats, LeaderboardRepository repository, ExamRoomAccess examRooms) {
         this.seats = seats;
         this.repository = repository;
+        this.examRooms = examRooms;
     }
 
     public Mono<LeaderboardResponse> leaderboard(
-            Long accountId, String scope, Long statementId, String period) {
+            Long accountId, String scope, Long statementId, String period, String metric) {
         return Mono.defer(() -> {
             Scope resolved;
             Period window;
+            Metric by;
             try {
                 resolved = Scope.of(scope);
                 window = Period.of(period);
+                by = Metric.of(metric);
             } catch (IllegalArgumentException e) {
                 return Mono.error(ApiException.badRequest(e.getMessage()));
             }
@@ -131,11 +137,12 @@ public class LeaderboardService {
             return consentedFor(resolved, accountId)
                     .then(cohortOf(accountId, resolved))
                     .flatMap(cohort -> checkStatementExists(statementId)
+                            .then(requireNoOpenRoom(statementId))
                             .then(ranking(resolved, cohort.id(), cohort.schoolYearId(),
-                                    cohort.institutionId(), statementId, window)
+                                    cohort.institutionId(), statementId, window, by)
                                     .flatMap(ranked -> windowAround(
                                             accountId, ranked, resolved, cohort.id(),
-                                            statementId, window))));
+                                            statementId, window, by))));
         });
     }
 
@@ -225,13 +232,57 @@ public class LeaderboardService {
     }
 
     /**
+     * A paper being sat right now does not get ranked.
+     *
+     * <p>The same rule the community aggregates follow, for the same reason: a score
+     * published while the room is still open tells a student who is halfway through the
+     * paper what everybody else scored on it, and a class average is enough to work out
+     * which options are the right ones. {@code CommunityStatsService} answers 409 to the
+     * aggregate and the solutions listing for exactly this; a per-colleague average is the
+     * same disclosure, spread thinner, so it gets the same status.</p>
+     *
+     * <p>Only for a named paper. Without a {@code statementId} there is no single exam
+     * room to be inside of — the cohort spans whatever everyone happened to sit, closed
+     * rooms included — and refusing the whole ranking because one room somewhere is open
+     * would hide closed papers from students who are done. This is the deliberate limit of
+     * the rule, not an oversight: what stays hidden is the ongoing exam, and the aggregate
+     * of a cohort that finished is not it.</p>
+     *
+     * <p>Null-safe like the community's copy: with no rooms wired in there is no room to
+     * be open, and a default interface that answers {@code false} must not be turned into
+     * a 409 for every request.</p>
+     *
+     * <p>The check goes through {@code ExamRoomAccess} rather than the rooms table, which is
+     * how the community copy reaches the same answer.
+     * {@code CommunityStatsService} keeps its own copy of the check rather than
+     * sharing this one, because it lives in {@code simulations.community.service} and is
+     * package-private — {@code ArchitectureTest} puts both packages in the same slice, so
+     * reusing it would only need a visibility change, not a dependency one. The copies can
+     * drift, so they answer the same status for the same reason on purpose; if the rule
+     * ever changes, it changes in both places.</p>
+     */
+    private Mono<Void> requireNoOpenRoom(Long statementId) {
+        if (statementId == null || examRooms == null) {
+            return Mono.empty();
+        }
+        Mono<Boolean> open = examRooms.hasNonClosedRoom(statementId);
+        return (open == null ? Mono.just(false) : open)
+                .defaultIfEmpty(false)
+                .flatMap(hasOpen -> hasOpen
+                        ? Mono.error(ApiException.conflict(
+                                "The ranking of a paper is only available once the exam rooms "
+                                        + "for it are closed"))
+                        : Mono.empty());
+    }
+
+    /**
      * The whole cohort, ordered. Every member reads the same rows, which is exactly why
      * it — and not the response — is what gets cached.
      */
     private Mono<Ranking> ranking(
             Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
-            Period period) {
-        CacheKey key = new CacheKey(scope, groupId, schoolYearId, statementId, period);
+            Period period, Metric metric) {
+        CacheKey key = new CacheKey(scope, groupId, schoolYearId, statementId, period, metric);
 
         Entry running = cache.get(key);
         if (running != null && !running.expired()) {
@@ -243,7 +294,7 @@ public class LeaderboardService {
                                 institutionId, statementId, period.from(), period.to())
                                 .collectList(),
                         repository.countMembers(scope, groupId, schoolYearId, institutionId))
-                        .map(tuples -> rank(tuples.getT1(), tuples.getT2())));
+                        .map(tuples -> rank(tuples.getT1(), tuples.getT2(), metric)));
 
         prune();
         if (cache.size() >= MAX_CACHED_COHORTS) {
@@ -292,7 +343,12 @@ public class LeaderboardService {
      * paper and 80% on a hard paper are different results, and letting the easier school
      * win on that is the one comparison the issue is asking not to make.</p>
      */
-    private static double rankKey(GroupScore score) {
+    private static double rankKey(GroupScore score, Metric metric) {
+        if (metric == Metric.XP) {
+            // Lifetime XP, and an account with none yet goes to the bottom rather than
+            // out: it has a mark like anybody else, it just has no ladder.
+            return score.xp() == null ? Double.NEGATIVE_INFINITY : score.xp().doubleValue();
+        }
         if (score.percentile() != null) {
             return score.percentile();
         }
@@ -304,10 +360,10 @@ public class LeaderboardService {
      * Averages arrive already sorted by SQL, but they are sorted again here so the rule
      * holds whatever the repository returns.
      */
-    private static Ranking rank(List<GroupScore> scores, long totalStudents) {
+    private static Ranking rank(List<GroupScore> scores, long totalStudents, Metric metric) {
         List<GroupScore> ordered = new ArrayList<>(scores);
         ordered.sort(Comparator
-                .comparingDouble(LeaderboardService::rankKey).reversed()
+                .comparingDouble((GroupScore score) -> rankKey(score, metric)).reversed()
                 .thenComparing(GroupScore::accountId));
 
         Set<Long> institutions = new LinkedHashSet<>();
@@ -316,7 +372,7 @@ public class LeaderboardService {
         Double previousKey = null;
         for (int i = 0; i < ordered.size(); i++) {
             GroupScore score = ordered.get(i);
-            double key = rankKey(score);
+            double key = rankKey(score, metric);
             // The key, not the average, is what decides a tie — and comparing keys means
             // two students on the same percentile share a place even though their raw
             // percentages, used only to break it, are different.
@@ -328,7 +384,7 @@ public class LeaderboardService {
                 institutions.add(score.institutionId());
             }
             ranked.add(new Ranked(position, score.accountId(), score.average(),
-                    score.percentile()));
+                    score.percentile(), score.xp()));
         }
         return new Ranking(ranked, (int) totalStudents, institutions.size());
     }
@@ -340,7 +396,8 @@ public class LeaderboardService {
             Scope scope,
             Long groupId,
             Long statementId,
-            Period period) {
+            Period period,
+            Metric metric) {
         List<Ranked> ranked = ranking.ranked();
         // Both numbers matter. Too few enrolled, or too few with a score to rank, and the
         // table is short enough that naming its bottom says something about real people.
@@ -404,7 +461,8 @@ public class LeaderboardService {
         return repository.findDisplayNames(accounts)
                 .collectList()
                 .map(names -> response(
-                        accountId, scope, groupId, statementId, period, ranking, ranked, myIndex, visible, names, smallGroup));
+                        accountId, scope, groupId, statementId, period, metric, ranking,
+                        ranked, myIndex, visible, names, smallGroup));
     }
 
     private static LeaderboardResponse response(
@@ -413,6 +471,7 @@ public class LeaderboardService {
             Long groupId,
             Long statementId,
             Period period,
+            Metric metric,
             Ranking ranking,
             List<Ranked> ranked,
             int mine,
@@ -440,6 +499,7 @@ public class LeaderboardService {
                                             : labels.getOrDefault(entry.accountId(), FALLBACK_LABEL),
                             entry.average(),
                             entry.percentile(),
+                            entry.xp(),
                             caller);
                 })
                 .toList();
@@ -451,6 +511,7 @@ public class LeaderboardService {
                 anonymous ? null : groupId,
                 statementId,
                 period.label(),
+                metric.name().toLowerCase(Locale.ROOT),
                 ranking.totalStudents(),
                 ranked.size(),
                 // How many schools the comparison drew from, for the reader to be told
@@ -492,6 +553,36 @@ public class LeaderboardService {
      */
     record Cohort(Long id, Long schoolYearId, Long institutionId) { }
 
+    /**
+     * What the positions are by.
+     *
+     * <p>The cohort does not change with it — the same students are ranked either way,
+     * with the same year, the same school and the same small-group floor. Only the
+     * ordering does, and the average travels with each row so the client can show it
+     * under a position that was decided by something else.</p>
+     *
+     * <p>XP is lifetime and does not move with {@code statementId} or {@code period}.
+     * Ranking by it asks "of the people who sat this paper, who has climbed furthest on
+     * the ladder", not "who earned most XP here" — the second thing is not knowable,
+     * because the XP awarded for one simulation is not attributed per period anywhere.</p>
+     */
+    enum Metric {
+        AVERAGE, XP;
+
+        public static Metric of(String value) {
+            if (value == null || value.isBlank()) {
+                return AVERAGE;
+            }
+            for (Metric metric : values()) {
+                if (metric.name().equalsIgnoreCase(value)) {
+                    return metric;
+                }
+            }
+            throw new IllegalArgumentException(
+                    "Unsupported leaderboard metric: " + value + " (expected average or xp)");
+        }
+    }
+
     /** The time window a ranking covers. */
     enum Period {
         ALL("all"), MONTH("month");
@@ -530,7 +621,7 @@ public class LeaderboardService {
      * @param percentile where the student stands inside their own institution, or null in
      *                   every scope that has no institution to stand inside
      */
-    record Ranked(int position, Long accountId, Double average, Double percentile) { }
+    record Ranked(int position, Long accountId, Double average, Double percentile, Long xp) { }
 
     /**
      * Everything every member of a cohort is allowed to see.
@@ -541,7 +632,8 @@ public class LeaderboardService {
     record Ranking(List<Ranked> ranked, int totalStudents, int institutionsCounted) { }
 
     /** What identifies a cached ranking, and nothing that could serve another's. */
-    record CacheKey(Scope scope, Long groupId, Long schoolYearId, Long statementId, Period period) { }
+    record CacheKey(Scope scope, Long groupId, Long schoolYearId, Long statementId,
+                  Period period, Metric metric) { }
 
     /**
      * A cached ranking and when it stops being worth reading. The timestamp is kept here
