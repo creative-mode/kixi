@@ -6,6 +6,7 @@ Provides the main engine for text extraction from images.
 """
 
 import asyncio
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -182,19 +183,23 @@ class OCREngine:
 
         try:
             # Initialize PaddleOCR with configured options
-            self._ocr = _get_paddle_ocr()(
-                lang=self.lang,
-                use_gpu=self.use_gpu,
-                use_angle_cls=self.use_angle_cls,
-                det_model_dir=self.det_model_dir,
-                rec_model_dir=self.rec_model_dir,
-                cls_model_dir=self.cls_model_dir,
-                show_log=self.show_log,
-                # Use PP-OCRv4 models for better accuracy
-                ocr_version="PP-OCRv4",
-                # Enable structure detection for better layout analysis
-                structure_version="PP-StructureV2",
-            )
+            ocr_options = {
+                "lang": self.lang,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": self.use_angle_cls,
+                "device": "gpu:0" if self.use_gpu else "cpu",
+                # Preserve the existing PP-OCRv4 model family during the
+                # migration to PaddleOCR 3.x.
+                "ocr_version": "PP-OCRv4",
+            }
+            if self.det_model_dir:
+                ocr_options["text_detection_model_dir"] = self.det_model_dir
+            if self.rec_model_dir:
+                ocr_options["text_recognition_model_dir"] = self.rec_model_dir
+            if self.cls_model_dir:
+                ocr_options["textline_orientation_model_dir"] = self.cls_model_dir
+            self._ocr = _get_paddle_ocr()(**ocr_options)
 
             self._initialized = True
             logger.info("PaddleOCR engine initialized successfully")
@@ -223,8 +228,44 @@ class OCREngine:
         if self._ocr is None:
             raise RuntimeError("OCR engine not initialized")
 
-        result = self._ocr.ocr(image, cls=self.use_angle_cls)
-        return result
+        result = list(self._ocr.predict(image))
+        if not result:
+            return [[]]
+
+        # PaddleOCR 3 returns result objects whose JSON payload stores the
+        # recognized text, confidence, and polygon arrays separately. Normalize
+        # them to the 2.x line format consumed by the existing postprocessor.
+        first_result = result[0]
+        payload = getattr(first_result, "json", None)
+        if callable(payload):
+            payload = payload()
+        if payload is None and isinstance(first_result, dict):
+            payload = first_result
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return result
+        if not isinstance(payload, dict):
+            return result
+
+        data = payload.get("res", payload)
+        if not isinstance(data, dict):
+            return result
+        texts = data.get("rec_texts", [])
+        scores = data.get("rec_scores", [])
+        boxes = data.get("rec_polys")
+        if boxes is None:
+            boxes = data.get("dt_polys", [])
+        if boxes is None:
+            boxes = []
+        lines = []
+        for index, text in enumerate(texts):
+            if index >= len(boxes):
+                break
+            score = float(scores[index]) if index < len(scores) else 0.5
+            lines.append([boxes[index], (str(text), score)])
+        return [lines]
 
     def _parse_ocr_results(
         self,
