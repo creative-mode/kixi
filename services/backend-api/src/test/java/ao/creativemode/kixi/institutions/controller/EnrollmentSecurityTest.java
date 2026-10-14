@@ -191,6 +191,47 @@ class EnrollmentSecurityTest {
         org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never()).findAllActive();
     }
 
+    @Test
+    void rejectsAnonymousEnrollmentWritesAndCancellation() {
+        client.post().uri("/api/v1/enrollments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("classId", 7, "schoolYearId", 2024))
+                .exchange().expectStatus().isUnauthorized();
+        client.delete().uri("/api/v1/enrollments/1")
+                .exchange().expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void validatesRequiredEnrollmentFieldsBeforeCallingService() {
+        client.mutateWith(studentJwt())
+                .post().uri("/api/v1/enrollments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of())
+                .exchange().expectStatus().isBadRequest();
+
+        org.mockito.Mockito.verifyNoInteractions(enrollmentService);
+    }
+
+    @Test
+    void studentCancelsOwnEnrollmentAndGetsNoContent() {
+        when(enrollmentService.cancel(42L, false, 1L)).thenReturn(Mono.empty());
+
+        client.mutateWith(studentJwt()).delete().uri("/api/v1/enrollments/1")
+                .exchange().expectStatus().isNoContent();
+
+        org.mockito.Mockito.verify(enrollmentService).cancel(42L, false, 1L);
+    }
+
+    @Test
+    void studentCannotEnrollAnotherAccount() {
+        when(enrollmentService.enroll(eq(42L), eq(false), any()))
+                .thenReturn(Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden("forbidden")));
+
+        client.mutateWith(studentJwt()).post().uri("/api/v1/enrollments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("accountId", 43, "classId", 7, "schoolYearId", 2024))
+                .exchange().expectStatus().isForbidden();
+    }
+
     private static WebTestClientConfigurer adminJwt() {
         return mockAuthentication(new UsernamePasswordAuthenticationToken(
                 "1",
