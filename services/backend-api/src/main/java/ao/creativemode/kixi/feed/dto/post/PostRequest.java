@@ -1,7 +1,6 @@
 package ao.creativemode.kixi.feed.dto.post;
 
 import ao.creativemode.kixi.feed.enums.PostType;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
@@ -19,7 +18,10 @@ public record PostRequest(
 
         String title,
 
-        @NotBlank(message = "Content cannot be empty")
-        @Size(min = 5, max = 2000)
-        String content
+        /** Required for a DOUBT or TOPIC; a SIMULATION card may go without a note. */
+        @Size(max = 2000)
+        String content,
+
+        /** Only for a SIMULATION post: the finished attempt to publish. The figures come from the server. */
+        Long simulationId
 ) {}
