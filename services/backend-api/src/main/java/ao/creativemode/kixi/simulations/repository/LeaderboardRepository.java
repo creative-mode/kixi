@@ -289,18 +289,17 @@ public class LeaderboardRepository {
     /**
      * A column the statement did not select is absent, and absent is not the same as null.
      *
-     * <p>{@code Row.get} throws {@code NoSuchElementException} for a name that is not in
-     * the result set, so the cross-institution columns — which {@code scope=class} and
+     * <p>Two ways of having nothing, and the helper has to tell them apart. <b>Absent</b>:
+     * {@code Row.get} throws {@code NoSuchElementException} for a name that is not in the
+     * result set, so the cross-institution columns — which {@code scope=class} and
      * {@code school} do not select, and which they have no value for anyway — are asked
      * about rather than read. Reading them straight would have made the scopes from #117
      * fail at runtime the first time the ranking was read for a class.</p>
-     */
-    /**
-     * A column that may not be there, and may be null when it is.
      *
-     * <p>{@code xp} arrives null for an account with no {@code user_stats} row, which is
-     * every account that has not finished a simulation since the gamification landed.
-     * Casting that to a {@link Number} and asking for the value is a NullPointer.</p>
+     * <p><b>Null</b>: {@code xp} arrives null for an account with no {@code user_stats}
+     * row, which is every account that has not finished a simulation since the
+     * gamification landed. Casting that to a {@link Number} and asking for the value is a
+     * NullPointer, so the value is read first and asked only once it is there.</p>
      */
     private static Long longOrNull(Row row, String column) {
         if (!row.getMetadata().contains(column)) {
@@ -486,11 +485,15 @@ public class LeaderboardRepository {
 
         where.add(membershipSql(scope, groupId));
 
-        // The newline matters: a text block strips trailing spaces, so "WHERE " alone
+// The newline matters: a text block strips trailing spaces, so "WHERE " alone
         // would arrive as "WHERE" and weld itself to the first condition.
         // The XP comes along for the ride rather than driving the query. A student with
         // no user_stats row yet has none, and LEFT JOIN keeps them in the ranking by
-        // their marks instead of dropping them out of it entirely.
+        // their marks instead of dropping them out of it entirely. The join cannot
+        // duplicate a simulation row — user_stats.account_id is the primary key — so the
+        // average is the same either way; what GROUP BY needs it for is that us.xp is a
+        // selected column that is not aggregated, and Postgres refuses to select one it
+        // is not grouping by.
         String statement = """
                 SELECT s.account_id AS account_id,
                        AVG(s.final_score * 100.0 / st.total_max_score) AS average,
@@ -498,10 +501,8 @@ public class LeaderboardRepository {
                   FROM simulations s
                   JOIN statements st ON st.id = s.statement_id
                   LEFT JOIN user_stats us ON us.account_id = s.account_id
-                 WHERE """
+                  WHERE """
                 + "\n  " + String.join("\n  AND ", where)
-                // GROUP BY the joined column too, or the row is not unique and the
-                // average is computed over a set nobody else was computed over.
                 + "\n GROUP BY s.account_id, us.xp"
                 // Ties break on the id so the same group always yields the same order,
                 // which matters once the result is cached and shared.

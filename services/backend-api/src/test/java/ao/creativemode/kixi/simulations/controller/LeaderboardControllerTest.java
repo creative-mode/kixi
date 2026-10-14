@@ -209,7 +209,7 @@ class LeaderboardControllerTest {
                 .exchange()
                 .expectStatus().isUnauthorized();
 
-        verify(service, never()).leaderboard(any(), any(), any(), any());
+        verify(service, never()).leaderboard(any(), any(), any(), any(), any());
     }
 
     /**
@@ -222,7 +222,7 @@ class LeaderboardControllerTest {
      */
     @Test
     void theQueryParametersReachTheServiceUnchanged() {
-        when(service.leaderboard(eq(42L), eq("school"), eq(9L), eq("term")))
+        when(service.leaderboard(eq(42L), eq("school"), eq(9L), eq("term"), eq("average")))
                 .thenReturn(Mono.just(ranking()));
 
         client.mutateWith(studentJwt())
@@ -232,12 +232,12 @@ class LeaderboardControllerTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(service).leaderboard(42L, "school", 9L, "term");
+        verify(service).leaderboard(42L, "school", 9L, "term", "average");
     }
 
     @Test
     void anUnsupportedScopeIsABadRequest() {
-        when(service.leaderboard(eq(42L), eq("planeta"), eq(null), eq("all")))
+        when(service.leaderboard(eq(42L), eq("planeta"), eq(null), eq("all"), eq("average")))
                 .thenReturn(Mono.error(ApiException.badRequest("Unknown scope: planeta")));
 
         client.mutateWith(studentJwt())
@@ -249,7 +249,7 @@ class LeaderboardControllerTest {
 
     @Test
     void anUnsupportedPeriodIsABadRequest() {
-        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("era")))
+        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("era"), eq("average")))
                 .thenReturn(Mono.error(ApiException.badRequest("Unknown period: era")));
 
         client.mutateWith(studentJwt())
@@ -267,7 +267,7 @@ class LeaderboardControllerTest {
      */
     @Test
     void aPaperBeingSatIsAConflictAndNotAServerError() {
-        when(service.leaderboard(eq(42L), eq("class"), eq(9L), eq("all")))
+        when(service.leaderboard(eq(42L), eq("class"), eq(9L), eq("all"), eq("average")))
                 .thenReturn(Mono.error(ApiException.conflict(
                         "The ranking of a paper is only available once the exam rooms for it "
                                 + "are closed")));
@@ -281,7 +281,7 @@ class LeaderboardControllerTest {
 
     @Test
     void aPaperThatDoesNotExistIsNotFound() {
-        when(service.leaderboard(eq(42L), eq("class"), eq(99L), eq("all")))
+        when(service.leaderboard(eq(42L), eq("class"), eq(99L), eq("all"), eq("average")))
                 .thenReturn(Mono.error(ApiException.notFound("No statement with id 99")));
 
         client.mutateWith(studentJwt())
@@ -301,7 +301,7 @@ class LeaderboardControllerTest {
      */
     @Test
     void aTeacherReachesTheirOwnRankingAndNotAClassWideOne() {
-        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("all")))
+        when(service.leaderboard(eq(42L), eq("class"), eq(null), eq("all"), eq("average")))
                 .thenReturn(Mono.just(ranking()));
 
         client.mutateWith(teacherJwt())
@@ -310,7 +310,7 @@ class LeaderboardControllerTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(service).leaderboard(42L, "class", null, "all");
+        verify(service).leaderboard(42L, "class", null, "all", "average");
     }
 
     private static LeaderboardResponse ranking() {

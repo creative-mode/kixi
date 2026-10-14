@@ -760,7 +760,7 @@ class LeaderboardServiceTest {
         cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
         when(examRooms.hasNonClosedRoom(42L)).thenReturn(Mono.just(true));
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all", null))
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatus())
@@ -779,7 +779,7 @@ class LeaderboardServiceTest {
         cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
         when(examRooms.hasNonClosedRoom(42L)).thenReturn(Mono.just(false));
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", 42L, "all", null));
 
         assertThat(response.statementId()).isEqualTo(42L);
         assertThat(response.myPosition()).isNotNull();
@@ -799,7 +799,7 @@ class LeaderboardServiceTest {
         cohortOf(List.of(score(ACCOUNT_ID, 75.0), score(101L, 80.0)), 12);
         when(examRooms.hasNonClosedRoom(anyLong())).thenReturn(Mono.just(true));
 
-        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all"));
+        LeaderboardResponse response = one(service.leaderboard(ACCOUNT_ID, "class", null, "all", null));
 
         assertThat(response.myPosition()).isNotNull();
         verify(examRooms, never()).hasNonClosedRoom(any());
@@ -818,7 +818,7 @@ class LeaderboardServiceTest {
         when(examRooms.hasNonClosedRoom(42L))
                 .thenReturn(Mono.error(new IllegalStateException("the rooms table is down")));
 
-        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all"))
+        StepVerifier.create(service.leaderboard(ACCOUNT_ID, "class", 42L, "all", null))
                 .expectErrorMessage("the rooms table is down")
                 .verify();
     }
@@ -1018,7 +1018,7 @@ class LeaderboardServiceTest {
         when(repository.statementExists(99L)).thenReturn(Mono.just(false));
         when(examRooms.hasNonClosedRoom(99L)).thenReturn(Mono.just(true));
 
-        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "all")))
+        assertThatThrownBy(() -> one(service.leaderboard(ACCOUNT_ID, "class", 99L, "all", null)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND));
