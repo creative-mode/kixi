@@ -6,6 +6,7 @@ import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
@@ -39,13 +40,16 @@ public class AuthController {
     private final AuthService authService;
     private final GoogleOAuth2Properties googleProperties;
     private final RegistrationRateLimiter registrationRateLimiter;
+    private final LoginRateLimiter loginRateLimiter;
 
     public AuthController(AuthService authService,
                           GoogleOAuth2Properties googleProperties,
-                          RegistrationRateLimiter registrationRateLimiter) {
+                          RegistrationRateLimiter registrationRateLimiter,
+                          LoginRateLimiter loginRateLimiter) {
         this.authService = authService;
         this.googleProperties = googleProperties;
         this.registrationRateLimiter = registrationRateLimiter;
+        this.loginRateLimiter = loginRateLimiter;
     }
 
     /**
@@ -53,8 +57,22 @@ public class AuthController {
      * Devolve JWT e roles para uso em Authorization: Bearer &lt;token&gt;.
      */
     @PostMapping("/login")
-    public Mono<ResponseEntity<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
-        return authService.login(request.usernameOrEmail(), request.password())
+    public Mono<ResponseEntity<LoginResponse>> login(
+            ServerWebExchange exchange,
+            @Valid @RequestBody LoginRequest request) {
+        // Issue #123: /api/v1/auth/** is permitAll, so this was the one door of the
+        // platform with nothing counting how often it was knocked on. Two keys, because
+        // either alone is half a defence: the address stops one host spraying names, the
+        // identity stops many hosts converging on one account.
+        return loginRateLimiter.check("login-ip:" + clientAddress(exchange))
+                .then(loginRateLimiter.check(
+                        "login-identity:" + request.usernameOrEmail().trim().toLowerCase(Locale.ROOT)))
+                // defer, not a bare call: `then(authService.login(...))` would assemble
+                // the credential lookup before the window had been consulted, so a
+                // refused attempt still paid for building it. Nothing subscribes under
+                // defer until the checks have completed.
+                .then(Mono.defer(() -> authService.login(
+                        request.usernameOrEmail(), request.password())))
                 .map(ResponseEntity::ok);
     }
 
