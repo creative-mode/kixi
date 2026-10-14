@@ -23,8 +23,13 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> findByExamRoomIdAndAccountIdAndDeletedAtIsNull(Long examRoomId, Long accountId);
     Flux<Simulation> findByExamRoomIdAndDeletedAtIsNull(Long examRoomId);
 
-    @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) "
-            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, :startedAt, 'IN_PROGRESS') "
+    // The school year is the statement's and, for a statement without one, the room's class's:
+    // the leaderboard only counts a simulation of its cohort's year, so one born without it is
+    // never ranked, whatever the student scored.
+    @Query("INSERT INTO simulations (account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status, school_year_id) "
+            + "VALUES (:accountId, :statementId, :roomId, :durationMinutes, :startedAt, 'IN_PROGRESS', "
+            + "COALESCE((SELECT st.school_year_id FROM statements st WHERE st.id = :statementId), "
+            + "(SELECT c.school_year_id FROM exam_rooms r JOIN classes c ON c.id = r.class_id WHERE r.id = :roomId))) "
             + "ON CONFLICT (exam_room_id, account_id) WHERE exam_room_id IS NOT NULL DO NOTHING RETURNING *")
     Mono<Simulation> insertExamRoomSimulation(Long accountId, Long statementId, Long roomId, Integer durationMinutes,
             LocalDateTime startedAt);
