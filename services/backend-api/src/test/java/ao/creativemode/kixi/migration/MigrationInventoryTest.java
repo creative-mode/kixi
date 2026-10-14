@@ -91,7 +91,7 @@ class MigrationInventoryTest {
 
     @Test
     void securityRateLimitMigrationCreatesHashedAbuseBuckets() throws IOException, URISyntaxException {
-        Path migrationPath = migrationDirectory().resolve("V46__create_api_abuse_rate_limits.sql");
+        Path migrationPath = migrationDirectory().resolve("V47__create_api_abuse_rate_limits.sql");
         String migration = Files.readString(migrationPath).toLowerCase();
 
         assertTrue(migration.contains("create table api_abuse_rate_limits"));
