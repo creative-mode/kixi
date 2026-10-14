@@ -76,6 +76,16 @@ class SimilarQuestionPostgresTest {
     @BeforeEach
     void data() {
         for (String cleanup : List.of(
+                // Answers and simulations before questions and statements, and both keyed on the
+                // statement rather than on the row's own id: the 960000 block is shared with
+                // RoomSimulationSchoolYearPostgresTest, which leaves its rows behind because
+                // its cleanup also only runs in @BeforeEach, and those rows take their id from
+                // the sequence — id 18, say, nowhere near the block. What they do carry in the
+                // block is the statement, and that is what the next delete trips over.
+                "DELETE FROM simulation_answers WHERE simulation_id IN "
+                        + "(SELECT id FROM simulations WHERE statement_id BETWEEN 960000 AND 969999)",
+                "DELETE FROM simulations WHERE statement_id BETWEEN 960000 AND 969999",
+                "DELETE FROM exam_rooms WHERE id BETWEEN 960000 AND 969999",
                 "DELETE FROM questions WHERE id BETWEEN 960000 AND 969999",
                 "DELETE FROM statements WHERE id BETWEEN 960000 AND 969999",
                 "DELETE FROM classes WHERE id BETWEEN 960000 AND 969999",

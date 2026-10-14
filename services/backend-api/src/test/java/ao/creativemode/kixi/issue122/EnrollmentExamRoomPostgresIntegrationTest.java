@@ -24,6 +24,8 @@ import ao.creativemode.kixi.identity.service.JwtService;
 
 /** Focused issue #122 flows not covered by the existing critical exam test. */
 @SpringBootTest(properties = {
+        "spring.r2dbc.pool.max-size=2",
+        "spring.r2dbc.pool.initial-size=0",
         "app.simulations.expiry-poll-ms=86400000",
         "app.simulations.expiry-enabled=false",
         "app.jwt.secret=integration-test-secret-which-is-long-enough",

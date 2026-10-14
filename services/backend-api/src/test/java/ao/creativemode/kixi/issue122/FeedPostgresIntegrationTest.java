@@ -21,6 +21,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 
 /** The feed's main HTTP path with real scope, repositories, PostgreSQL and Flyway. */
 @SpringBootTest(properties = {
+        "spring.r2dbc.pool.max-size=2",
+        "spring.r2dbc.pool.initial-size=0",
         "app.jwt.secret=feed-integration-test-secret-which-is-long-enough",
         "app.simulations.expiry-enabled=false",
         "ocr.service.url=http://127.0.0.1:1",

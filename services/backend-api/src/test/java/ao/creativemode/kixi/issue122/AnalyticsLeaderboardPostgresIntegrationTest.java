@@ -21,6 +21,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 
 /** Analytics, gamification and ranking after a real submission is corrected (#122). */
 @SpringBootTest(properties = {
+        "spring.r2dbc.pool.max-size=2",
+        "spring.r2dbc.pool.initial-size=0",
         "app.simulations.expiry-poll-ms=86400000",
         "app.simulations.expiry-enabled=false",
         "app.jwt.secret=integration-test-secret-which-is-long-enough",
