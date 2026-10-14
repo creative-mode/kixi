@@ -250,9 +250,9 @@ public class LeaderboardService {
      * be open, and a default interface that answers {@code false} must not be turned into
      * a 409 for every request.</p>
      *
-     * <p>The same rule {@code CommunityStatsService} applies to the community aggregates,
-     * reached the same way: through {@code ExamRoomAccess}, not by reading the rooms
-     * table. {@code CommunityStatsService} keeps its own copy of the check rather than
+     * <p>The check goes through {@code ExamRoomAccess} rather than the rooms table, which is
+     * how the community copy reaches the same answer.
+     * {@code CommunityStatsService} keeps its own copy of the check rather than
      * sharing this one, because it lives in {@code simulations.community.service} and is
      * package-private — {@code ArchitectureTest} puts both packages in the same slice, so
      * reusing it would only need a visibility change, not a dependency one. The copies can
