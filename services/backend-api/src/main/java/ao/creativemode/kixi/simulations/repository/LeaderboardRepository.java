@@ -363,7 +363,9 @@ public class LeaderboardRepository {
                  WHERE e.deleted_at IS NULL AND e.status = 'ACTIVE'
                    AND a.deleted_at IS NULL AND a.active = TRUE
                    AND e.school_year_id = :schoolYearId AND """
-                + groupPredicate(scope, groupId, "e", "cl");
+                // The space sits on this side of the join: the text block above strips the
+                // one after "AND", so without it the predicate arrives as "ANDe.class_id".
+                + " " + groupPredicate(scope, groupId, "e", "cl");
     }
 
     /** Names for the handful of accounts a caller is allowed to see. */
