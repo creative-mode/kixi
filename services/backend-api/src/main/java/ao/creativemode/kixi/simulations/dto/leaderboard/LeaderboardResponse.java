@@ -33,6 +33,7 @@ public record LeaderboardResponse(
         Long groupId,
         Long statementId,
         String period,
+        String metric,
         int totalStudents,
         int rankedStudents,
         int institutionsCounted,
@@ -57,6 +58,8 @@ public record LeaderboardResponse(
      *                  the same id answers half a dozen other endpoints.
      * @param percentile where this student stands inside their own institution, or null
      *                   in the scopes that have no institution to stand inside
+     * @param xp         lifetime XP, which is what {@code metric=xp} ordered by, and null
+     *                   for an account that has not been rewarded yet
      */
     public record Entry(
             int position,
@@ -64,6 +67,7 @@ public record LeaderboardResponse(
             String displayName,
             Double average,
             Double percentile,
+            Long xp,
             boolean me
     ) { }
 }
