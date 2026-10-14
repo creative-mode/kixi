@@ -147,9 +147,13 @@ public class ExamRoomMonitoringService {
                         || (answer.getAnswerText() != null && !answer.getAnswerText().isBlank()),
                         Collectors.counting())));
         List<ExamRoomLiveResponse.ParticipantProgress> progress = roomParticipants.stream().map(participant -> {
-            Simulation simulation = byId.get(participant.getSimulationId());
+            // A guest who has not entered has no simulation yet. Map.of().get(null) throws, and
+            // that is the map a room with no simulations at all passes in: the live panel
+            // answered 500 the moment a room opened with the whole class invited.
+            Long simulationId = participant.getSimulationId();
+            Simulation simulation = simulationId == null ? null : byId.get(simulationId);
             String status = simulation == null ? "NOT_STARTED" : simulation.getStatus().name();
-            int answered = answerCounts.getOrDefault(participant.getSimulationId(), 0L).intValue();
+            int answered = simulationId == null ? 0 : answerCounts.getOrDefault(simulationId, 0L).intValue();
             return new ExamRoomLiveResponse.ParticipantProgress(participant.getAccountId(), names.get(participant.getAccountId()),
                     participant.getSimulationId(),
                     participant.getJoinedAt(), status, answered, totalQuestions);

@@ -91,6 +91,32 @@ class ExamRoomMonitoringServiceTest {
         verify(answers).findAllBySimulationIdInAndDeletedAtIsNull(argThat(ids -> ids.size() == 120));
     }
 
+    /**
+     * The room has just opened and the class is invited, but nobody has entered: the guests have
+     * no simulation, and neither does the room. That used to be a NullPointerException
+     * (Map.of().get(null)) and a 500 on the live panel.
+     */
+    @Test
+    void invitedGuestsWithoutASimulationAreNotStartedInsteadOfFailing() {
+        ExamRoom room = room(7L, 99L, ExamRoomStatus.OPEN);
+        ExamRoomParticipant guest = new ExamRoomParticipant();
+        guest.setExamRoomId(7L);
+        guest.setAccountId(1L);
+        when(rooms.findByIdAndTeacherAccountId(7L, 99L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(7L)).thenReturn(Flux.just(guest));
+        when(simulations.findByExamRoomIdAndDeletedAtIsNull(7L)).thenReturn(Flux.empty());
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(5L)).thenReturn(Flux.just(new Question()));
+
+        StepVerifier.create(service.live(7L, 99L, false))
+                .assertNext(snapshot -> {
+                    assertThat(snapshot.totalParticipants()).isEqualTo(1);
+                    assertThat(snapshot.joinedParticipants()).isZero();
+                    assertThat(snapshot.participants().get(0).status()).isEqualTo("NOT_STARTED");
+                    assertThat(snapshot.participants().get(0).answeredQuestions()).isZero();
+                })
+                .verifyComplete();
+    }
+
     @Test
     void gradesAreOnlyAvailableToTheRoomOwnerOrAdmin() {
         ExamRoom room = room(7L, 99L, ExamRoomStatus.CLOSED);
