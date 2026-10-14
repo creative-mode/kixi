@@ -18,6 +18,8 @@ import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
 import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
+import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
+import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +27,10 @@ import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -35,6 +40,7 @@ class AuthControllerTest {
     private GoogleOAuth2Properties googleProperties;
     private RegistrationRateLimiter registrationRateLimiter;
     private LoginRateLimiter loginRateLimiter;
+    private TrustedProxyProperties trustedProxies;
     private AuthController controller;
 
     @BeforeEach
@@ -47,8 +53,10 @@ class AuthControllerTest {
         when(registrationRateLimiter.check(anyString())).thenReturn(Mono.empty());
         loginRateLimiter = mock(LoginRateLimiter.class);
         when(loginRateLimiter.check(anyString())).thenReturn(Mono.empty());
+        trustedProxies = new TrustedProxyProperties();
         controller = new AuthController(
-                authService, googleProperties, registrationRateLimiter, loginRateLimiter);
+                authService, googleProperties, registrationRateLimiter, loginRateLimiter,
+                trustedProxies);
     }
 
     @Test
@@ -200,5 +208,65 @@ class AuthControllerTest {
         ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
         verify(loginRateLimiter, times(2)).check(keys.capture());
         assertThat(keys.getAllValues()).hasSize(2).doesNotHaveDuplicates();
+    }
+
+    // ── Which address is counted (issue #123) ────────────────────────────
+
+    /**
+     * With no proxy named, a forwarded header is worth nothing.
+     *
+     * <p>{@code X-Forwarded-For} is written by whoever sends the request. Believing it
+     * would let an attacker mint a fresh address per attempt and the address half of the
+     * limiter would stop limiting anything.</p>
+     */
+    @Test
+    void aForwardedHeaderFromAnUntrustedPeerIsIgnored() {
+        when(authService.login(anyString(), anyString()))
+                .thenReturn(Mono.just(new LoginResponse(
+                        "token", "Bearer", Instant.now(), 1L, List.of("STUDENT"))));
+
+        controller.login(from("203.0.113.7", "198.51.100.9"), new LoginRequest("aluno", "s")).block();
+
+        verify(loginRateLimiter).check("login-ip:203.0.113.7");
+    }
+
+    /**
+     * A named proxy is believed, so the real client is the one counted.
+     *
+     * <p>The opposite failure is worse than the first one: behind a proxy the address the
+     * application sees is the proxy's, shared by everyone, and a login limiter counting a
+     * whole school as one client locks the school out at once.</p>
+     */
+    @Test
+    void aForwardedHeaderFromANamedProxyIsBelieved() {
+        trustedProxies.setIps(List.of("203.0.113.7"));
+        when(authService.login(anyString(), anyString()))
+                .thenReturn(Mono.just(new LoginResponse(
+                        "token", "Bearer", Instant.now(), 1L, List.of("STUDENT"))));
+
+        controller.login(from("203.0.113.7", "198.51.100.9"), new LoginRequest("aluno", "s")).block();
+
+        verify(loginRateLimiter).check("login-ip:198.51.100.9");
+    }
+
+    /** An empty header is not evidence of an address, so the peer stands. */
+    @Test
+    void anEmptyForwardedHeaderFallsBackToTheProxy() {
+        trustedProxies.setIps(List.of("203.0.113.7"));
+        when(authService.login(anyString(), anyString()))
+                .thenReturn(Mono.just(new LoginResponse(
+                        "token", "Bearer", Instant.now(), 1L, List.of("STUDENT"))));
+
+        controller.login(from("203.0.113.7", "  "), new LoginRequest("aluno", "s")).block();
+
+        verify(loginRateLimiter).check("login-ip:203.0.113.7");
+    }
+
+    private static ServerWebExchange from(String peer, String forwardedFor) {
+        MockServerHttpRequest request = MockServerHttpRequest.post("/api/v1/auth/login")
+                .header("X-Forwarded-For", forwardedFor)
+                .remoteAddress(new InetSocketAddress(peer, 51234))
+                .build();
+        return MockServerWebExchange.from(request);
     }
 }

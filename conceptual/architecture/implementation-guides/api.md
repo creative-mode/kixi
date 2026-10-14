@@ -80,6 +80,16 @@ curl -s $HOST/api/v1/me -H "Authorization: Bearer $TOKEN"
 O fluxo Google OAuth2 começa em `GET /api/v1/auth/google` e volta a
 `GET /api/v1/auth/google/callback`.
 
+**`POST /api/v1/auth/login` responde `429`** com `Retry-After` quando a janela de
+tentativas se esgota. A janela conta por endereço e por identidade ao mesmo tempo: 10
+tentativas por 60 segundos para cada uma. Se a tabela de limites não responder, o login
+responde `503` em vez de passar sem limite.
+
+Atrás de um proxy reverso, o endereço que a aplicação vê é o do proxy e é partilhado por
+todos. Para que o limite conte a pessoa e não o proxy, nomeia o proxy em
+`APP_TRUSTED_PROXY_IPS`. Sem isso a cabeça `X-Forwarded-For` é ignorada, que é o
+comportamento certo por omissão: um cabeçalho que qualquer um escreve não é prova de nada.
+
 ---
 
 ## Fluxo 2 — Enunciados
