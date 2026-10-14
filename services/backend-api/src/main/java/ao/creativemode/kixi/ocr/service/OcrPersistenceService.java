@@ -110,11 +110,7 @@ public class OcrPersistenceService {
         List<OcrUploadedFile> files,
         Long createdBy
     ) {
-        log.info(
-            "Processing OCR and persisting: {} file(s), createdBy={}",
-            files.size(),
-            createdBy
-        );
+        log.info("Processing OCR and persisting: {} file(s)", files.size());
 
         return ocrServiceClient
             .extractTextFromUploadedFiles(files)

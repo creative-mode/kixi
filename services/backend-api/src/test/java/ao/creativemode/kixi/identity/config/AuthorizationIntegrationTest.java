@@ -23,6 +23,7 @@ import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.identity.service.AccountService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.identity.service.JwtService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
@@ -88,6 +89,9 @@ class AuthorizationIntegrationTest {
     private OcrServiceClient ocrServiceClient;
 
     @MockBean
+    private ApiAbuseRateLimiter abuseRateLimiter;
+
+    @MockBean
     private OcrPersistenceService ocrPersistenceService;
 
     @MockBean
@@ -105,6 +109,7 @@ class AuthorizationIntegrationTest {
         when(statementReadAccess.teacherScope(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(reactor.core.publisher.Mono.just(
                         ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
+        when(abuseRateLimiter.checkUpload(anyLong())).thenReturn(Mono.empty());
     }
 
     @MockBean
@@ -134,6 +139,50 @@ class AuthorizationIntegrationTest {
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectHeader().valueMatches("X-Request-ID", "req-[0-9a-f]+");
+    }
+
+    @Test
+    void deniesUnmappedRoutesToEveryAuthenticatedRole() {
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/unreviewed-write")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(teacherJwt())
+                .post()
+                .uri("/api/v1/unreviewed-write")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/unreviewed-write")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void rejectsStudentWritesAndTrashReadsAcrossAcademicCatalogs() {
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/subjects")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        for (String path : List.of(
+                "/api/v1/school-years/trash",
+                "/api/v1/terms/trash",
+                "/api/v1/subjects/trash",
+                "/api/v1/courses/trash",
+                "/api/v1/classes/trash",
+                "/api/v1/question-images/trash")) {
+            client.mutateWith(studentJwt())
+                    .get()
+                    .uri(path)
+                    .exchange()
+                    .expectStatus().isForbidden();
+        }
     }
 
     @Test
@@ -306,6 +355,7 @@ class AuthorizationIntegrationTest {
                 .expectStatus().isOk();
 
         verify(ocrServiceClient).extractText(anyList());
+        verify(abuseRateLimiter).checkUpload(7L);
     }
 
     @Test
@@ -338,6 +388,7 @@ class AuthorizationIntegrationTest {
                 .expectStatus().isCreated();
 
         verify(ocrPersistenceService).processAndPersist(anyList(), eq(7L));
+        verify(abuseRateLimiter).checkUpload(7L);
     }
 
     @Test

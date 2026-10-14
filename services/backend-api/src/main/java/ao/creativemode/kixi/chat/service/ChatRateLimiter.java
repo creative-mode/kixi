@@ -82,7 +82,7 @@ public class ChatRateLimiter {
                                 "Tutor protection is temporarily unavailable"))
                 .flatMap(state -> {
                     if (state.attempts() > properties.getMaxAttempts()) {
-                        log.warn("Tutor rate limit exceeded for accountId={}", accountId);
+                        log.warn("Tutor rate limit exceeded");
                         return Mono.error(new ChatRateLimitException(state.retryAfterSeconds()));
                     }
                     return Mono.empty();

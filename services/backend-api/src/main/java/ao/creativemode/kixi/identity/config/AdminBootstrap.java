@@ -123,14 +123,14 @@ public class AdminBootstrap implements ApplicationRunner {
                     if (usernameTaken) {
                         // Branch, don't swallow: an empty Mono completes, and anything
                         // chained after it would still run — including the insert.
-                        log.error("ADMIN bootstrap skipped: username '{}' is already taken", username);
+                        log.error("ADMIN bootstrap skipped: the configured username is already taken");
                         return Mono.<Void>empty();
                     }
                     return accountRepository.findByEmailAndDeletedAtIsNull(email)
                             .hasElement()
                             .flatMap(emailTaken -> {
                                 if (emailTaken) {
-                                    log.error("ADMIN bootstrap skipped: email '{}' is already taken", email);
+                                    log.error("ADMIN bootstrap skipped: the configured email is already taken");
                                     return Mono.<Void>empty();
                                 }
                                 return transactionalOperator.transactional(Mono.defer(() -> roleRepository
@@ -162,7 +162,7 @@ public class AdminBootstrap implements ApplicationRunner {
                                                                         new AccountRole(saved.getId(), role.getId())),
                                                                 userRepository.save(user))
                                                         .then(Mono.fromRunnable(() -> log.info(
-                                                                "ADMIN bootstrap: administrator '{}' created", username)));
+                                                                "ADMIN bootstrap: administrator created")));
                                             });
                                         })));
                             });
