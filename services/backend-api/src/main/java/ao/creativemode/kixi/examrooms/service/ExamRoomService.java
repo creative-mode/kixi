@@ -359,20 +359,41 @@ public class ExamRoomService implements ExamRoomAccess {
                                                     "The simulation is no longer accepting answers")))
                                             .thenReturn(simulation);
                                 })
-                                .flatMap(simulation -> questions.findAllByStatementIdOrderedByOrderIndex(room.getStatementId())
-                                 .flatMapSequential(question -> options.findAllByQuestionIdOrderedByOrderIndex(question.getId())
-                                        .map(option -> new QuestionOptionResponse(option.getId(), option.getQuestionId(),
-                                                option.getOptionLabel(), option.getOptionText(), null,
-                                                option.getOrderIndex(), option.getCreatedAt(), option.getUpdatedAt(), null))
-                                        .collectList()
-                                        .map(questionOptions -> new ExamRoomQuestionResponse(question.getId(),
-                                                question.getStatementId(), question.getNumber(), question.getText(),
-                                                question.getQuestionType(), question.getMaxScore(), question.getOrderIndex(),
-                                                question.getPageIndex(), questionOptions, question.getCreatedAt(),
-                                                question.getUpdatedAt())))
-                                .collectList()
+                                .flatMap(simulation -> studentQuestions(room.getStatementId())
                                 .map(items -> new ExamRoomStudentResponse(roomId, participant.getSimulationId(),
                                         room.getStatus(), room.getStartsAt(), room.getEndsAt(), room.getDurationMinutes(), items)))));
+    }
+
+    /**
+     * What a student answers in a room: the leaves of the paper, each with its options but never the
+     * answer key. The common statement of a group is not a question: it is shown above its items
+     * through {@code parentText}.
+     */
+    private Mono<List<ExamRoomQuestionResponse>> studentQuestions(Long statementId) {
+        return questions.findAllByStatementIdOrderedByOrderIndex(statementId)
+                .collectList()
+                .flatMap(all -> {
+                    java.util.Map<Long, String> parentText = all.stream()
+                            .filter(ao.creativemode.kixi.exams.model.Question::isGroup)
+                            .collect(java.util.stream.Collectors.toMap(
+                                    ao.creativemode.kixi.exams.model.Question::getId,
+                                    ao.creativemode.kixi.exams.model.Question::getText,
+                                    (first, later) -> first));
+                    return Flux.fromIterable(all)
+                            .filter(ao.creativemode.kixi.exams.model.Question::isAnswerable)
+                            .concatMap(question -> options.findAllByQuestionIdOrderedByOrderIndex(question.getId())
+                                    .map(option -> new QuestionOptionResponse(option.getId(), option.getQuestionId(),
+                                            option.getOptionLabel(), option.getOptionText(), null,
+                                            option.getOrderIndex(), option.getCreatedAt(), option.getUpdatedAt(), null))
+                                    .collectList()
+                                    .map(questionOptions -> new ExamRoomQuestionResponse(question.getId(),
+                                            question.getStatementId(), question.getNumber(), question.getText(),
+                                            question.getQuestionType(), question.getMaxScore(), question.getOrderIndex(),
+                                            question.getPageIndex(), questionOptions, question.getCreatedAt(),
+                                            question.getUpdatedAt(), question.getParentId(), question.getLabel(),
+                                            question.getParentId() == null ? null : parentText.get(question.getParentId()))))
+                            .collectList();
+                });
     }
 
     @Override

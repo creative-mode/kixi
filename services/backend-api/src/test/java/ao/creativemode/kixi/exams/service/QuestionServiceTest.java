@@ -307,6 +307,66 @@ class QuestionServiceTest {
     }
 
     @Test
+    void removingAGroupTakesItsItemsAndTheirOptionsWithItAtTheSameMoment() {
+        // Issue #247: an item without its group is a question of a paper whose common statement is gone.
+        givenTheStatementIsWritable();
+        Question group = question(QUESTION_ID, 3);
+        group.setQuestionType("group");
+        Question itemA = question(301L, 301);
+        itemA.setParentId(QUESTION_ID);
+        Question itemB = question(302L, 302);
+        itemB.setParentId(QUESTION_ID);
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(group));
+        when(questions.findActiveChildren(QUESTION_ID)).thenReturn(reactor.core.publisher.Flux.just(itemA, itemB));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(options.softDeleteAllByQuestionIdAndDeletedAt(anyLong(), any(LocalDateTime.class))).thenReturn(Mono.just(2));
+
+        StepVerifier.create(service.softDelete(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false)).verifyComplete();
+
+        LocalDateTime stamp = group.getDeletedAt();
+        assertThat(stamp).isNotNull();
+        assertThat(itemA.getDeletedAt()).isEqualTo(stamp);
+        assertThat(itemB.getDeletedAt()).as("the restore finds them by this stamp").isEqualTo(stamp);
+        verify(options).softDeleteAllByQuestionIdAndDeletedAt(301L, stamp);
+        verify(options).softDeleteAllByQuestionIdAndDeletedAt(302L, stamp);
+    }
+
+    @Test
+    void restoringAGroupBringsBackOnlyTheItemsItsRemovalTook() {
+        givenTheStatementIsWritable();
+        Question group = question(QUESTION_ID, 3);
+        group.setQuestionType("group");
+        LocalDateTime stamp = LocalDateTime.now().minusDays(1);
+        group.setDeletedAt(stamp);
+        Question item = question(301L, 301);
+        item.setParentId(QUESTION_ID);
+        item.setDeletedAt(stamp);
+        when(questions.findByIdAndDeletedAtIsNotNull(QUESTION_ID)).thenReturn(Mono.just(group));
+        when(questions.findChildrenDeletedAt(QUESTION_ID, stamp)).thenReturn(reactor.core.publisher.Flux.just(item));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(options.restoreAllDeletedByQuestionIdAndDeletedAt(anyLong(), any(LocalDateTime.class))).thenReturn(Mono.just(2));
+
+        StepVerifier.create(service.restore(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false)).verifyComplete();
+
+        assertThat(group.isDeleted()).isFalse();
+        assertThat(item.isDeleted()).isFalse();
+        verify(options).restoreAllDeletedByQuestionIdAndDeletedAt(301L, stamp);
+    }
+
+    @Test
+    void aQuestionThatIsNotAGroupNeverLooksForItems() {
+        givenTheStatementIsWritable();
+        Question existing = question(QUESTION_ID, 1);
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(existing));
+        when(questions.save(existing)).thenAnswer(invocation -> Mono.just(existing));
+        when(options.softDeleteAllByQuestionIdAndDeletedAt(anyLong(), any(LocalDateTime.class))).thenReturn(Mono.just(0));
+
+        StepVerifier.create(service.softDelete(STATEMENT_ID, QUESTION_ID, ACCOUNT_ID, false)).verifyComplete();
+
+        verify(questions, org.mockito.Mockito.never()).findActiveChildren(anyLong());
+    }
+
+    @Test
     void restoreBringsBackOnlyTheOptionsTheCascadeTook() {
         // An option the teacher removed before the question was deleted has an
         // older stamp, so it stays out and its removal is still respected.

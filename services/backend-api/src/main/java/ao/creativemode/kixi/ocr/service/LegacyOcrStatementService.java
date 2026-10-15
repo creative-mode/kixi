@@ -346,7 +346,7 @@ public class LegacyOcrStatementService {
         question.setOrderIndex(orderIndex);
 
         // Text
-        question.setText(extracted.getTextValue());
+        question.setText(extracted.textWithSubitems());
 
         // Question type - map from Portuguese to database format
         String type = extracted.getTypeValue();
@@ -380,6 +380,8 @@ public class LegacyOcrStatementService {
         return switch (type.toLowerCase()) {
             case "dissertativa" -> "development";
             case "multipla_escolha" -> "multiple_choice";
+            // These two only exist as structure in the exam builder; stored as plain text they read as development.
+            case "verdadeiro_falso", "composta" -> "development";
             default -> type;
         };
     }

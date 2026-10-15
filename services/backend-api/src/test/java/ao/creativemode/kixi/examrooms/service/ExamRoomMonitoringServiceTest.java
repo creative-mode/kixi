@@ -191,7 +191,7 @@ class ExamRoomMonitoringServiceTest {
             Duration delay = call == 1 ? Duration.ofSeconds(5) : Duration.ofSeconds(1);
             return Mono.delay(delay)
                     .doOnSuccess(ignoredValue -> active.decrementAndGet())
-                    .thenMany(Flux.range(1, call));
+                    .thenMany(Flux.range(1, call).map(index -> new Question()));
         });
 
         StepVerifier.create(service.stream(7L, 99L, false))

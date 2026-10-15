@@ -59,6 +59,39 @@ public record ManualStatementRequest(
         Double maxScore,
 
         @Valid
+        List<Option> options,
+        /**
+         * {@code open}, {@code multiple_choice}, {@code true_false} or {@code group}. Left out, it is
+         * derived as before: {@code multiple_choice} when there are options, {@code open} otherwise.
+         */
+        @Size(max = 20, message = "The question type must not exceed 20 characters")
+        String type,
+        /** The alíneas of a {@code group} question. Only a group has them. */
+        @Valid
+        List<Item> items
+    ) {
+        /** The shape the exam builder sent before types and alíneas existed. */
+        public Question(String text, Double maxScore, List<Option> options) {
+            this(text, maxScore, options, null, null);
+        }
+    }
+
+    /**
+     * One alínea of a group: its own type, score and options. Never a group itself.
+     * {@code label} is optional and defaults to a, b, c... in order.
+     */
+    public record Item(
+        @Size(max = 10, message = "The item label must not exceed 10 characters")
+        String label,
+        @NotBlank(message = "The item text is required")
+        String text,
+        @Size(max = 20, message = "The question type must not exceed 20 characters")
+        String type,
+        @PositiveOrZero(message = "The score cannot be negative")
+        @Digits(integer = 8, fraction = 2,
+            message = "The score must be at most 99999999.99")
+        Double maxScore,
+        @Valid
         List<Option> options
     ) {}
 

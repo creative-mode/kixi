@@ -16,5 +16,11 @@ public record ExamRoomQuestionResponse(
         Integer pageIndex,
         List<QuestionOptionResponse> options,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        /** The group this question is an item of (an alínea); null for a top-level question. */
+        Long parentId,
+        /** The item's label inside its group. Show "{parent number}{label}", never {@code number}. */
+        String label,
+        /** The common statement of the group, shown above the item. */
+        String parentText
 ) { }

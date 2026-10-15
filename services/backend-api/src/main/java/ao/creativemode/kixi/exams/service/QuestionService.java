@@ -222,6 +222,15 @@ public class QuestionService {
                 return Mono.defer(() -> questions.save(question))
                     .then(Mono.defer(() ->
                         options.softDeleteAllByQuestionIdAndDeletedAt(questionId, deletedAt)))
+                    // The items of a group go with it: left active they would be questions of a
+                    // paper whose common statement is gone.
+                    .thenMany(Flux.defer(() -> question.isGroup()
+                        ? questions.findActiveChildren(questionId) : Flux.<Question>empty()))
+                    .concatMap(child -> {
+                        child.setDeletedAt(deletedAt);
+                        return Mono.defer(() -> questions.save(child))
+                            .then(Mono.defer(() -> options.softDeleteAllByQuestionIdAndDeletedAt(child.getId(), deletedAt)));
+                    })
                     .then();
             });
     }
@@ -244,6 +253,13 @@ public class QuestionService {
                 return Mono.defer(() -> questions.save(question))
                     .then(Mono.defer(() ->
                         options.restoreAllDeletedByQuestionIdAndDeletedAt(questionId, deletedAt)))
+                    .thenMany(Flux.defer(() -> question.isGroup()
+                        ? questions.findChildrenDeletedAt(questionId, deletedAt) : Flux.<Question>empty()))
+                    .concatMap(child -> {
+                        child.restore();
+                        return Mono.defer(() -> questions.save(child))
+                            .then(Mono.defer(() -> options.restoreAllDeletedByQuestionIdAndDeletedAt(child.getId(), deletedAt)));
+                    })
                     .then();
             });
     }
@@ -255,7 +271,11 @@ public class QuestionService {
     public Mono<Void> hardDelete(Long statementId, Long questionId, Long accountId, boolean admin) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
             .then(Mono.defer(() -> findDeletedQuestion(statementId, questionId)))
-            .flatMap(question -> Mono.defer(() -> questions.delete(question)).then());
+            // The items reference the group, so they go first (their options cascade).
+            .flatMap(question -> Flux.defer(() -> question.isGroup()
+                    ? questions.findAllChildren(question.getId()) : Flux.<Question>empty())
+                .concatMap(child -> Mono.defer(() -> questions.delete(child)))
+                .then(Mono.defer(() -> questions.delete(question))));
     }
 
     // ── Internals ───────────────────────────────────────────────────────────
@@ -301,7 +321,9 @@ public class QuestionService {
             staff ? question.getNeedsReview() : null,
             question.getCreatedAt(),
             question.getUpdatedAt(),
-            staff ? question.getDeletedAt() : null
+            staff ? question.getDeletedAt() : null,
+            question.getParentId(),
+            question.getLabel()
         );
     }
 }

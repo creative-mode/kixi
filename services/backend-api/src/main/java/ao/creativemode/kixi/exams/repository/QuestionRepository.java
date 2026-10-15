@@ -22,8 +22,17 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Flux<Question> findAllByDeletedAtIsNull();
 
     /**
-     * Find all questions for a specific statement
+     * Find all questions for a specific statement, in the order of the paper.
+     *
+     * <p>Explicit, since issue #247: the items of a group have to follow their group, which only
+     * {@code order_index} says ({@code number} is the printed number for a top-level question and
+     * just a unique key for an item). The unordered derived query this replaces returned rows in
+     * whatever order the table happened to hold them.
      */
+    @Query(
+        "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL "
+            + "ORDER BY COALESCE(order_index, number) ASC, id ASC"
+    )
     Flux<Question> findAllByStatementIdAndDeletedAtIsNull(Long statementId);
 
     Flux<Question> findAllByStatementIdAndDeletedAtIsNotNull(Long statementId);
@@ -57,8 +66,17 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Flux<Question> findAllByStatementIdOrderedByOrderIndex(Long statementId);
 
     /**
-     * Find all questions for a statement, ordered by order_index (Spring Data naming convention)
+     * The active questions of a statement in the order of the paper: what the full statement shows.
+     *
+     * <p>Explicit about {@code deleted_at}, since issue #247: this used to be a Spring Data derived
+     * query with no such condition, so a question removed from a statement kept showing in
+     * {@code GET /statements/{id}/full}, the builder and the review screen. The removed ones have
+     * their own route ({@code /trash}); a purge reads {@code findAllByStatementIdIncludingDeleted}.
      */
+    @Query(
+        "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL "
+            + "ORDER BY COALESCE(order_index, number) ASC, id ASC"
+    )
     Flux<Question> findAllByStatementIdOrderByOrderIndex(Long statementId);
 
     /**
@@ -221,6 +239,18 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
         Long statementId,
         LocalDateTime deletedAt
     );
+
+    /** The items of a group that are still active. */
+    @Query("SELECT * FROM questions WHERE parent_id = :parentId AND deleted_at IS NULL ORDER BY number ASC")
+    Flux<Question> findActiveChildren(Long parentId);
+
+    /** The items a group's own removal took, found by the moment it happened. */
+    @Query("SELECT * FROM questions WHERE parent_id = :parentId AND deleted_at = :deletedAt ORDER BY number ASC")
+    Flux<Question> findChildrenDeletedAt(Long parentId, LocalDateTime deletedAt);
+
+    /** Every item of a group, removed or not: what has to go before the group can be purged. */
+    @Query("SELECT * FROM questions WHERE parent_id = :parentId")
+    Flux<Question> findAllChildren(Long parentId);
 
     /**
      * Calculate total max score for a statement
