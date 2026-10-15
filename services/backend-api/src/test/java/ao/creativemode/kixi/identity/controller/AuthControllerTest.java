@@ -143,7 +143,12 @@ class AuthControllerTest {
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode().value()).isEqualTo(200);
-        verify(abuseRateLimiter).checkLogin("unknown");
+        // The login path goes through LoginRateLimiter, which counts the address and the
+        // identity separately (#240). ApiAbuseRateLimiter.checkLogin was dropped from it:
+        // two limiters in series on one door, with different windows, means the tighter
+        // one silently wins and the other is paid for on every request.
+        verify(loginRateLimiter).check("login-ip:unknown");
+        verify(loginRateLimiter).check("login-identity:student@example.test");
         verify(authService).login("student@example.test", "password123");
     }
 

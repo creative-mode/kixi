@@ -25,6 +25,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Locale;
 
 /**
  * Autenticação: login tradicional (username/email + password) e login Google OAuth2.
@@ -48,11 +49,8 @@ public class AuthController {
     public AuthController(AuthService authService,
                           GoogleOAuth2Properties googleProperties,
                           RegistrationRateLimiter registrationRateLimiter,
-        this.authService = authService;
-        this.googleProperties = googleProperties;
-        this.registrationRateLimiter = registrationRateLimiter;
-        this.loginRateLimiter = loginRateLimiter;
-        this.trustedProxies = trustedProxies;
+                          LoginRateLimiter loginRateLimiter,
+                          TrustedProxyProperties trustedProxies,
                           ApiAbuseRateLimiter abuseRateLimiter) {
         this.authService = authService;
         this.googleProperties = googleProperties;
