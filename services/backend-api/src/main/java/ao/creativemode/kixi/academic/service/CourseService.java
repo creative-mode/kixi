@@ -76,7 +76,8 @@ public class CourseService {
         return repository.save(entity)
                 .map(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
-                        e -> integrityFailure(e, code, "A course with code " + code + " already exists"));
+                        e -> integrityFailure(e, code,
+                                "This school already has an active course with code " + code));
     }
 
     public Mono<CourseResponse> update(Long id, CourseRequest request) {
@@ -110,7 +111,7 @@ public class CourseService {
                 .map(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
                         e -> integrityFailure(e, code,
-                                "Another course with code " + code + " already exists"));
+                                "This school already has another active course with code " + code));
     }
 
     /**
@@ -154,9 +155,21 @@ public class CourseService {
                         : Mono.empty());
     }
 
+    /**
+     * Removing a course is refused while it still has classes (issue #253): nothing cascades, so the
+     * classes, their enrollments and their teaching assignments would be left hanging from a course
+     * that is gone. The owner moves or removes the classes first.
+     */
     public Mono<Void> softDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Course not found")))
+                .flatMap(entity -> classRepository.findByCourseIdAndDeletedAtIsNull(entity.getId())
+                        .count()
+                        .flatMap(classes -> classes > 0
+                                ? Mono.<Course>error(ApiException.conflict(
+                                        "This course still has " + classes + " active class(es): "
+                                                + "remove or move them first"))
+                                : Mono.just(entity)))
                 .flatMap(entity -> {
                     entity.setDeletedAt(LocalDateTime.now());
                     return repository.save(entity);
@@ -164,12 +177,19 @@ public class CourseService {
                 .then();
     }
 
+    /**
+     * Restoring puts the code back in play, and in the meantime the school may have reused it:
+     * the unique index (active courses, per school) then refuses, and the reason is worth saying.
+     */
     public Mono<Void> restore(Long id) {
         return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(Mono.error(ApiException.badRequest("Course is not deleted")))
                 .flatMap(entity -> {
                     entity.setDeletedAt(null);
-                    return repository.save(entity);
+                    return repository.save(entity)
+                            .onErrorMap(DataIntegrityViolationException.class, e -> ApiException.conflict(
+                                    "Another active course of this school already uses the code "
+                                            + entity.getCode() + ": rename one of them before restoring"));
                 })
                 .then();
     }

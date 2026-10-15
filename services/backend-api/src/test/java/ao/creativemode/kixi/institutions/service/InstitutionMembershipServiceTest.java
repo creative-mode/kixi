@@ -18,6 +18,7 @@ import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.model.InstitutionStudent;
 import ao.creativemode.kixi.institutions.model.InstitutionSubject;
 import ao.creativemode.kixi.institutions.model.InstitutionTeacher;
+import ao.creativemode.kixi.institutions.repository.AcademicDependencyQueries;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionSubjectRepository;
@@ -41,6 +42,7 @@ class InstitutionMembershipServiceTest {
     private SubjectRepository subjects;
     private TeacherRepository teachers;
     private UserRepository users;
+    private AcademicDependencyQueries dependencies;
     private InstitutionMembershipService service;
 
     @BeforeEach
@@ -52,8 +54,10 @@ class InstitutionMembershipServiceTest {
         subjects = mock(SubjectRepository.class);
         teachers = mock(TeacherRepository.class);
         users = mock(UserRepository.class);
+        dependencies = mock(AcademicDependencyQueries.class);
+        when(dependencies.curriculumEntriesOfSchoolSubject(any(), any())).thenReturn(Mono.just(0L));
         service = new InstitutionMembershipService(
-                institutions, subjectLinks, teacherLinks, studentLinks, subjects, teachers, users);
+                institutions, subjectLinks, teacherLinks, studentLinks, subjects, teachers, users, dependencies);
     }
 
     // ── Subjects ────────────────────────────────────────────────────────────
@@ -139,6 +143,20 @@ class InstitutionMembershipServiceTest {
         StepVerifier.create(service.removeSubject(1L, 2L)).verifyComplete();
 
         assertThat(link.isDeleted()).isTrue();
+    }
+
+    @Test
+    void removeSubjectIsRefusedWhileACourseCurriculumUsesIt() {
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        InstitutionSubject link = new InstitutionSubject(1L, 2L);
+        when(subjectLinks.findFirstByInstitutionIdAndSubjectId(1L, 2L)).thenReturn(Mono.just(link));
+        when(dependencies.curriculumEntriesOfSchoolSubject(1L, 2L)).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(service.removeSubject(1L, 2L))
+                .expectErrorSatisfies(e -> assertThat(((ao.creativemode.kixi.shared.exception.ApiException) e)
+                        .getStatus().value()).isEqualTo(409))
+                .verify();
+        verify(subjectLinks, org.mockito.Mockito.never()).save(any());
     }
 
     @Test

@@ -13,6 +13,7 @@ import ao.creativemode.kixi.institutions.dto.membership.TeacherLinkResponse;
 import ao.creativemode.kixi.institutions.model.InstitutionStudent;
 import ao.creativemode.kixi.institutions.model.InstitutionSubject;
 import ao.creativemode.kixi.institutions.model.InstitutionTeacher;
+import ao.creativemode.kixi.institutions.repository.AcademicDependencyQueries;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionSubjectRepository;
@@ -37,6 +38,7 @@ public class InstitutionMembershipService {
     private final SubjectRepository subjectRepository;
     private final TeacherRepository teacherRepository;
     private final UserRepository userRepository;
+    private final AcademicDependencyQueries dependencies;
 
     public InstitutionMembershipService(
         InstitutionRepository institutionRepository,
@@ -45,7 +47,8 @@ public class InstitutionMembershipService {
         InstitutionStudentRepository studentLinks,
         SubjectRepository subjectRepository,
         TeacherRepository teacherRepository,
-        UserRepository userRepository
+        UserRepository userRepository,
+        AcademicDependencyQueries dependencies
     ) {
         this.institutionRepository = institutionRepository;
         this.subjectLinks = subjectLinks;
@@ -54,6 +57,7 @@ public class InstitutionMembershipService {
         this.subjectRepository = subjectRepository;
         this.teacherRepository = teacherRepository;
         this.userRepository = userRepository;
+        this.dependencies = dependencies;
     }
 
     // ── Subjects ────────────────────────────────────────────────────────────
@@ -97,6 +101,13 @@ public class InstitutionMembershipService {
                 subjectLinks.findFirstByInstitutionIdAndSubjectId(institutionId, subjectId)
                     .filter(link -> !link.isDeleted())
                     .switchIfEmpty(Mono.error(ApiException.notFound("Subject is not taught by this institution")))
+                    .flatMap(link -> dependencies.curriculumEntriesOfSchoolSubject(institutionId, subjectId)
+                        .flatMap(entries -> entries > 0
+                            ? Mono.<InstitutionSubject>error(ApiException.conflict(
+                                "This subject is in the curriculum of " + entries
+                                    + " course entr" + (entries == 1 ? "y" : "ies")
+                                    + " of this institution; remove it from the curriculum first"))
+                            : Mono.just(link)))
                     .flatMap(link -> {
                         link.markAsDeleted();
                         return subjectLinks.save(link);

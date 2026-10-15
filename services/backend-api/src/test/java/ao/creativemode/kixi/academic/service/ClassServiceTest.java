@@ -34,6 +34,7 @@ class ClassServiceTest {
     private ClassRepository repository;
     private CourseRepository courseRepository;
     private SchoolYearRepository schoolYearRepository;
+    private ao.creativemode.kixi.shared.service.AcademicDependencyReader dependencies;
     private ClassService service;
 
     private static final Long ITEL = 7L;
@@ -43,7 +44,10 @@ class ClassServiceTest {
         repository = mock(ClassRepository.class);
         courseRepository = mock(CourseRepository.class);
         schoolYearRepository = mock(SchoolYearRepository.class);
-        service = new ClassService(repository, courseRepository, schoolYearRepository);
+        dependencies = mock(ao.creativemode.kixi.shared.service.AcademicDependencyReader.class);
+        when(dependencies.activeEnrollmentsOfClass(any())).thenReturn(Mono.just(0L));
+        when(dependencies.activeAssignmentsOfClass(any())).thenReturn(Mono.just(0L));
+        service = new ClassService(repository, courseRepository, schoolYearRepository, dependencies);
     }
 
     private Course courseOfSchool(Long institutionId) {
@@ -243,6 +247,43 @@ class ClassServiceTest {
 
         StepVerifier.create(service.softDelete(99L))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void softDeleteIsRefusedWhileTheClassHasEnrollmentsOrAssignments() {
+        Class existing = new Class();
+        existing.setId(1L);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(dependencies.activeEnrollmentsOfClass(1L)).thenReturn(Mono.just(4L));
+        when(dependencies.activeAssignmentsOfClass(1L)).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(service.softDelete(1L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error.getMessage()).contains("4").contains("2");
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
+        assertThat(existing.isDeleted()).isFalse();
+    }
+
+    @Test
+    void updateIsRefusedWhenMovingAClassWithPeopleToAnotherCourse() {
+        Class existing = new Class();
+        existing.setId(5L);
+        existing.setCourseId(1L);
+        existing.setSchoolYearId(1L);
+        when(repository.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(existing));
+        when(dependencies.activeEnrollmentsOfClass(5L)).thenReturn(Mono.just(3L));
+        when(courseRepository.findById(2L)).thenReturn(Mono.just(courseOfSchool(ITEL)));
+        when(schoolYearRepository.findById(1L)).thenReturn(Mono.just(new SchoolYear()));
+
+        StepVerifier.create(service.update(5L, new ClassRequest("12-X", 12, 2L, 1L)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatusCode()).isEqualTo(409))
                 .verify();
 
         verify(repository, never()).save(any());

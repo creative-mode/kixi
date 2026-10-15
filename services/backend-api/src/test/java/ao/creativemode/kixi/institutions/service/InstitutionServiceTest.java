@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.institutions.dto.institution.InstitutionRequest;
 import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
@@ -29,6 +30,7 @@ class InstitutionServiceTest {
     private InstitutionSubjectRepository subjectLinks;
     private InstitutionTeacherRepository teacherLinks;
     private InstitutionStudentRepository studentLinks;
+    private CourseRepository courses;
     private InstitutionService service;
 
     @BeforeEach
@@ -37,7 +39,9 @@ class InstitutionServiceTest {
         subjectLinks = mock(InstitutionSubjectRepository.class);
         teacherLinks = mock(InstitutionTeacherRepository.class);
         studentLinks = mock(InstitutionStudentRepository.class);
-        service = new InstitutionService(repository, subjectLinks, teacherLinks, studentLinks);
+        courses = mock(CourseRepository.class);
+        when(courses.countByInstitutionIdAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        service = new InstitutionService(repository, subjectLinks, teacherLinks, studentLinks, courses);
     }
 
     @Test
@@ -78,6 +82,21 @@ class InstitutionServiceTest {
         StepVerifier.create(service.softDelete(1L)).verifyComplete();
 
         assertThat(institution.isDeleted()).isTrue();
+    }
+
+    @Test
+    void softDeleteIsRefusedWhileTheInstitutionHasActiveCourses() {
+        Institution institution = institution(1L, null);
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution));
+        when(courses.countByInstitutionIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(3L));
+
+        StepVerifier.create(service.softDelete(1L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(error.getMessage()).contains("3");
+                })
+                .verify();
+        assertThat(institution.isDeleted()).isFalse();
     }
 
     @Test
