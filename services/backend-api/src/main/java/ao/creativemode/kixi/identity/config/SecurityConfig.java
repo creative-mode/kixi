@@ -53,6 +53,10 @@ public class SecurityConfig {
                         // /teachers route stays ADMIN-only below.
                         .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // #253: where the signed-in teacher teaches; the overview of any
+                        // other teacher stays ADMIN-only with the rest of /teachers.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me/overview")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
                                 "/api/v1/roles", "/api/v1/roles/**",
@@ -132,6 +136,9 @@ public class SecurityConfig {
                                 "/api/v1/subjects/trash", "/api/v1/courses/trash",
                                 "/api/v1/classes/trash", "/api/v1/question-images/trash")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // #253: where a subject is taught across schools is for the administrator.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/subjects/*/offerings")
+                        .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/school-years", "/api/v1/school-years/**",
                                 "/api/v1/terms", "/api/v1/terms/**",
@@ -140,12 +147,15 @@ public class SecurityConfig {
                                 "/api/v1/classes", "/api/v1/classes/**",
                                 "/api/v1/question-images", "/api/v1/question-images/**")
                         .authenticated()
+                        // #253: the academic structure is written by the administrator only; a
+                        // teacher reads it. Question images stay with the teachers who author.
                         .pathMatchers("/api/v1/school-years", "/api/v1/school-years/**",
                                 "/api/v1/terms", "/api/v1/terms/**",
                                 "/api/v1/subjects", "/api/v1/subjects/**",
                                 "/api/v1/courses", "/api/v1/courses/**",
-                                "/api/v1/classes", "/api/v1/classes/**",
-                                "/api/v1/question-images", "/api/v1/question-images/**")
+                                "/api/v1/classes", "/api/v1/classes/**")
+                        .hasRole("ADMIN")
+                        .pathMatchers("/api/v1/question-images", "/api/v1/question-images/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers/trash",
