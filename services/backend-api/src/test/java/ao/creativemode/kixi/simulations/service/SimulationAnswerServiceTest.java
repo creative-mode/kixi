@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import org.springframework.http.HttpStatus;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.exams.model.Question;
@@ -403,6 +404,21 @@ class SimulationAnswerServiceTest {
         StepVerifier.create(withOptions.create(new SimulationAnswerRequest(1L, 5L, 30L, null, null)))
                 .assertNext(response -> assertThat(response.questionId()).isEqualTo(5L))
                 .verifyComplete();
+    }
+
+    @Test
+    void theCommonStatementOfAGroupCannotBeAnswered() {
+        // Issue #247: the header of a group is the statement its items share. An answer to it would
+        // be a row the student never saw a field for, and one more thing the teacher has to grade.
+        QuestionOptionRepository options = mock(QuestionOptionRepository.class);
+        SimulationAnswerService withGroup = serviceWith(options, question(5L, "group"));
+
+        StepVerifier.create(withGroup.create(new SimulationAnswerRequest(1L, 5L, null, "texto", null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(error.getMessage()).contains("answer an item");
+                })
+                .verify();
     }
 
     @Test

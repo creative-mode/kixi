@@ -106,6 +106,8 @@ public class SimulationResultService {
     }
 
     private Mono<SimulationResultResponse> render(Simulation simulation, boolean answerKeyVisible) {
+        // The common statement of a group is not answered or graded, but its items show it: keep the
+        // whole list to read the parent's text, and answer only for what can be answered.
         return Mono.zip(
             questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId())
                 .collectList(),
@@ -131,7 +133,7 @@ public class SimulationResultService {
         if (questions.isEmpty()) {
             return Mono.just(build(simulation, questions, answers, List.of(), answerKeyVisible));
         }
-        List<Long> questionIds = questions.stream().map(Question::getId).toList();
+        List<Long> questionIds = questions.stream().filter(Question::isAnswerable).map(Question::getId).toList();
         return options.findAllByQuestionIdInAndDeletedAtIsNull(questionIds)
             .collectList()
             .map(allOptions -> build(simulation, questions, answers, allOptions, answerKeyVisible));
@@ -153,11 +155,17 @@ public class SimulationResultService {
                 Function.identity(),
                 (first, later) -> later));
 
+        Map<Long, String> parentText = questions.stream()
+            .filter(Question::isGroup)
+            .collect(Collectors.toMap(Question::getId, Question::getText, (first, later) -> first));
+
         List<SimulationResultResponse.QuestionResult> rendered = questions.stream()
+            .filter(Question::isAnswerable)
             .map(question -> renderQuestion(
                 question,
                 optionsByQuestion.getOrDefault(question.getId(), List.of()),
-                answerByQuestion.get(question.getId()), answerKeyVisible))
+                answerByQuestion.get(question.getId()), answerKeyVisible,
+                question.getParentId() == null ? null : parentText.get(question.getParentId())))
             .toList();
 
         return new SimulationResultResponse(
@@ -178,7 +186,8 @@ public class SimulationResultService {
         Question question,
         List<QuestionOption> questionOptions,
         SimulationAnswer answer,
-        boolean answerKeyVisible
+        boolean answerKeyVisible,
+        String parentText
     ) {
         List<SimulationResultResponse.OptionResult> optionResults = questionOptions.stream()
             .map(option -> new SimulationResultResponse.OptionResult(
@@ -210,7 +219,10 @@ public class SimulationResultService {
             answerKeyVisible && answer != null ? answer.getScoreObtained() : null,
             answerKeyVisible && answer != null ? answer.getIsCorrect() : null,
             answerKeyVisible && answer != null ? answer.getReviewStatus() : null,
-            optionResults
+            optionResults,
+            question.getParentId(),
+            question.getLabel(),
+            parentText
         );
     }
 

@@ -215,14 +215,16 @@ class SimulationResultControllerTest {
                         31L, 30L, null, 0.0f, false, null,
                         List.of(
                             new SimulationResultResponse.OptionResult(30L, "A", "A text", false),
-                            new SimulationResultResponse.OptionResult(31L, "B", "B text", true)))));
+                            new SimulationResultResponse.OptionResult(31L, "B", "B text", true)),
+                        null, null, null)));
     }
 
     private SimulationResultResponse hiddenResult() {
         return new SimulationResultResponse(SIMULATION_ID, SimulationStatus.FINISHED, null, null, 1, null,
                 1800, LocalDateTime.now(), List.of(new SimulationResultResponse.QuestionResult(
                         20L, 1, "Qual?", "multiple_choice", 5.0, null, null, 30L, null, null, null, null,
-                        List.of(new SimulationResultResponse.OptionResult(30L, "A", "A text", null)))));
+                        List.of(new SimulationResultResponse.OptionResult(30L, "A", "A text", null)),
+                        null, null, null)));
     }
 
     private static WebTestClientConfigurer teacherJwt() {

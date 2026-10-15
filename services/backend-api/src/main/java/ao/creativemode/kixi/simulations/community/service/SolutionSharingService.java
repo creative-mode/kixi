@@ -317,7 +317,7 @@ public class SolutionSharingService {
         return Mono.zip(
                         simulationsMono,
                         answersMono,
-                        questions.findAllByStatementIdOrderedByOrderIndex(statementId).collectList())
+                        questions.findAllByStatementIdOrderedByOrderIndex(statementId).filter(ao.creativemode.kixi.exams.model.Question::isAnswerable).collectList())
                 .flatMap(tuple -> {
                     Map<Long, Simulation> simulationById = tuple.getT1().stream()
                             .filter(simulation -> simulation.getDeletedAt() == null
