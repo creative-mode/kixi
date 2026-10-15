@@ -70,6 +70,11 @@ services:
       SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/${POSTGRES_DB:-kixi}
       SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-kixi}
       SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a strong value}
+      # Connection pool. Spring's default (10) queued requests under 500 users
+      # (#124, infra/load/RELATORIO.md). Keep max size below Postgres
+      # max_connections (100) minus what other clients need.
+      SPRING_R2DBC_POOL_INITIAL_SIZE: ${R2DBC_POOL_INITIAL_SIZE:-10}
+      SPRING_R2DBC_POOL_MAX_SIZE: ${R2DBC_POOL_MAX_SIZE:-40}
       # Existing databases created by the legacy init.sql are baselined at V16;
       # fresh databases are empty and run the complete migration chain.
       SPRING_FLYWAY_BASELINE_ON_MIGRATE: ${SPRING_FLYWAY_BASELINE_ON_MIGRATE:-true}

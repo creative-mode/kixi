@@ -125,6 +125,56 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginChecksThePasswordOffTheThreadThatDeliveredTheAccount() {
+        Account existing = account(1L, "admin", "hashed");
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin")).thenReturn(Mono.just(existing));
+        java.util.concurrent.atomic.AtomicReference<String> bcryptThread =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        when(passwordEncoder.matches("correct", "hashed")).thenAnswer(invocation -> {
+            bcryptThread.set(Thread.currentThread().getName());
+            return true;
+        });
+        when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
+        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L))
+                .thenReturn(Flux.just(new AccountRole(1L, 2L)));
+        when(roleRepository.findById(2L)).thenReturn(Mono.just(role(2L, "ADMIN")));
+        stubUnusedEmailFallback("admin");
+
+        StepVerifier.create(service.login("admin", "correct")).expectNextCount(1).verifyComplete();
+
+        // In production the account arrives on an R2DBC I/O thread shared by every
+        // request; BCrypt must not run there (#124).
+        assertThat(bcryptThread.get()).startsWith("boundedElastic");
+    }
+
+    @Test
+    void registerHashesThePasswordOffTheCallingThread() {
+        when(accountRepository.findByUsernameAndDeletedAtIsNull("newuser")).thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("new@kixi.ao")).thenReturn(Mono.empty());
+        when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(role(3L, "STUDENT")));
+        java.util.concurrent.atomic.AtomicReference<String> bcryptThread =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        when(passwordEncoder.encode("password123")).thenAnswer(invocation -> {
+            bcryptThread.set(Thread.currentThread().getName());
+            return "hashed-password";
+        });
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> {
+            Account saved = invocation.getArgument(0);
+            saved.setId(9L);
+            return Mono.just(saved);
+        });
+        when(accountRoleRepository.save(any(AccountRole.class))).thenReturn(Mono.just(new AccountRole(9L, 3L)));
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.register(
+                        new RegisterRequest("newuser", "new@kixi.ao", "password123", "Nova", "Conta")))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(bcryptThread.get()).startsWith("boundedElastic");
+    }
+
+    @Test
     void loginFallsBackToEmailLookupWhenUsernameNotFound() {
         Account existing = account(1L, "admin", "hashed");
         when(accountRepository.findByUsernameAndDeletedAtIsNull("admin@kixi.ao")).thenReturn(Mono.empty());
