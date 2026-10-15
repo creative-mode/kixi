@@ -30,5 +30,7 @@ public record QuestionResponse(
         Boolean needsReview,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        LocalDateTime deletedAt
+        LocalDateTime deletedAt,
+        Long parentId,
+        String label
 ) { }

@@ -123,8 +123,17 @@ public record ExamExtractionResponse(
 
         @JsonProperty("image_description") String imageDescription,
 
-        Double confidence
+        Double confidence,
+
+        /** The alíneas, each with its own type; empty when the question has none. */
+        @JsonProperty("subitems_content") List<SubitemData> subitemsContent
     ) {
+        /** The shape before the alíneas were exposed. */
+        public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
+                List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence) {
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence, List.of());
+        }
+
         /**
          * Create from ExtractedQuestion.
          */
@@ -144,7 +153,10 @@ public record ExamExtractionResponse(
                     : null,
                 q.hasVisualContent(),
                 q.imageDescription(),
-                q.confidence()
+                q.confidence(),
+                q.subitemsContent() != null
+                    ? q.subitemsContent().stream().map(SubitemData::from).toList()
+                    : List.of()
             );
         }
 
@@ -167,6 +179,14 @@ public record ExamExtractionResponse(
     /**
      * Option data for multiple choice questions.
      */
+    /** One alínea of a question: a), b)... with its own type. */
+    public record SubitemData(String label, String text, Double cotacao, String type) {
+        public static SubitemData from(OcrResponse.SubitemContent item) {
+            if (item == null) return null;
+            return new SubitemData(item.label(), item.text(), item.cotacao(), item.type());
+        }
+    }
+
     public record OptionData(
         @JsonProperty("option_label") String optionLabel,
 

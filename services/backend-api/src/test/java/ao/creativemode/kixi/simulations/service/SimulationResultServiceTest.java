@@ -264,6 +264,41 @@ class SimulationResultServiceTest {
     }
 
     @Test
+    void aGroupIsNotAQuestionButItsItemsCarryItsStatement() {
+        // Issue #247: the common statement of a group is read, not answered. The result counts
+        // and lists only what was answerable, and each item brings the statement it belongs to.
+        givenASimulation(SimulationStatus.FINISHED);
+        Question header = question(40L, "group", "Diga quais são verdadeiras (V) ou falsas (F)", null);
+        Question itemA = question(41L, "true_false", "O Sol é uma estrela.", null);
+        itemA.setParentId(40L);
+        itemA.setLabel("a");
+        Question itemB = question(42L, "true_false", "A Lua é uma estrela.", null);
+        itemB.setParentId(40L);
+        itemB.setLabel("b");
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(STATEMENT_ID))
+                .thenReturn(Flux.just(header, itemA, itemB));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
+        when(options.findAllByQuestionIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
+
+        StepVerifier.create(service.findResult(SIMULATION_ID, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.totalQuestions()).as("the header is not counted").isEqualTo(2);
+                    assertThat(response.questions()).extracting(SimulationResultResponse.QuestionResult::questionId)
+                            .containsExactly(41L, 42L);
+                    assertThat(response.questions()).extracting(SimulationResultResponse.QuestionResult::label)
+                            .containsExactly("a", "b");
+                    assertThat(response.questions()).extracting(SimulationResultResponse.QuestionResult::parentText)
+                            .containsOnly("Diga quais são verdadeiras (V) ou falsas (F)");
+                    assertThat(response.questions()).extracting(SimulationResultResponse.QuestionResult::parentId)
+                            .containsOnly(40L);
+                })
+                .verifyComplete();
+
+        // The options are asked for the answerable questions only.
+        verify(options).findAllByQuestionIdInAndDeletedAtIsNull(List.of(41L, 42L));
+    }
+
+    @Test
     void aStatementWithNoQuestionsAnswersEmptyRatherThanAskingForNothing() {
         // IN () with no ids is a syntax error in SQL, not an empty result.
         givenASimulation(SimulationStatus.FINISHED);

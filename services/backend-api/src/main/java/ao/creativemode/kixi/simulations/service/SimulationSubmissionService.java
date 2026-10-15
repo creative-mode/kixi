@@ -139,7 +139,7 @@ public class SimulationSubmissionService {
 
     private Mono<Simulation> correct(Simulation simulation) {
         return Mono.zip(
-                questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList(),
+                questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).filter(Question::isAnswerable).collectList(),
                 answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId())).collectList(),
                 statementOrDefault(simulation.getStatementId()))
             .flatMap(tuple -> correctQuestions(simulation, tuple.getT1(), tuple.getT2(), tuple.getT3().getSubjectId()));

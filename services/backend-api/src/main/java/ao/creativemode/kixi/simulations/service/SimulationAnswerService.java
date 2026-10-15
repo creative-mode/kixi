@@ -191,6 +191,10 @@ public class SimulationAnswerService {
                                     && !simulation.getStatementId().equals(question.getStatementId())) {
                                 return Mono.error(ApiException.badRequest("Question does not belong to the simulation statement"));
                             }
+                            if (question.isGroup()) {
+                                return Mono.error(ApiException.badRequest(
+                                        "A group is only the common statement of its items: answer an item"));
+                            }
                             return validateSelectedOption(question, optionId);
                         }));
             })

@@ -55,7 +55,13 @@ public record SimulationResultResponse(
             Float scoreObtained,
             Boolean isCorrect,
             ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
-            List<OptionResult> options
+            List<OptionResult> options,
+            /** The group this question is an item of (an alínea); null for a top-level question. */
+            Long parentId,
+            /** The item's label inside its group (a, b, c...). Show "{parent number}{label}", never {@code number}. */
+            String label,
+            /** The common statement of the group, shown above the item. */
+            String parentText
     ) { }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

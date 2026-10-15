@@ -51,6 +51,17 @@ public class Question {
     private String questionType;
 
     /**
+     * The group this question is an item of (an alínea), or null for a top-level question.
+     * A question whose type is {@code group} is only the common statement of its items.
+     */
+    @Column("parent_id")
+    private Long parentId;
+
+    /** The item's own label inside its group: a, b, c... Null for top-level questions. */
+    @Column("label")
+    private String label;
+
+    /**
      * Maximum score/points for this question
      */
     @Column("max_score")
@@ -311,5 +322,34 @@ public class Question {
                 ", ocrConfidence=" + ocrConfidence +
                 ", needsReview=" + needsReview +
                 '}';
+    }
+
+    public Long getParentId() {
+        return parentId;
+    }
+
+    public void setParentId(Long parentId) {
+        this.parentId = parentId;
+    }
+
+    public String getLabel() {
+        return label;
+    }
+
+    public void setLabel(String label) {
+        this.label = label;
+    }
+
+    /** The question type of a group header: it holds the common statement and nothing to answer. */
+    public static final String GROUP = "group";
+
+    /** Only the common statement of a group of items: it is not answered, has no score, and is not graded. */
+    public boolean isGroup() {
+        return GROUP.equals(questionType);
+    }
+
+    /** What a student answers and what is graded: everything but a group header. */
+    public boolean isAnswerable() {
+        return !isGroup();
     }
 }

@@ -448,7 +448,7 @@ class QuestionControllerTest {
         return new QuestionResponse(
                 QUESTION_ID, STATEMENT_ID, 1, "Resolva x+1=2", "open",
                 5.0, 0, 0, "2", false,
-                LocalDateTime.now(), LocalDateTime.now(), null);
+                LocalDateTime.now(), LocalDateTime.now(), null, null, null);
     }
 
     private QuestionOptionResponse optionResponse(Long id, boolean correct) {
