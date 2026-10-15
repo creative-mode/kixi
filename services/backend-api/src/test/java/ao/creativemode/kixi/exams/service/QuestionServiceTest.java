@@ -143,6 +143,24 @@ class QuestionServiceTest {
     }
 
     @Test
+    void createOnAStatementNobodyMayWriteTouchesNeitherTheNumberingNorTheTable() {
+        // requireCanWrite is the gate: the numbering must not even be consulted
+        // when it refuses, or a refused call would still move the counters the
+        // next legitimate question receives.
+        when(writeAccess.requireCanWrite(STATEMENT_ID, ACCOUNT_ID, false))
+                .thenReturn(Mono.error(ApiException.forbidden("not assigned to this class")));
+
+        StepVerifier.create(service.create(STATEMENT_ID, request(1.0, "x"), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+
+        verify(questions, never()).findNextQuestionNumber(anyLong());
+        verify(questions, never()).findNextOrderIndex(anyLong());
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
     void aStatementThatIsGoneIsNotFound() {
         when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
 
