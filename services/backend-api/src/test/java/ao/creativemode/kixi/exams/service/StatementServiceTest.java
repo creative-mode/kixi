@@ -739,7 +739,7 @@ class StatementServiceTest {
     void updateRefusesMetadataThatDoesNotHangTogether() {
         givenTheEditIsAllowed();
         givenAStatementToEdit();
-        when(validator.validate(7L, 8L, CLASS_ID, 2L, 9L))
+        when(validator.validate(1L, 7L, 8L, CLASS_ID, 2L, 9L))
                 .thenReturn(Mono.error(ApiException.unprocessableEntity(
                         "The school year must be the one of the class")));
 
@@ -816,7 +816,7 @@ class StatementServiceTest {
         when(validator.requireAClassForTeachers(any(), anyBoolean())).thenReturn(Mono.empty());
         when(accessService.requireCanAuthor(anyLong(), anyBoolean(), anyLong(), anyLong(), any()))
                 .thenReturn(Mono.empty());
-        when(validator.validate(any(), any(), any(), any(), any())).thenReturn(Mono.empty());
+        when(validator.validate(any(), any(), any(), any(), any(), any())).thenReturn(Mono.empty());
     }
 
     /** A statement of a school, a class and a subject, readable and writable. */

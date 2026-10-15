@@ -420,9 +420,23 @@ public class ExamRoomService implements ExamRoomAccess {
         return (exists == null ? Mono.just(false) : exists).defaultIfEmpty(false);
     }
 
+    /**
+     * Taken by every simulation started outside a room. Shared, not exclusive: with
+     * {@code FOR UPDATE} here the simulations of one statement queued behind each other,
+     * and a class of 500 starting the same exam waited seconds for a row lock (#124).
+     * Opening a room still takes the exclusive lock, so the two stay mutually exclusive.
+     */
     @Override
     public Mono<Void> lockStatementForSimulation(Long statementId) {
-        Mono<Statement> locked = statements.lockForUpdate(statementId);
+        return lockStatement(statements.lockForShare(statementId), statementId);
+    }
+
+    /** Taken when a room opens: waits for in-flight simulations and blocks new ones. */
+    private Mono<Void> lockStatementForRoom(Long statementId) {
+        return lockStatement(statements.lockForUpdate(statementId), statementId);
+    }
+
+    private Mono<Void> lockStatement(Mono<Statement> locked, Long statementId) {
         Mono<Statement> fallback = statements.findByIdAndDeletedAtIsNull(statementId);
         Mono<Statement> lookup = locked == null ? fallback : locked;
         if (lookup == null) lookup = Mono.empty();
@@ -482,7 +496,7 @@ public class ExamRoomService implements ExamRoomAccess {
                 return Mono.error(ApiException.conflict("The exam room is outside its active window"));
             }
             Mono<Void> statementLock = next == ExamRoomStatus.OPEN
-                    ? lockStatementForSimulation(room.getStatementId()) : Mono.empty();
+                    ? lockStatementForRoom(room.getStatementId()) : Mono.empty();
             Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
             Mono<Void> finalize = next == ExamRoomStatus.CLOSED ? finalizeRoom(id) : Mono.empty();
             return statementLock.then(lockSimulations).then(finalize)

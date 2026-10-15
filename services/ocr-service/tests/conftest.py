@@ -222,7 +222,7 @@ def mock_paddle_ocr():
         mock_cls.return_value = mock_instance
 
         # Mock OCR result format
-        mock_instance.ocr.return_value = [
+        mock_instance.predict.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("PROVA DE MATEMÁTICA", 0.95)],
                 [[[10, 50], [250, 50], [250, 80], [10, 80]], ("Ano Letivo 2024/2025", 0.92)],
@@ -244,7 +244,7 @@ def mock_paddle_ocr_empty():
     with patch("app.ocr.engine.PaddleOCR") as mock_cls:
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance
-        mock_instance.ocr.return_value = [[]]
+        mock_instance.predict.return_value = [[]]
         yield mock_cls
 
 
@@ -254,7 +254,7 @@ def mock_paddle_ocr_error():
     with patch("app.ocr.engine.PaddleOCR") as mock_cls:
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance
-        mock_instance.ocr.side_effect = Exception("OCR processing failed")
+        mock_instance.predict.side_effect = Exception("OCR processing failed")
         yield mock_cls
 
 

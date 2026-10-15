@@ -15,6 +15,7 @@ import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
 import ao.creativemode.kixi.academic.repository.TermRepository;
+import ao.creativemode.kixi.academic.service.CurriculumService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ class StatementLinkValidationServiceTest {
     private SubjectRepository subjects;
     private CourseRepository courses;
     private ClassRepository classes;
+    private CurriculumService curriculum;
     private StatementLinkValidationService service;
 
     @BeforeEach
@@ -44,8 +46,11 @@ class StatementLinkValidationServiceTest {
         subjects = mock(SubjectRepository.class);
         courses = mock(CourseRepository.class);
         classes = mock(ClassRepository.class);
+        curriculum = mock(CurriculumService.class);
+        when(curriculum.requireInClassCurriculum(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Mono.empty());
         service = new StatementLinkValidationService(
-                schoolYears, terms, subjects, courses, classes);
+                schoolYears, terms, subjects, courses, classes, curriculum);
     }
 
     @Test
@@ -129,6 +134,57 @@ class StatementLinkValidationServiceTest {
                 .thenReturn(Mono.just(klass(CLASS_ID, SCHOOL_YEAR_ID, COURSE_ID)));
 
         StepVerifier.create(service.validate(null, null, CLASS_ID, null, null)).verifyComplete();
+    }
+
+    // ── School coherence and curriculum (#253) ──────────────────────────────
+
+    @Test
+    void rejectsAClassFromAnotherInstitution() {
+        Class other = klass(CLASS_ID, SCHOOL_YEAR_ID, COURSE_ID);
+        other.setInstitutionId(99L);
+        when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(other));
+
+        StepVerifier.create(service.validate(1L, null, null, CLASS_ID, null, null))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+    }
+
+    @Test
+    void rejectsACourseFromAnotherInstitution() {
+        Course other = course(COURSE_ID);
+        other.setInstitutionId(99L);
+        when(courses.findByIdAndDeletedAtIsNull(COURSE_ID)).thenReturn(Mono.just(other));
+
+        StepVerifier.create(service.validate(1L, null, null, null, null, COURSE_ID))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+    }
+
+    @Test
+    void rejectsASubjectOutsideTheCurriculumOfTheClass() {
+        Class mine = klass(CLASS_ID, SCHOOL_YEAR_ID, COURSE_ID);
+        mine.setInstitutionId(1L);
+        when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(mine));
+        when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject(SUBJECT_ID)));
+        when(curriculum.requireInClassCurriculum(mine, SUBJECT_ID))
+                .thenReturn(Mono.error(ApiException.unprocessableEntity("not in curriculum")));
+
+        StepVerifier.create(service.validate(1L, null, null, CLASS_ID, SUBJECT_ID, null))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+    }
+
+    @Test
+    void acceptsAClassOfTheSameInstitutionWithASubjectOfItsCurriculum() {
+        Class mine = klass(CLASS_ID, SCHOOL_YEAR_ID, COURSE_ID);
+        mine.setInstitutionId(1L);
+        when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(mine));
+        when(subjects.findByIdAndDeletedAtIsNull(SUBJECT_ID)).thenReturn(Mono.just(subject(SUBJECT_ID)));
+
+        StepVerifier.create(service.validate(1L, null, null, CLASS_ID, SUBJECT_ID, null)).verifyComplete();
     }
 
     // ── requireAClassForTeachers: the rule that reached only the create path ──

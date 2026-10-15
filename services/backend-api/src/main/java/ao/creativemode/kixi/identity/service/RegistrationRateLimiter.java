@@ -76,7 +76,7 @@ public class RegistrationRateLimiter {
                                 "Registration protection is temporarily unavailable"))
                 .flatMap(state -> {
                     if (state.attempts() > properties.getMaxAttempts()) {
-                        log.warn("Registration rate limit exceeded for rateKey={}", rateKey);
+                        log.warn("Registration rate limit exceeded");
                         return Mono.error(new RegistrationRateLimitException(state.retryAfterSeconds()));
                     }
                     return Mono.empty();

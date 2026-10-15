@@ -12,10 +12,12 @@ import ao.creativemode.kixi.academic.model.Class;
 import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
+import ao.creativemode.kixi.academic.service.CurriculumService;
 import ao.creativemode.kixi.identity.model.Teacher;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentRequest;
 import ao.creativemode.kixi.institutions.model.TeachingAssignment;
+import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.TeachingAssignmentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.time.LocalDateTime;
@@ -40,6 +42,8 @@ class TeachingAssignmentServiceTest {
     private TeacherRepository teacherRepository;
     private ClassRepository classRepository;
     private SubjectRepository subjectRepository;
+    private InstitutionTeacherRepository teacherLinks;
+    private CurriculumService curriculum;
     private TeachingAssignmentService service;
 
     @BeforeEach
@@ -48,8 +52,54 @@ class TeachingAssignmentServiceTest {
         teacherRepository = mock(TeacherRepository.class);
         classRepository = mock(ClassRepository.class);
         subjectRepository = mock(SubjectRepository.class);
+        teacherLinks = mock(InstitutionTeacherRepository.class);
+        curriculum = mock(CurriculumService.class);
+        // Affiliated and in the curriculum unless a test says otherwise.
+        when(teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Mono.just(true));
+        when(curriculum.requireInClassCurriculum(any(), any())).thenReturn(Mono.empty());
         service = new TeachingAssignmentService(
-                assignments, teacherRepository, classRepository, subjectRepository);
+                assignments, teacherRepository, classRepository, subjectRepository, teacherLinks, curriculum);
+    }
+
+    // ── Structure rules (#253) ──────────────────────────────────────────────
+
+    @Test
+    void createIsRefusedWhenTheTeacherIsNotAffiliatedToTheSchoolOfTheClass() {
+        givenReferencesExist();
+        when(teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.create(request(null)))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+        verify(assignments, never()).save(any());
+    }
+
+    @Test
+    void createIsRefusedWhenTheSubjectIsOutsideTheCurriculumOfTheClass() {
+        givenReferencesExist();
+        when(curriculum.requireInClassCurriculum(any(), any())).thenReturn(
+                Mono.error(ApiException.unprocessableEntity("not in curriculum")));
+
+        StepVerifier.create(service.create(request(null)))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+        verify(assignments, never()).save(any());
+    }
+
+    @Test
+    void updateAppliesTheSameRules() {
+        givenReferencesExist();
+        when(teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(any(), any()))
+                .thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.update(11L, request(null)))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
     }
 
     // ── Create ──────────────────────────────────────────────────────────────

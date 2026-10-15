@@ -510,6 +510,32 @@ class ExamRoomServiceTest {
                 .expectError(ApiException.class).verify();
     }
 
+    @Test
+    void simulationsShareTheStatementLockInsteadOfQueuingBehindEachOther() {
+        when(statements.lockForShare(5L)).thenReturn(Mono.just(new Statement()));
+
+        StepVerifier.create(service.lockStatementForSimulation(5L)).verifyComplete();
+
+        verify(statements).lockForShare(5L);
+        verify(statements, never()).lockForUpdate(anyLong());
+    }
+
+    @Test
+    void openingARoomStillTakesTheStatementLockExclusively() {
+        ExamRoom draft = room(20L, ExamRoomStatus.DRAFT);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(draft));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(draft));
+        when(statements.lockForUpdate(5L)).thenReturn(Mono.just(new Statement()));
+        when(rooms.transition(20L, ExamRoomStatus.DRAFT, ExamRoomStatus.OPEN)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(draft));
+
+        StepVerifier.create(service.transition(20L, 7L, false, ExamRoomStatus.OPEN))
+                .expectNextCount(1).verifyComplete();
+
+        verify(statements).lockForUpdate(5L);
+        verify(statements, never()).lockForShare(anyLong());
+    }
+
     private ExamRoomService boundaryService(LocalDateTime now) {
         return new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
                 null, null, null, questions, options,

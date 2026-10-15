@@ -54,6 +54,14 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Mono<Statement> lockForUpdate(Long id);
 
     /**
+     * Shared lock on the statement row: many holders at once, but none while someone
+     * holds {@link #lockForUpdate}. Lets a whole class start simulations of the same
+     * statement in parallel while still excluding a room being opened on it.
+     */
+    @Query("SELECT * FROM statements WHERE id = :id AND deleted_at IS NULL FOR SHARE")
+    Mono<Statement> lockForShare(Long id);
+
+    /**
      * Find a visible active statement by ID.
      */
     Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);

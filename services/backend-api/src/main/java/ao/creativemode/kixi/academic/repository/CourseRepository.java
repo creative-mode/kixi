@@ -32,6 +32,8 @@ public interface CourseRepository extends ReactiveCrudRepository<Course, Long> {
      */
     Flux<Course> findAllByInstitutionIdAndDeletedAtIsNull(Long institutionId);
 
+    Mono<Long> countByInstitutionIdAndDeletedAtIsNull(Long institutionId);
+
     /**
      * Find courses by name containing (case-insensitive)
      */

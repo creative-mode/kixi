@@ -44,6 +44,11 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
+                        // #252: the donation form is public, and only the submission: everything else
+                        // under /donations (list, files, review, extract, link) is ADMIN below. The
+                        // method and the exact path are named so no other route opens by accident.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/donations").permitAll()
+                        .pathMatchers("/api/v1/donations", "/api/v1/donations/**").hasRole("ADMIN")
                         // API documentation (springdoc): schema público, não expõe
                         // dados. Pode ser desligado via SPRINGDOC_API_DOCS_ENABLED /
                         // SPRINGDOC_SWAGGER_UI_ENABLED (false fora de dev).
@@ -52,6 +57,10 @@ public class SecurityConfig {
                         // #176: a teacher reads their own record; every other
                         // /teachers route stays ADMIN-only below.
                         .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        // #253: where the signed-in teacher teaches; the overview of any
+                        // other teacher stays ADMIN-only with the rest of /teachers.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me/overview")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/accounts", "/api/v1/accounts/**",
                                 "/api/v1/users", "/api/v1/users/**",
@@ -125,6 +134,16 @@ public class SecurityConfig {
                         .authenticated()
                         .pathMatchers("/api/v1/ocr/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Trash views expose records the normal catalog hides.
+                        // Keep them staff-only before the authenticated read rules.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/school-years/trash", "/api/v1/terms/trash",
+                                "/api/v1/subjects/trash", "/api/v1/courses/trash",
+                                "/api/v1/classes/trash", "/api/v1/question-images/trash")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        // #253: where a subject is taught across schools is for the administrator.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/subjects/*/offerings")
+                        .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/school-years", "/api/v1/school-years/**",
                                 "/api/v1/terms", "/api/v1/terms/**",
@@ -133,12 +152,15 @@ public class SecurityConfig {
                                 "/api/v1/classes", "/api/v1/classes/**",
                                 "/api/v1/question-images", "/api/v1/question-images/**")
                         .authenticated()
+                        // #253: the academic structure is written by the administrator only; a
+                        // teacher reads it. Question images stay with the teachers who author.
                         .pathMatchers("/api/v1/school-years", "/api/v1/school-years/**",
                                 "/api/v1/terms", "/api/v1/terms/**",
                                 "/api/v1/subjects", "/api/v1/subjects/**",
                                 "/api/v1/courses", "/api/v1/courses/**",
-                                "/api/v1/classes", "/api/v1/classes/**",
-                                "/api/v1/question-images", "/api/v1/question-images/**")
+                                "/api/v1/classes", "/api/v1/classes/**")
+                        .hasRole("ADMIN")
+                        .pathMatchers("/api/v1/question-images", "/api/v1/question-images/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers/trash",
@@ -221,7 +243,10 @@ public class SecurityConfig {
                         // follows a colleague exactly like a student does.
                         .pathMatchers("/api/v1/friends", "/api/v1/friends/**")
                         .authenticated()
-                        .anyExchange().authenticated()
+                        // Unknown routes fail closed. A new controller must
+                        // receive an explicit rule above before any role can
+                        // reach it.
+                        .anyExchange().denyAll()
                 )
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED))

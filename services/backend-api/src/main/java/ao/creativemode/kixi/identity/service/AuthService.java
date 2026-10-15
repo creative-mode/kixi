@@ -17,6 +17,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
 import java.time.Instant;
@@ -64,7 +65,7 @@ public class AuthService {
                 .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
                 .filter(Account::getActive)
                 .switchIfEmpty(Mono.error(ApiException.unauthorized("Account is inactive")))
-                .filter(account -> passwordEncoder.matches(password, account.getPasswordHash()))
+                .filterWhen(account -> passwordMatches(password, account.getPasswordHash()))
                 .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
                 .flatMap(account -> recordLogin(account)
                         .flatMap(updated -> loadRoleNames(updated.getId())
@@ -85,11 +86,11 @@ public class AuthService {
                 .then(Mono.defer(() -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
                         .switchIfEmpty(Mono.error(ApiException.internalError(
                                 "Default role is not configured: " + DEFAULT_ROLE_NAME)))
-                        .flatMap(role -> {
+                        .flatMap(role -> encodePassword(request.password()).flatMap(passwordHash -> {
                             Account account = new Account();
                             account.setUsername(username);
                             account.setEmail(email);
-                            account.setPasswordHash(passwordEncoder.encode(request.password()));
+                            account.setPasswordHash(passwordHash);
                             account.setEmailVerified(false);
                             account.setActive(true);
                             account.setDeletedAt(null);
@@ -113,7 +114,23 @@ public class AuthService {
                                     })
                                     .map(savedAccount -> buildLoginResponse(
                                             savedAccount.getId(), List.of(DEFAULT_ROLE_NAME)));
-                        })));
+                        }))));
+    }
+
+    /**
+     * BCrypt costs ~100 ms of CPU on purpose. On the thread that delivered the database
+     * row — an R2DBC I/O thread shared by every connection — it stalled all other
+     * requests while it ran; under load, logins froze the whole API (#124).
+     */
+    private Mono<Boolean> passwordMatches(String rawPassword, String passwordHash) {
+        return Mono.fromCallable(() -> passwordEncoder.matches(rawPassword, passwordHash))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /** Same reason as {@link #passwordMatches}: hashing stays off the I/O threads. */
+    private Mono<String> encodePassword(String rawPassword) {
+        return Mono.fromCallable(() -> passwordEncoder.encode(rawPassword))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private Mono<Account> findAccountByUsernameOrEmail(String input) {

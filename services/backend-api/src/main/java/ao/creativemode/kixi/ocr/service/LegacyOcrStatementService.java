@@ -77,24 +77,17 @@ public class LegacyOcrStatementService {
         Long createdBy
     ) {
         log.info(
-            "Creating statement from OCR: {} file(s), createdBy={}",
-            files.size(),
-            createdBy
+            "Creating statement from OCR: {} file(s)",
+            files.size()
         );
 
         return ocrServiceClient
             .extractText(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
-                    log.error(
-                        "OCR extraction failed: {}",
-                        ocrResponse.errorMessage()
-                    );
+                    log.error("OCR extraction failed: requestId={}", ocrResponse.requestId());
                     return Mono.error(
-                        ApiException.badRequest(
-                            "OCR extraction failed: " +
-                                ocrResponse.errorMessage()
-                        )
+                        ApiException.badRequest("OCR extraction failed")
                     );
                 }
 

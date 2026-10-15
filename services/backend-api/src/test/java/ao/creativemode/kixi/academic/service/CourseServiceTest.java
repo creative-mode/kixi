@@ -181,8 +181,27 @@ class CourseServiceTest {
     }
 
     @Test
+    void softDeleteIsRefusedWhileTheCourseHasActiveClasses() {
+        Course existing = course(1L, "TOD", "TODOS");
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L))
+                .thenReturn(Flux.just(new ao.creativemode.kixi.academic.model.Class(),
+                        new ao.creativemode.kixi.academic.model.Class()));
+
+        StepVerifier.create(service.softDelete(1L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error.getMessage()).contains("2");
+                })
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void softDeleteMarksEntityAsDeleted() {
         Course existing = course(1L, "TOD", "TODOS");
+        when(classRepository.findByCourseIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(repository.save(any(Course.class))).thenReturn(Mono.just(existing));
 
@@ -314,7 +333,7 @@ class CourseServiceTest {
                 .expectErrorSatisfies(error -> {
                     assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
                     assertThat(((ApiException) error).getMessage())
-                            .contains("A course with code TISM already exists");
+                            .contains("already has an active course with code TISM");
                 })
                 .verify();
     }
