@@ -80,7 +80,32 @@ public class LoginRateLimiter {
         this.properties = properties;
     }
 
-    public Mono<Void> check(String rateKey) {
+    /**
+     * Count an attempt against an identity. The window that matters.
+     *
+     * <p>Ten per minute per account: past that, someone is guessing this account, and
+     * the identity is the only key here that names the victim.</p>
+     */
+    public Mono<Void> checkIdentity(String rateKey) {
+        return check(rateKey, properties.getMaxAttempts());
+    }
+
+    /**
+     * Count an attempt against an address, which is not the same decision.
+     *
+     * <p>The limit is far looser ({@link LoginRateLimitProperties#getMaxAttemptsPerAddress()})
+     * because behind a school NAT every student leaves from the same address. At the same
+     * ten, one student fumbling their password eleven times locks the whole school out of
+     * the platform for the rest of the window, and the attacker gets to choose who is
+     * locked out by aiming at whoever is next. Spraying is still stopped, just later: the
+     * address key exists to cap how fast a stranger can go through a list of usernames,
+     * not to be the account's defence.</p>
+     */
+    public Mono<Void> checkAddress(String rateKey) {
+        return check(rateKey, properties.getMaxAttemptsPerAddress());
+    }
+
+    private Mono<Void> check(String rateKey, int maxAttempts) {
         String hashed = hash(rateKey);
         return cleanupExpiredEntries()
                 .then(reserveAttempt(hashed))
@@ -90,7 +115,7 @@ public class LoginRateLimiter {
                         ApiException.serviceUnavailable(
                                 "Login protection is temporarily unavailable"))
                 .flatMap(state -> {
-                    if (state.attempts() > properties.getMaxAttempts()) {
+                    if (state.attempts() > maxAttempts) {
                         log.warn("Login rate limit exceeded for rateKey={}", hashed);
                         return Mono.error(new LoginRateLimitException(state.retryAfterSeconds()));
                     }

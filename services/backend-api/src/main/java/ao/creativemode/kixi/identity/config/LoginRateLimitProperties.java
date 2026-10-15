@@ -25,6 +25,18 @@ public class LoginRateLimitProperties {
     @Min(1)
     private int maxAttempts = 10;
 
+    /**
+     * The window per address, and it is deliberately much looser than the one per account.
+     *
+     * <p>A school puts every student behind a single public address. At ten attempts a
+     * minute, one student fumbling their password locks the whole school out until the
+     * window passes, and it is an attacker who gets to choose the victim by simply being
+     * next. Sixty per minute still stops a stranger going through a list of usernames,
+     * which is what this key is for, without making it the account's defence.</p>
+     */
+    @Min(1)
+    private int maxAttemptsPerAddress = 60;
+
     @Min(1)
     private long windowSeconds = 60;
 
@@ -34,6 +46,14 @@ public class LoginRateLimitProperties {
 
     public void setMaxAttempts(int maxAttempts) {
         this.maxAttempts = maxAttempts;
+    }
+
+    public int getMaxAttemptsPerAddress() {
+        return maxAttemptsPerAddress;
+    }
+
+    public void setMaxAttemptsPerAddress(int maxAttemptsPerAddress) {
+        this.maxAttemptsPerAddress = maxAttemptsPerAddress;
     }
 
     public long getWindowSeconds() {
