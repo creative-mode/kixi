@@ -36,8 +36,12 @@ public class InstitutionController {
     }
 
     @GetMapping
-    public Mono<ResponseEntity<List<InstitutionResponse>>> listAllActive() {
-        return service.findAllActive().collectList().map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<InstitutionResponse>>> listAllActive(
+            @RequestParam(required = false) Long onlyWithClassesInYear) {
+        return (onlyWithClassesInYear == null
+                ? service.findAllActive()
+                : service.findAllActiveWithClassesInYear(onlyWithClassesInYear))
+            .collectList().map(ResponseEntity::ok);
     }
 
     @GetMapping("/trash")
