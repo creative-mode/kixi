@@ -66,8 +66,17 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Flux<Question> findAllByStatementIdOrderedByOrderIndex(Long statementId);
 
     /**
-     * Find all questions for a statement, ordered by order_index (Spring Data naming convention)
+     * The active questions of a statement in the order of the paper: what the full statement shows.
+     *
+     * <p>Explicit about {@code deleted_at}, since issue #247: this used to be a Spring Data derived
+     * query with no such condition, so a question removed from a statement kept showing in
+     * {@code GET /statements/{id}/full}, the builder and the review screen. The removed ones have
+     * their own route ({@code /trash}); a purge reads {@code findAllByStatementIdIncludingDeleted}.
      */
+    @Query(
+        "SELECT * FROM questions WHERE statement_id = :statementId AND deleted_at IS NULL "
+            + "ORDER BY COALESCE(order_index, number) ASC, id ASC"
+    )
     Flux<Question> findAllByStatementIdOrderByOrderIndex(Long statementId);
 
     /**

@@ -132,6 +132,21 @@ class QuestionGroupPostgresTest {
                 .hasMessageContaining("parent_id");
     }
 
+    @Test
+    void aRemovedQuestionStopsShowingInTheFullStatement() {
+        Question kept = save(1, 1, "open", "Fica", null, null);
+        Question removed = save(2, 2, "open", "Sai", null, null);
+        Question row = questions.findById(removed.getId()).block(WAIT);
+        row.setDeletedAt(LocalDateTime.of(2026, 10, 15, 9, 0, 0));
+        questions.save(row).block(WAIT);
+
+        // GET /statements/{id}/full reads this one. It had no deleted_at condition at all.
+        assertThat(questions.findAllByStatementIdOrderByOrderIndex(STATEMENT).collectList().block(WAIT))
+                .extracting(Question::getId).containsExactly(kept.getId());
+        assertThat(questions.findAllByStatementIdIncludingDeleted(STATEMENT).collectList().block(WAIT))
+                .as("a purge still reaches the removed ones").hasSize(2);
+    }
+
     private void sql(String statement) {
         database.sql(statement).fetch().rowsUpdated().block(WAIT);
     }
