@@ -4,10 +4,12 @@ import ao.creativemode.kixi.academic.model.Class;
 import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
+import ao.creativemode.kixi.academic.service.CurriculumService;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentRequest;
 import ao.creativemode.kixi.institutions.dto.assignment.TeachingAssignmentResponse;
 import ao.creativemode.kixi.institutions.model.TeachingAssignment;
+import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.TeachingAssignmentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,17 +43,23 @@ public class TeachingAssignmentService {
     private final TeacherRepository teacherRepository;
     private final ClassRepository classRepository;
     private final SubjectRepository subjectRepository;
+    private final InstitutionTeacherRepository teacherLinks;
+    private final CurriculumService curriculum;
 
     public TeachingAssignmentService(
         TeachingAssignmentRepository assignments,
         TeacherRepository teacherRepository,
         ClassRepository classRepository,
-        SubjectRepository subjectRepository
+        SubjectRepository subjectRepository,
+        InstitutionTeacherRepository teacherLinks,
+        CurriculumService curriculum
     ) {
         this.assignments = assignments;
         this.teacherRepository = teacherRepository;
         this.classRepository = classRepository;
         this.subjectRepository = subjectRepository;
+        this.teacherLinks = teacherLinks;
+        this.curriculum = curriculum;
     }
 
     // ── Reads ───────────────────────────────────────────────────────────────
@@ -227,7 +235,21 @@ public class TeachingAssignmentService {
                 subjectRepository.findByIdAndDeletedAtIsNull(data.subjectId())
                     .switchIfEmpty(Mono.error(ApiException.notFound("Subject not found")))
             )
-            .flatMap(found -> klassSchoolYearMatches(found.getT2(), data.schoolYearId()));
+            .flatMap(found -> klassSchoolYearMatches(found.getT2(), data.schoolYearId())
+                // The structure rules (#253) apply to every new or changed assignment; the
+                // ones that already exist are left as they are.
+                .then(Mono.defer(() -> requireAffiliated(found.getT1().getId(), found.getT2())))
+                .then(Mono.defer(() -> curriculum.requireInClassCurriculum(found.getT2(), data.subjectId()))));
+    }
+
+    private Mono<Void> requireAffiliated(Long teacherId, Class klass) {
+        return teacherLinks
+            .existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(klass.getInstitutionId(), teacherId)
+            .flatMap(affiliated -> affiliated
+                ? Mono.<Void>empty()
+                : Mono.error(ApiException.unprocessableEntity(
+                    "The teacher is not affiliated to the school of this class: "
+                        + "add them to the institution first")));
     }
 
     private Mono<Void> klassSchoolYearMatches(Class klass, Long schoolYearId) {
