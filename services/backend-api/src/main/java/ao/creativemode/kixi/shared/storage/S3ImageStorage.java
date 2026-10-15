@@ -10,6 +10,7 @@ import reactor.core.scheduler.Schedulers;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 @Service
@@ -54,6 +55,21 @@ public class S3ImageStorage implements ImageStorage {
                         .build()))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then();
+    }
+
+    @Override
+    public Mono<byte[]> get(String key) {
+        if (key == null || key.isBlank()) {
+            return Mono.error(new StorageException("Invalid image storage key"));
+        }
+        return Mono.fromCallable(() -> client.getObjectAsBytes(GetObjectRequest.builder()
+                                .bucket(properties.getS3Bucket())
+                                .key(key)
+                                .build())
+                        .asByteArray())
+                .onErrorMap(error -> !(error instanceof StorageException),
+                        error -> new StorageException("Could not read image object", error))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private int maxSize() {

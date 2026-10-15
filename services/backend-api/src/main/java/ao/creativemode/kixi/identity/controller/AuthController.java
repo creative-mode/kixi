@@ -117,23 +117,7 @@ public class AuthController {
      * back to the address rather than keying everyone on "".
      */
     private String clientAddress(ServerWebExchange exchange) {
-        if (exchange == null) {
-            return "unknown";
-        }
-        InetSocketAddress remoteAddress = exchange.getRequest().getRemoteAddress();
-        if (remoteAddress == null || remoteAddress.getAddress() == null) {
-            return "unknown";
-        }
-        String peer = remoteAddress.getAddress().getHostAddress();
-        if (!trustedProxies.getIps().contains(peer)) {
-            return peer;
-        }
-        String forwarded = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
-        if (forwarded == null) {
-            return peer;
-        }
-        String first = forwarded.split(",", 2)[0].trim();
-        return first.isEmpty() ? peer : first;
+        return ao.creativemode.kixi.shared.security.ClientAddress.resolve(exchange, trustedProxies);
     }
 
     /**

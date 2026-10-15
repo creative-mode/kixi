@@ -44,6 +44,11 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
+                        // #252: the donation form is public, and only the submission: everything else
+                        // under /donations (list, files, review, extract, link) is ADMIN below. The
+                        // method and the exact path are named so no other route opens by accident.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/donations").permitAll()
+                        .pathMatchers("/api/v1/donations", "/api/v1/donations/**").hasRole("ADMIN")
                         // API documentation (springdoc): schema público, não expõe
                         // dados. Pode ser desligado via SPRINGDOC_API_DOCS_ENABLED /
                         // SPRINGDOC_SWAGGER_UI_ENABLED (false fora de dev).

@@ -59,6 +59,22 @@ public class LocalImageStorage implements ImageStorage {
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
 
+    @Override
+    public Mono<byte[]> get(String key) {
+        if (key == null || key.isBlank()) {
+            return Mono.error(new StorageException("Invalid image storage key"));
+        }
+        Path target = resolveKey(key);
+        return Mono.fromCallable(() -> {
+                    try {
+                        return Files.readAllBytes(target);
+                    } catch (IOException ex) {
+                        throw new StorageException("Could not read image object", ex);
+                    }
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
     private Path resolveKey(String key) {
         Path resolved = root.resolve(key).normalize();
         if (!resolved.startsWith(root)) {
