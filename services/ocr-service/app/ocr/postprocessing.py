@@ -13,16 +13,27 @@ Provides utilities for processing and structuring raw OCR output:
 Optimized for Angolan exam papers (12ª classe).
 """
 
+import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 
+from .ptlex import Lexicon, load_lexicon, repair_text
+
 
 class QuestionType(str, Enum):
-    """Supported question types."""
+    """Supported question types.
+
+    - ``dissertativa``: resposta escrita.
+    - ``multipla_escolha``: opções A/B/C/D (duas ou mais, seguidas).
+    - ``verdadeiro_falso``: um enunciado comum e alíneas que se assinalam com V ou F.
+    - ``composta``: um enunciado comum e alíneas (a, b, ...) que têm cada uma a sua resposta.
+    """
     DISSERTATIVA = "dissertativa"
     MULTIPLA_ESCOLHA = "multipla_escolha"
+    VERDADEIRO_FALSO = "verdadeiro_falso"
+    COMPOSTA = "composta"
     UNKNOWN = "unknown"
 
 
@@ -60,17 +71,26 @@ class ImageToUpload:
 
 @dataclass
 class SubitemContent:
-    """Represents a subitem (alínea) with its label and content."""
-    label: str  # "a)", "b)", etc.
+    """Represents a subitem (alínea) with its label and content.
+
+    ``label`` sai em minúscula e sem parêntese ("a", "b", ...). ``ExtractedQuestion.subitems`` continua a
+    trazer só os rótulos no formato antigo ("a)", "b)"). ``type`` diz como se responde à alínea:
+    ``dissertativa``, ``verdadeiro_falso`` ou ``multipla_escolha``; é omitido quando não foi inferido.
+    """
+    label: str
     text: str   # The content of the subitem
     cotacao: Optional[float] = None
+    type: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result: Dict[str, Any] = {
             "label": self.label,
             "text": self.text,
             "cotacao": self.cotacao,
         }
+        if self.type is not None:
+            result["type"] = self.type
+        return result
 
 
 @dataclass
@@ -167,6 +187,8 @@ class ExtractedMetadata:
     subject: MetadataField = field(default_factory=lambda: MetadataField(None, 0.0))
     course: MetadataField = field(default_factory=lambda: MetadataField(None, 0.0))
     class_info: MetadataField = field(default_factory=lambda: MetadataField(None, 0.0))
+    # (page, y) where the instructions end; internal, used to find the text between them and question 1.
+    instruction_end: Optional[Tuple[int, int]] = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -198,14 +220,18 @@ class UnmappedContent:
     page_index: int
     text: str
     confidence: float
+    reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result: Dict[str, Any] = {
             "pageIndex": self.page_index,
             "text": self.text,
             "confidence": round(self.confidence, 3),
         }
+        if self.reason:
+            result["reason"] = self.reason
+        return result
 
 
 @dataclass
@@ -226,6 +252,21 @@ class Warning:
         if self.message:
             result["message"] = self.message
         return result
+
+
+@dataclass
+class _Alinea:
+    """An alínea being collected (label without the parenthesis: "a", "b"...)."""
+    label: str
+    parts: List[str] = field(default_factory=list)
+
+
+@dataclass
+class _Draft:
+    """A question being collected: its stem lines and its alíneas, before they are assembled."""
+    question: ExtractedQuestion
+    stem_parts: List[str] = field(default_factory=list)
+    alineas: List[_Alinea] = field(default_factory=list)
 
 
 class OCRPostprocessor:
@@ -438,6 +479,8 @@ class OCRPostprocessor:
         self,
         min_confidence_threshold: float = 0.5,
         low_confidence_threshold: float = 0.8,
+        repair_text: bool = True,
+        filter_noise: bool = True,
     ):
         """
         Initialize the postprocessor.
@@ -445,9 +488,14 @@ class OCRPostprocessor:
         Args:
             min_confidence_threshold: Minimum confidence to include results
             low_confidence_threshold: Threshold below which to add warnings
+            repair_text: Repair accents, one-letter OCR slips and glued words with the Portuguese lexicon
+            filter_noise: Move handwriting/margin noise out of the questions into ``unmapped_content``
         """
         self.min_confidence_threshold = min_confidence_threshold
         self.low_confidence_threshold = low_confidence_threshold
+        self.repair_text = repair_text
+        self.filter_noise = filter_noise
+        self._lexicon: Optional[Lexicon] = load_lexicon() if repair_text else None
 
     def process(
         self,
@@ -473,6 +521,12 @@ class OCRPostprocessor:
         # Sort blocks by page and position
         sorted_blocks = sorted(text_blocks, key=lambda b: (b.page_index, b.bbox[1], b.bbox[0]))
 
+        # Repair the OCR text (accents, one-letter slips, glued words), then move handwriting out of the way.
+        sorted_blocks = self._repair_blocks(sorted_blocks)
+        noise: List[Tuple[TextBlock, str]] = []
+        if self.filter_noise:
+            sorted_blocks, noise = self._split_noise(sorted_blocks)
+
         # Combine all text for pattern matching
         full_text = " ".join(b.text for b in sorted_blocks)
 
@@ -490,6 +544,7 @@ class OCRPostprocessor:
         # Segment and extract questions
         questions = self._extract_questions(sorted_blocks, cotacao_map)
         warnings.extend(self._generate_question_warnings(questions))
+        warnings.extend(self._generate_cotacao_warnings(metadata, questions))
 
         # Calculate total max score from questions or cotação map
         total_score = sum(q.cotacao for q in questions if q.cotacao is not None)
@@ -512,7 +567,7 @@ class OCRPostprocessor:
         )
 
         # Collect unmapped content
-        unmapped = self._collect_unmapped(sorted_blocks, metadata, questions)
+        unmapped = self._collect_unmapped(sorted_blocks, metadata, questions, noise)
 
         return metadata, questions, images_to_upload, unmapped, warnings
 
@@ -697,7 +752,15 @@ class OCRPostprocessor:
 
         # Extract course - be more careful to get clean value
         # First try explicit "CURSO:" pattern
-        course_match = re.search(r"curso\s*:\s*([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s]+?)(?:\s{2,}|$|\n|SEGIEM|N[°º])", full_text, re.IGNORECASE)
+        # The label usually sits in its own printed line ("CURSO: TODOS"): read it from there first, so the
+        # text that follows in the next lines cannot interfere.
+        course_match = None
+        for block in blocks[:25]:
+            course_match = re.match(r"^\W*curso\s*:\s*([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s]+?)\s*$", block.text, re.IGNORECASE)
+            if course_match:
+                break
+        if course_match is None:
+            course_match = re.search(r"curso\s*:\s*([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s]+?)(?:\s{2,}|$|\n|SEGIEM|N[°º])", full_text, re.IGNORECASE)
         if course_match:
             course = course_match.group(1).strip().upper()
             # Clean course name - remove trailing garbage
@@ -757,13 +820,24 @@ class OCRPostprocessor:
         if title:
             metadata.title = MetadataField(title, 0.85)
 
-        # Extract instructions (look for instruction keywords)
+        # Extract instructions (look for instruction keywords). The paragraph often continues on the next
+        # printed lines ("... e responda de" / "uma forma clara."), so those are joined to it.
         instruction_keywords = ["leia", "responda", "atenção", "instruções", "coloque", "forma clara"]
-        for block in blocks[:25]:
+        for index, block in enumerate(blocks[:25]):
             if any(kw in block.text.lower() for kw in instruction_keywords):
                 # Check if this looks like an instruction block
                 if len(block.text) > 30 and not self._detect_question_number(block.text):
-                    metadata.instructions = MetadataField(block.text.strip(), block.confidence)
+                    text, last = block.text.strip(), block
+                    for nxt in blocks[index + 1:index + 4]:
+                        if re.search(r'[.!?:"”»]\s*$', text):
+                            break
+                        height = max(1, last.bbox[3] - last.bbox[1])
+                        close = 0 <= nxt.bbox[1] - last.bbox[3] <= 1.5 * height and abs(nxt.bbox[0] - block.bbox[0]) <= 30
+                        if not close or self._detect_question_number(nxt.text) or nxt.text.lstrip().startswith(('"', "“")):
+                            break
+                        text, last = f"{text} {nxt.text.strip()}", nxt
+                    metadata.instructions = MetadataField(text, block.confidence)
+                    metadata.instruction_end = (last.page_index, last.bbox[1])
                     break
 
         return metadata
@@ -787,6 +861,10 @@ class OCRPostprocessor:
         for key, value in self.SUBJECT_CORRECTIONS.items():
             if re.search(rf'\b{re.escape(key)}\b', subject_lower):
                 return value
+
+        # An acronym (OGI, TLP) stays as written; only full words are title-cased.
+        if re.fullmatch(r"[A-ZÀ-Ý]{2,5}", subject.strip()):
+            return subject.strip()
 
         # Return with proper capitalization
         return subject.strip().title()
@@ -909,69 +987,135 @@ class OCRPostprocessor:
 
         return cotacao_map
 
+    # ------------------------------------------------------------------ preparation: text repair + noise
+
+    def _repair_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
+        """Repair accents, one-letter OCR slips and glued words in every block (see ``ptlex``)."""
+        if not self.repair_text or self._lexicon is None:
+            return blocks
+        repaired: List[TextBlock] = []
+        for block in blocks:
+            text = repair_text(block.text, self._lexicon)
+            if text:
+                repaired.append(replace(block, text=text))
+        return repaired
+
+    _LETTER_WORD = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]{3,}")
+
+    def _words3(self, text: str) -> int:
+        return len(self._LETTER_WORD.findall(text))
+
+    def _is_structural(self, text: str) -> bool:
+        """Lines that carry exam structure (numbers, alíneas, options, cotação) even when they hold few words."""
+        stripped = text.strip()
+        return bool(
+            re.match(r"^\(?\d{1,2}\s*[).:\-–—º°]", stripped)
+            or re.match(r"^\(?[A-Za-z]\)\s*", stripped)
+            or re.search(r"\d\s*(?:valores?|pontos?|pts?)\b|\(\s*\d+(?:[.,]\d+)?\s*[Vv]\s*\)", stripped, re.IGNORECASE)
+            or re.match(r"^\s*cota[çc][ãa]o\b", stripped, re.IGNORECASE)
+        )
+
+    def _split_noise(self, blocks: List[TextBlock]) -> Tuple[List[TextBlock], List[Tuple[TextBlock, str]]]:
+        """Separate handwriting and margin marks from the printed text.
+
+        Deliberately conservative: a block is noise only when it is not prose (fewer than two words of three
+        letters) AND one of these holds:
+
+        1. it sits above the first printed line of the page (page numbers, scribbles over the header);
+        2. it sits beside a printed line (to the right or left of it, past a 30 px gap) with confidence below
+           0.92 (handwritten answers and annotations are read worse than print);
+        3. its confidence is below 0.6 and it has at most six letters.
+
+        Lines that carry structure (question numbers, alíneas, cotação) are never noise, and a page with too
+        little printed text to tell what "beside a printed line" means is left alone.
+        """
+        kept: List[TextBlock] = []
+        noise: List[Tuple[TextBlock, str]] = []
+        for page in sorted({b.page_index for b in blocks}):
+            page_blocks = [b for b in blocks if b.page_index == page]
+            prose = [b for b in page_blocks if b.confidence >= 0.85 and self._words3(b.text) >= 2]
+            if len(prose) < 4:
+                kept.extend(page_blocks)
+                continue
+            first_y = min(b.bbox[1] for b in prose)
+            for b in page_blocks:
+                reason = None
+                if self._words3(b.text) <= 1 and not self._is_structural(b.text):
+                    letters = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", b.text))
+                    if b.bbox[3] < first_y - 5:
+                        reason = "Marca ou manuscrito acima do texto impresso"
+                    elif b.confidence < 0.92 and self._beside_prose(b, prose):
+                        reason = "Marca ou manuscrito ao lado de uma linha impressa"
+                    elif b.confidence < 0.6 and letters <= 6:
+                        reason = "Leitura de confiança muito baixa"
+                if reason:
+                    noise.append((b, reason))
+                else:
+                    kept.append(b)
+        kept.sort(key=lambda b: (b.page_index, b.bbox[1], b.bbox[0]))
+        return kept, noise
+
+    @staticmethod
+    def _beside_prose(block: TextBlock, prose: List[TextBlock]) -> bool:
+        x1, y1, x2, y2 = block.bbox
+        for line in prose:
+            if line is block:
+                continue
+            lx1, ly1, lx2, ly2 = line.bbox
+            overlap = min(y2, ly2) - max(y1, ly1)
+            if overlap >= 0.5 * min(y2 - y1, ly2 - ly1) and (x1 > lx2 + 30 or x2 < lx1 - 30):
+                return True
+        return False
+
+    # ------------------------------------------------------------------ question extraction
+
+    _TRUE_FALSE_STEM = re.compile(
+        r"verdadeir[oa]s?\b.{0,90}\bfals[oa]s?\b|\bfals[oa]s?\b.{0,90}\bverdadeir[oa]s?\b|\bv\s*(?:ou|/)\s*f\b",
+        re.IGNORECASE,
+    )
+    _TRUE_FALSE_TAIL = re.compile(r"\(\s*[VvFf]?\s*\)\s*[.;]?\s*$")
+    _CHOICE_INSTRUCTION = re.compile(
+        r"\b(?:assinale|marque|seleccione|selecione|circule|escolha)\s+(?:\w+\s+){0,3}?"
+        r"(?:alternativa|op[çc][ãa]o|op[çc][õo]es|resposta\s+(?:certa|correcta|correta)|(?:certa|correcta|correta))",
+        re.IGNORECASE,
+    )
+
     def _extract_questions(
         self,
         blocks: List[TextBlock],
         cotacao_map: Dict[str, float]
     ) -> List[ExtractedQuestion]:
-        """Extract and structure questions from text blocks."""
-        questions = []
-        current_question = None
-        question_text_parts = []
-        current_subitems = []
-        current_subitems_content = []
-        current_subitem_label = None
-        current_subitem_text_parts = []
+        """Extract and structure questions from text blocks.
 
+        Question numbers and alíneas are recognised by **sequence**: the next question is the last number + 1
+        and the next alínea is the next letter. That is what lets "1 O que…" (no punctuation) and "aDeve…" (no
+        parenthesis) count, while "2.500 unidades" or "90 mil" in the middle of a sentence do not.
+        """
+        questions: List[ExtractedQuestion] = []
+        draft: Optional[_Draft] = None
+
+        def close() -> None:
+            nonlocal draft
+            if draft is not None:
+                questions.append(self._build_question(draft, cotacao_map))
+                draft = None
+
+        last_number = 0
         for block in blocks:
             text = block.text.strip()
-
-            # Skip empty blocks
             if not text:
                 continue
-
-            # Skip cotação blocks
             if re.match(r"^\s*cotaç[aã]o\s", text, re.IGNORECASE):
                 continue
-
-            # Skip coordination/signature blocks
             if self._is_coordination_block(text):
                 continue
 
-            # Check if this block starts a new question
-            question_info = self._detect_question_number(text)
-
+            question_info = self._detect_question_number(text, expected=last_number + 1)
             if question_info is not None:
-                # Save current subitem if exists
-                if current_subitem_label and current_subitem_text_parts:
-                    raw_subitem_text = " ".join(current_subitem_text_parts)
-                    subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
-                    subitem_text = self._clean_text(raw_subitem_text)
-                    if subitem_cotacao:
-                        subitem_text = self._remove_inline_cotacao(subitem_text)
-                    current_subitems_content.append(SubitemContent(
-                        label=current_subitem_label,
-                        text=self._clean_footer_garbage(subitem_text),
-                        cotacao=subitem_cotacao,
-                    ))
-
-                # Save previous question if exists
-                if current_question is not None:
-                    raw_question_text = " ".join(question_text_parts)
-                    inline_cotacao = self._extract_inline_cotacao(raw_question_text)
-                    current_question.text = self._clean_text(raw_question_text)
-                    if inline_cotacao is not None and current_question.cotacao is None:
-                        current_question.cotacao = inline_cotacao
-                        current_question.cotacao_confidence = 0.8
-                    current_question.subitems = current_subitems
-                    current_question.subitems_content = current_subitems_content
-                    self._finalize_question(current_question, cotacao_map)
-                    questions.append(current_question)
-
+                close()
                 q_num, remainder = question_info
-
-                # Start new question
-                current_question = ExtractedQuestion(
+                last_number = q_num
+                question = ExtractedQuestion(
                     number=str(q_num),
                     text="",
                     text_confidence=block.confidence,
@@ -981,113 +1125,256 @@ class OCRPostprocessor:
                     start_y=block.bbox[1],
                     end_y=block.bbox[3],
                 )
-                question_text_parts = [remainder] if remainder else []
-                current_subitems = []
-                current_subitems_content = []
-                current_subitem_label = None
-                current_subitem_text_parts = []
-
-                # Check for image indicators
+                draft = _Draft(question=question, stem_parts=[remainder] if remainder else [])
                 has_image, image_desc = self._detect_image_reference(text)
                 if has_image:
-                    current_question.has_image = True
-                    current_question.image_description = image_desc
+                    question.has_image = True
+                    question.image_description = image_desc
+                continue
 
-            elif current_question is not None:
-                subitem_info = self._detect_subitem_with_text(text)
-                is_subitem = subitem_info is not None and self._is_subitem_context(
-                    text,
-                    current_question,
-                    cotacao_map,
-                    question_text_parts,
-                    current_subitems,
-                )
+            if draft is None:
+                continue
 
-                # Lowercase alíneas and an established subitem context take
-                # precedence over the permissive option regex (a) also matches.
-                if not is_subitem and self._is_option_block(text):
-                    option = self._detect_option(text)
-                    if option:
-                        if current_question.options is None:
-                            current_question.options = []
-                        current_question.options.append(ExtractedOption(
-                            option_label=option[0],
-                            option_text=option[1],
-                            confidence=block.confidence,
-                        ))
+            question = draft.question
+            alinea = self._detect_alinea(text, draft, cotacao_map)
+            if alinea is not None:
+                label, remainder = alinea
+                draft.alineas.append(_Alinea(label=label, parts=[remainder] if remainder else []))
+            elif self._is_option_block(text):
+                option = self._detect_option(text)
+                if option:
+                    if question.options is None:
+                        question.options = []
+                    question.options.append(ExtractedOption(
+                        option_label=option[0],
+                        option_text=option[1],
+                        confidence=block.confidence,
+                    ))
                 else:
-                    if subitem_info:
-                        subitem_label, subitem_remainder = subitem_info
+                    self._append_part(draft, text)
+            else:
+                self._append_part(draft, text)
 
-                        # Save previous subitem if exists
-                        if current_subitem_label and current_subitem_text_parts:
-                            raw_subitem_text = " ".join(current_subitem_text_parts)
-                            subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
-                            subitem_text = self._clean_text(raw_subitem_text)
-                            if subitem_cotacao:
-                                subitem_text = self._remove_inline_cotacao(subitem_text)
-                            current_subitems_content.append(SubitemContent(
-                                label=current_subitem_label,
-                                text=self._clean_footer_garbage(subitem_text),
-                                cotacao=subitem_cotacao,
-                            ))
+            question.end_y = max(question.end_y, block.bbox[3])
+            has_image, image_desc = self._detect_image_reference(text)
+            if has_image and not question.has_image:
+                question.has_image = True
+                question.image_description = image_desc
 
-                        # Start new subitem
-                        if subitem_label not in current_subitems:
-                            current_subitems.append(subitem_label)
-                        current_subitem_label = subitem_label
-                        current_subitem_text_parts = [subitem_remainder] if subitem_remainder else []
-
-                        # Still add full text to question
-                        question_text_parts.append(text)
-                    else:
-                        # Add to question text
-                        question_text_parts.append(text)
-                        # Also add to current subitem if we're in one
-                        if current_subitem_label:
-                            current_subitem_text_parts.append(text)
-
-                # Update end position
-                current_question.end_y = max(current_question.end_y, block.bbox[3])
-
-                # Check for image references in this block
-                has_image, image_desc = self._detect_image_reference(text)
-                if has_image and not current_question.has_image:
-                    current_question.has_image = True
-                    current_question.image_description = image_desc
-
-        # Save last subitem
-        if current_subitem_label and current_subitem_text_parts:
-            raw_subitem_text = " ".join(current_subitem_text_parts)
-            subitem_cotacao = self._extract_inline_cotacao(raw_subitem_text)
-            subitem_text = self._clean_text(raw_subitem_text)
-            if subitem_cotacao:
-                subitem_text = self._remove_inline_cotacao(subitem_text)
-            current_subitems_content.append(SubitemContent(
-                label=current_subitem_label,
-                text=self._clean_footer_garbage(subitem_text),
-                cotacao=subitem_cotacao,
-            ))
-
-        # Save last question
-        if current_question is not None:
-            raw_question_text = " ".join(question_text_parts)
-            inline_cotacao = self._extract_inline_cotacao(raw_question_text)
-            current_question.text = self._clean_text(raw_question_text)
-            if inline_cotacao is not None and current_question.cotacao is None:
-                current_question.cotacao = inline_cotacao
-                current_question.cotacao_confidence = 0.8
-            current_question.subitems = current_subitems
-            current_question.subitems_content = current_subitems_content
-            self._finalize_question(current_question, cotacao_map)
-            questions.append(current_question)
-
+        close()
         return questions
+
+    @staticmethod
+    def _append_part(draft: "_Draft", text: str) -> None:
+        if draft.alineas:
+            draft.alineas[-1].parts.append(text)
+        else:
+            draft.stem_parts.append(text)
+
+    def _detect_alinea(
+        self,
+        text: str,
+        draft: "_Draft",
+        cotacao_map: Dict[str, float],
+    ) -> Optional[Tuple[str, str]]:
+        """Return ``(letter, remainder)`` when ``text`` opens the next alínea of the current question."""
+        question = draft.question
+        has_alineas = bool(draft.alineas)
+        expected = chr(ord(draft.alineas[-1].label) + 1) if has_alineas else "a"
+        stripped = text.strip()
+
+        # "aDeve ser…", "bA escolha…": the label lost its parenthesis and sits glued to the next word.
+        glued = re.match(r"^([a-z])(?=[A-ZÀ-ÝÇ])(.+)$", stripped)
+        if glued and glued.group(1) == expected and not question.options:
+            return glued.group(1), glued.group(2).strip()
+
+        info = self._detect_subitem_with_text(stripped)
+        if info is None:
+            return None
+        letter = info[0][0]
+        if has_alineas:
+            # The next letter, or one skipped when a line was lost; never an option of a choice question.
+            if letter.lower() in (expected, chr(ord(expected) + 1)) and not question.options:
+                return letter.lower(), info[1]
+            return None
+        if letter.lower() != "a":
+            return None
+        if self._is_subitem_context(stripped, question, cotacao_map, draft.stem_parts, []):
+            return "a", info[1]
+        return None
+
+    def _detect_question_number(self, text: str, expected: Optional[int] = None) -> Optional[Tuple[int, str]]:
+        """Detect if text starts with a question number. Returns (number, remainder) or None.
+
+        With ``expected`` (the number the sequence is waiting for) the detection also accepts a bare number
+        ("1 O que consiste…") and rejects numbers that do not fit the sequence. Without it the old
+        punctuation-only behaviour applies.
+        """
+        text = text.strip()
+
+        # Skip blocks that look like class/grade indicators (e.g., "12ª Classe", "12a Classe")
+        class_pattern = r"^\d{1,2}\s*[ºª°a]?\s*(?:classe|class|ano|grade)"
+        if re.match(class_pattern, text, re.IGNORECASE):
+            return None
+
+        # Skip blocks that look like header metadata (contain "Ano Lectivo", "Duração", etc.)
+        header_keywords = [
+            r"ano\s*let[ií]vo", r"ano\s*lect[ií]vo", r"duração", r"duracao",
+            r"curso", r"proc\.", r"nome:", r"n[°º]?\s*proc"
+        ]
+        text_lower = text.lower()
+        for kw in header_keywords:
+            if re.search(kw, text_lower):
+                return None
+
+        # "2.500 unidades", "1,8% da demanda": a decimal number is not a question number.
+        if re.match(r"^\d+[.,]\d", text):
+            return None
+
+        def acceptable(num: int, strong: bool) -> bool:
+            if num < 1 or num > 50:
+                return False
+            if expected is None:
+                return True
+            if not strong:
+                return num == expected
+            if expected == 1:
+                return num <= 3
+            return expected <= num <= expected + 2
+
+        for pattern in self.PATTERNS["question_number"]:
+            match = re.match(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    num = int(match.group(1))
+                except ValueError:
+                    continue
+                remainder = text[match.end():].strip()
+                # Whole words: "classifique" is not the "classe" of a header line.
+                if remainder and re.search(
+                    r"\b(?:classe|class|ano\s+lectivo|ano\s+letivo|dura[çc][ãa]o)\b", remainder, re.IGNORECASE
+                ):
+                    continue
+                if acceptable(num, strong=True):
+                    return (num, remainder)
+
+        # "(1) …", "1º …"
+        wrapped = re.match(r"^\((\d{1,2})\)\s*(.*)$", text)
+        if wrapped and acceptable(int(wrapped.group(1)), strong=True):
+            return (int(wrapped.group(1)), wrapped.group(2).strip())
+
+        # "1 O que consiste…": a bare number is only a question when it is exactly the one expected.
+        if expected is not None:
+            bare = re.match(r"^(\d{1,2})\s+(?=[A-ZÀ-Ý\"“(])(\S.{5,})$", text)
+            if bare and acceptable(int(bare.group(1)), strong=False):
+                return (int(bare.group(1)), bare.group(2).strip())
+
+        return None
+
+    # ------------------------------------------------------------------ building a question
+
+    def _build_question(self, draft: "_Draft", cotacao_map: Dict[str, float]) -> ExtractedQuestion:
+        question = draft.question
+        stem_parts = list(draft.stem_parts)
+
+        # A choice question needs two or more consecutive options starting at A; one stray "C)" is text.
+        options = question.options or []
+        if options and not self._valid_options(options):
+            for option in options:
+                stem_parts.append(f"{option.option_label}) {option.option_text}")
+            question.options = None
+            options = []
+
+        subs = [self._finish_subitem(a) for a in draft.alineas]
+        raw_stem = " ".join(stem_parts)
+
+        if len(subs) >= 2 and not options:
+            stem_cotacao = self._extract_inline_cotacao(raw_stem)
+            if stem_cotacao is not None:
+                raw_stem = self._remove_inline_cotacao(raw_stem)
+                if question.cotacao is None:
+                    question.cotacao, question.cotacao_confidence = stem_cotacao, 0.8
+            stem = self._clean_footer_garbage(self._clean_text(raw_stem))
+            if self._is_true_false(stem, subs):
+                question.question_type = QuestionType.VERDADEIRO_FALSO
+                question.question_type_confidence = 0.92
+                for sub in subs:
+                    sub.type = "verdadeiro_falso"
+                    sub.text = self._clean_true_false_statement(sub.text)
+            else:
+                question.question_type = QuestionType.COMPOSTA
+                question.question_type_confidence = 0.9
+                for sub in subs:
+                    sub.type = self._infer_subitem_type(sub.text)
+            question.text = stem
+        else:
+            parts = list(stem_parts)
+            for alinea in draft.alineas:
+                parts.append(f"{alinea.label}) " + " ".join(alinea.parts))
+            raw = " ".join(parts)
+            inline = self._extract_inline_cotacao(raw)
+            if inline is not None:
+                raw = self._remove_inline_cotacao(raw)
+            question.text = self._clean_text(raw)
+            if inline is not None and question.cotacao is None:
+                question.cotacao = inline
+                question.cotacao_confidence = 0.8
+            if len(subs) == 1:
+                for sub in subs:
+                    sub.type = self._infer_subitem_type(sub.text)
+
+        question.subitems = [f"{sub.label})" for sub in subs]
+        question.subitems_content = subs
+        self._finalize_question(question, cotacao_map)
+        return question
+
+    @staticmethod
+    def _valid_options(options: List[ExtractedOption]) -> bool:
+        labels = [o.option_label.upper() for o in options]
+        return len(labels) >= 2 and labels == [chr(ord("A") + i) for i in range(len(labels))]
+
+    def _finish_subitem(self, alinea: "_Alinea") -> SubitemContent:
+        raw = " ".join(alinea.parts)
+        cotacao = self._extract_inline_cotacao(raw)
+        if cotacao is not None:
+            # Before the general cleaning: that one would strip "2 valores" and leave an empty "()" behind.
+            raw = self._remove_inline_cotacao(raw)
+        text = self._clean_text(raw)
+        return SubitemContent(label=alinea.label, text=self._clean_footer_garbage(text), cotacao=cotacao)
+
+    def _is_true_false(self, stem: str, subs: List[SubitemContent]) -> bool:
+        """V/F when the statement says so, or when most alíneas end in an empty "( )" to be ticked."""
+        if self._TRUE_FALSE_STEM.search(stem):
+            return True
+        ticks = sum(1 for sub in subs if self._TRUE_FALSE_TAIL.search(sub.text))
+        return ticks >= max(2, math.ceil(len(subs) / 2))
+
+    @staticmethod
+    def _clean_true_false_statement(text: str) -> str:
+        """A V/F statement without the empty "( )" (or the lone ")" the OCR leaves) at its end."""
+        original = text.strip()
+        ends_with_period = original.rstrip().endswith(".")
+        cleaned = re.sub(r"\s*\(\s*[VvFf]?\s*\)\s*[.;]*\s*$", "", original)
+        if cleaned == original and original.count(")") > original.count("("):
+            cleaned = re.sub(r"\s*\)\s*[.;]*\s*$", "", original)
+        cleaned = cleaned.rstrip(" .;")
+        if ends_with_period or cleaned != original.rstrip(" .;"):
+            cleaned += "."
+        return cleaned.strip()
+
+    def _infer_subitem_type(self, text: str) -> str:
+        if self._TRUE_FALSE_TAIL.search(text):
+            return "verdadeiro_falso"
+        if self._CHOICE_INSTRUCTION.search(text):
+            return "multipla_escolha"
+        return "dissertativa"
+
 
     def _finalize_question(self, question: ExtractedQuestion, cotacao_map: Dict[str, float]):
         """Finalize question with type inference and cotação lookup."""
-        # Infer question type
-        question.question_type, question.question_type_confidence = self._infer_question_type(question)
+        # Infer question type (composta / verdadeiro_falso are decided when the question is built)
+        if question.question_type == QuestionType.UNKNOWN:
+            question.question_type, question.question_type_confidence = self._infer_question_type(question)
 
         # Look up cotação - try multiple strategies
         cotacao_found = False
@@ -1151,49 +1438,6 @@ class OCRPostprocessor:
         # Clean question text of any remaining inline cotação
         if question.text:
             question.text = self._remove_inline_cotacao(question.text)
-
-    def _detect_question_number(self, text: str) -> Optional[Tuple[int, str]]:
-        """Detect if text starts with a question number. Returns (number, remainder) or None."""
-        text = text.strip()
-
-        # Skip blocks that look like class/grade indicators (e.g., "12ª Classe", "12a Classe")
-        class_pattern = r"^\d{1,2}\s*[ºª°a]?\s*(?:classe|class|ano|grade)"
-        if re.match(class_pattern, text, re.IGNORECASE):
-            return None
-
-        # Skip blocks that look like header metadata (contain "Ano Lectivo", "Duração", etc.)
-        header_keywords = [
-            r"ano\s*let[ií]vo", r"ano\s*lect[ií]vo", r"duração", r"duracao",
-            r"curso", r"proc\.", r"nome:", r"n[°º]?\s*proc"
-        ]
-        text_lower = text.lower()
-        for kw in header_keywords:
-            if re.search(kw, text_lower):
-                return None
-
-        for pattern in self.PATTERNS["question_number"]:
-            match = re.match(pattern, text, re.IGNORECASE)
-            if match:
-                num_str = match.group(1)
-                try:
-                    num = int(num_str)
-                    remainder = text[match.end():].strip()
-
-                    # Additional validation: question numbers should be reasonable (1-50)
-                    if num < 1 or num > 50:
-                        continue
-
-                    # Skip if the remainder looks like metadata (class, year, etc.)
-                    if remainder:
-                        remainder_lower = remainder.lower()
-                        if any(kw in remainder_lower for kw in ['classe', 'class', 'ano lectivo', 'ano letivo', 'duração', 'duracao']):
-                            continue
-
-                    return (num, remainder)
-                except ValueError:
-                    continue
-
-        return None
 
     def _detect_subitem(self, text: str) -> Optional[str]:
         """Detect if text starts with a subitem (a), b), etc.)"""
@@ -1533,12 +1777,14 @@ class OCRPostprocessor:
         if question.options and len(question.options) > 0:
             return QuestionType.MULTIPLA_ESCOLHA, 0.95
 
-        # Check keywords for question type
-        for q_type, keywords in self.QUESTION_TYPE_KEYWORDS.items():
-            matches = sum(1 for kw in keywords if kw in text_lower)
-            if matches > 0:
-                confidence = min(0.7 + (matches * 0.1), 0.95)
-                return q_type, confidence
+        # "Assinale a alternativa correta" asks for a choice even before the options are read. The bare word
+        # "escolha" does not: "A escolha das matérias…" is a noun in an open question.
+        if self._CHOICE_INSTRUCTION.search(question.text):
+            return QuestionType.MULTIPLA_ESCOLHA, 0.8
+
+        for keyword in self.QUESTION_TYPE_KEYWORDS[QuestionType.DISSERTATIVA]:
+            if keyword in text_lower:
+                return QuestionType.DISSERTATIVA, 0.8
 
         # Default to dissertativa for math/science exams
         return QuestionType.DISSERTATIVA, 0.7
@@ -1581,10 +1827,25 @@ class OCRPostprocessor:
         blocks: List[TextBlock],
         metadata: ExtractedMetadata,
         questions: List[ExtractedQuestion],
+        noise: Optional[List[Tuple[TextBlock, str]]] = None,
     ) -> List[UnmappedContent]:
-        """Collect text blocks that weren't mapped to metadata or questions."""
-        # For simplicity, return empty list - full implementation would track used blocks
-        return []
+        """Content the structure could not place: handwriting/margin noise and the text between the
+        instructions and the first question (a quoted introduction, for instance)."""
+        unmapped: List[UnmappedContent] = []
+        for block, reason in (noise or []):
+            unmapped.append(UnmappedContent(block.page_index, block.text.strip(), block.confidence, reason))
+
+        instruction_end = metadata.instruction_end
+        if instruction_end is not None and questions:
+            first = min(questions, key=lambda q: (q.page_index, q.start_y))
+            for block in blocks:
+                position = (block.page_index, block.bbox[1])
+                if instruction_end < position < (first.page_index, first.start_y):
+                    unmapped.append(UnmappedContent(
+                        block.page_index, block.text.strip(), block.confidence,
+                        "Texto introdutório antes da primeira questão",
+                    ))
+        return unmapped
 
     def _generate_metadata_warnings(self, metadata: ExtractedMetadata) -> List[Warning]:
         """Generate warnings for low-confidence metadata fields."""
@@ -1607,6 +1868,21 @@ class OCRPostprocessor:
                 ))
 
         return warnings
+
+    def _generate_cotacao_warnings(
+        self,
+        metadata: ExtractedMetadata,
+        questions: List[ExtractedQuestion],
+    ) -> List[Warning]:
+        """A paper with no scores at all: nothing to infer, someone has to distribute the total."""
+        if questions and metadata.total_max_score.value is None and all(q.cotacao is None for q in questions):
+            return [Warning(
+                code="NO_COTACAO",
+                field="questions",
+                confidence=1.0,
+                message=f"{len(questions)} questões sem cotação: a pontuação tem de ser definida na revisão.",
+            )]
+        return []
 
     def _generate_question_warnings(self, questions: List[ExtractedQuestion]) -> List[Warning]:
         """Generate warnings for low-confidence questions."""

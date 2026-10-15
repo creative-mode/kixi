@@ -183,7 +183,14 @@ def test_process_keeps_lowercase_multipart_items_as_subitems():
     _, questions, *_ = processor.process(blocks)
 
     assert len(questions) == 1
-    assert questions[0].question_type == QuestionType.DISSERTATIVA
+    # Uma questão com enunciado comum e alíneas que têm resposta própria é `composta` (antes era uma única
+    # `dissertativa` com as alíneas coladas ao texto); o enunciado fica sem elas e cada alínea tem o seu tipo.
+    assert questions[0].question_type == QuestionType.COMPOSTA
+    assert questions[0].text == "Resolva os itens seguintes."
+    assert [(item.label, item.type) for item in questions[0].subitems_content] == [
+        ("a", "dissertativa"),
+        ("b", "dissertativa"),
+    ]
     assert questions[0].options is None
     assert questions[0].subitems == ["a)", "b)"]
     assert [item.text for item in questions[0].subitems_content] == [
