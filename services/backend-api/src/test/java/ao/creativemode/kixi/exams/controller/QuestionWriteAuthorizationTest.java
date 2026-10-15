@@ -125,6 +125,9 @@ class QuestionWriteAuthorizationTest {
     private InstitutionTeacherRepository institutionTeachers;
 
     @MockBean
+    private ao.creativemode.kixi.academic.service.CurriculumService curriculum;
+
+    @MockBean
     private TeacherRepository teachers;
 
     @MockBean
