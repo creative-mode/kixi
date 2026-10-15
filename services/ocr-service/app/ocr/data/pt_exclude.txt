@@ -1,0 +1,5 @@
+# Ruído de legendas (erros de OCR/codificação) que está na lista de frequências mas não é português.
+# Fica de fora do léxico para o reparador conseguir corrigir "lsso" -> "isso". Uma palavra por linha.
+lsso
+lsto
+lgreja
