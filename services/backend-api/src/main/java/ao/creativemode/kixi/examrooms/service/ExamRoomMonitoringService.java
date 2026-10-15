@@ -118,7 +118,7 @@ public class ExamRoomMonitoringService {
     private Mono<ExamRoomLiveResponse> snapshot(ExamRoom room) {
         LocalDateTime now = LocalDateTime.now(clock);
         return Mono.zip(participants.findByExamRoomId(room.getId()).collectList(),
-                questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).count(),
+                questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).filter(ao.creativemode.kixi.exams.model.Question::isAnswerable).count(),
                 simulations.findByExamRoomIdAndDeletedAtIsNull(room.getId()).collectList())
                 .flatMap(tuple -> displayNames(tuple.getT1()).flatMap(names -> {
                     List<ExamRoomParticipant> roomParticipants = tuple.getT1();
@@ -195,6 +195,7 @@ public class ExamRoomMonitoringService {
                                     .collect(Collectors.groupingBy(SimulationAnswer::getSimulationId)),
                             Flux.fromIterable(statementIds)
                                     .concatMap(statementId -> questions.findAllByStatementIdAndDeletedAtIsNull(statementId)
+                                            .filter(ao.creativemode.kixi.exams.model.Question::isAnswerable)
                                             .count()
                                             .map(count -> Map.entry(statementId, count)))
                                     .collectMap(Map.Entry::getKey, Map.Entry::getValue))

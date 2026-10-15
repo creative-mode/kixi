@@ -90,7 +90,7 @@ public class CommunityStatsService {
         return readAccess(statementId, accountId)
                 .flatMap(statement -> requireNoOpenRoom(statementId).thenReturn(statement))
                 .flatMap(statement -> Mono.zip(
-                        questions.findAllByStatementIdOrderedByOrderIndex(statementId).collectList(),
+                        questions.findAllByStatementIdOrderedByOrderIndex(statementId).filter(ao.creativemode.kixi.exams.model.Question::isAnswerable).collectList(),
                         simulations.findAllByStatementIdAndStatusAndDeletedAtIsNull(
                                         statementId, SimulationStatus.FINISHED)
                                 .collectList())

@@ -1,0 +1,76 @@
+Determine o domínio da função f definida por f(x) = x² - 4x + 3 e represente-a graficamente.
+Calcule o valor numérico da expressão A = 3x - 2y quando x = 2 e y = -1.
+Demonstre que a soma dos ângulos internos de um triângulo é igual a 180 graus.
+Justifique a sua resposta e simplifique o resultado final.
+Resolva a seguinte equação do segundo grau e discuta o número de soluções reais.
+Esboce o gráfico da função e indique os zeros, o sinal e a monotonia.
+Factorize o polinómio P(x) e determine as suas raízes.
+Derive a função g(x) = ln(x) + e^x e estude a sua concavidade.
+Integre por partes a função h(x) = x sin(x) no intervalo [0, π].
+Uma partícula move-se em linha recta com aceleração constante de 2 m/s².
+Calcule a velocidade média do automóvel durante os primeiros dez segundos de movimento.
+Um corpo de massa 5 kg é lançado verticalmente para cima com velocidade inicial de 20 m/s.
+Determine a energia cinética e a energia potencial gravítica do corpo no ponto mais alto.
+Escreva um texto argumentativo de cerca de trezentas palavras sobre a importância da educação.
+Identifique o sujeito, o predicado e o complemento directo da oração seguinte.
+Complete as frases com a forma verbal correcta do presente do conjuntivo.
+Leia atentamente o texto e responda às questões que se seguem.
+Explique o significado da expressão sublinhada no segundo parágrafo.
+Refira os principais acontecimentos da Conferência de Berlim e as suas consequências para África.
+Descreva as causas e as consequências da independência de Angola em 1975.
+Indique as características principais do relevo e do clima da região Sul do país.
+Complete o quadro seguinte com os elementos em falta e classifique cada reacção química.
+Balanceie as equações químicas e calcule a massa molar do composto formado.
+A empresa possui dois sectores distintos e o gestor deve avaliar a viabilidade económica do projecto.
+O balanço patrimonial apresenta o activo, o passivo e o capital próprio da sociedade.
+Calcule a probabilidade de, ao lançar dois dados, a soma das faces ser superior a nove.
+Considere a sucessão (un) definida por un = 2n + 1 e prove que é uma progressão aritmética.
+Quantos números de três algarismos distintos se podem formar com os dígitos 1, 2, 3, 4 e 5?
+Assinale com V as afirmações verdadeiras e com F as falsas.
+Seleccione a alternativa correcta e circule a letra que lhe corresponde.
+Aprove, comente e analise a proposta apresentada pelo professor na reunião de ontem.
+O estudante possui conhecimentos suficientes para resolver os exercícios propostos pelo docente.
+Reponha o estoque quando atingir o ponto de pedido; mantenha o estoque de segurança.
+Interprete os resultados obtidos e tire as conclusões que considerar pertinentes.
+Verifique se a igualdade é válida para todos os valores reais de x diferentes de zero.
+Enuncie o teorema de Pitágoras e aplique-o para calcular a hipotenusa de um triângulo rectângulo.
+Os alunos deverão apresentar o trabalho prático até ao final do trimestre.
+Considere as funções reais de variável real f e g e determine a função composta.
+Nota: não é permitido o uso de máquinas de calcular gráficas nem de telemóveis.
+A fotossíntese é o processo pelo qual as plantas clorofiladas produzem glicose a partir do dióxido de carbono e da água.
+Indique os organelos celulares responsáveis pela respiração e pela síntese de proteínas.
+O sistema digestivo humano compreende a boca, o esófago, o estômago, o intestino delgado e o intestino grosso.
+Os mamíferos são animais vertebrados, homeotérmicos, vivíparos e dotados de glândulas mamárias.
+Referencie as principais batalhas da luta de libertação nacional, nomeadamente a de Cuito Cuanavale.
+Angola é banhada pelo oceano Atlântico e tem como capital a cidade de Luanda, com províncias como Huambo, Benguela, Huíla e Malanje.
+O rio Cuanza nasce no planalto central e desagua no oceano Atlântico, a sul da capital.
+A inflação mede o aumento generalizado e contínuo dos preços de bens e serviços numa economia.
+Explique a diferença entre oferta e procura e o modo como determinam o preço de equilíbrio.
+Calcule o lucro bruto, o lucro líquido e a margem de contribuição unitária da empresa.
+Um algoritmo é uma sequência finita de instruções que permite resolver um determinado problema.
+Defina o conceito de variável, constante, ciclo e estrutura condicional em programação.
+O endereço IP identifica cada dispositivo ligado a uma rede de computadores, e o protocolo HTTP transporta as páginas da internet.
+Classifique as orações subordinadas adverbiais e reescreva a frase na voz passiva analítica.
+No poema, o sujeito poético exprime a saudade da terra natal através de metáforas e de comparações.
+Preencha os espaços com a forma adequada do pretérito perfeito ou do pretérito imperfeito.
+Segundo Newton, a resultante das forças que actuam sobre um corpo é igual ao produto da massa pela aceleração.
+A resistência eléctrica de um condutor depende do comprimento, da secção recta e do material de que é feito.
+Calcule a intensidade da corrente que percorre o circuito e a potência dissipada em cada resistência.
+A reacção entre o ácido clorídrico e o hidróxido de sódio origina cloreto de sódio e água.
+Determine a concentração molar da solução obtida ao dissolver quarenta gramas de soda cáustica em dois litros de água.
+Observe a figura e responda às perguntas seguintes, justificando cada uma das suas respostas.
+Em que ano foi proclamada a independência de Angola e quem foi o primeiro presidente da República?
+O texto narrativo apresenta personagens, espaço, tempo e acção; o narrador pode ser participante ou observador.
+Assinale a opção que completa correctamente a frase: Ele disse que viria, mas não veio.
+Sublinhe os verbos e indique o respectivo modo, tempo e pessoa em cada uma das orações do texto.
+Considere o triângulo ABC, rectângulo em B, de catetos AB = 3 cm e BC = 4 cm, e calcule a hipotenusa AC.
+Fig. 1 - Gráfico da função quadrática; Tab. 2 - Valores obtidos na experiência (cf. págs. 12 e 13).
+Sejam A e B dois acontecimentos independentes com P(A) = 0,4 e P(B) = 0,5; calcule P(A ∩ B) e P(A ∪ B).
+O custo de reposição do estoque é de 4 mil kz por pedido e a demanda anual é de 90 mil unidades.
+O lote económico de compra minimiza o custo total de manutenção e de colocação de encomendas.
+Os alunos devem entregar o relatório até sexta-feira, dia 15 de Outubro, na secretaria da escola.
+Escolha apenas uma das duas hipóteses e desenvolva-a em cerca de cem palavras.
+A organização empresarial divide as tarefas por departamentos: produção, vendas, finanças e recursos humanos.
+O aprovisionamento consiste em abastecer a empresa de matérias-primas, de mercadorias e de consumíveis.
+Esquematize o ciclo de vida de um produto: lançamento, crescimento, maturidade e declínio.
+Verdadeiro ou falso? Justifique as afirmações falsas e corrija-as.

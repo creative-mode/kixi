@@ -130,7 +130,11 @@ public record QuestionResponse(
         Double ocrConfidence,
         Integer pageIndex,
         Boolean needsReview,
-        List<OptionResponse> options
+        List<OptionResponse> options,
+        /** The group this question is an item of; null for a top-level question. */
+        Long parentId,
+        /** The item's label inside its group (a, b, c...); null for a top-level question. */
+        String label
     ) {
         public static QuestionResponse from(
             Question q,
@@ -147,7 +151,9 @@ public record QuestionResponse(
                 staff ? q.getOcrConfidence() : null,
                 q.getPageIndex(),
                 staff ? q.getNeedsReview() : null,
-                options
+                options,
+                q.getParentId(),
+                q.getLabel()
             );
         }
     }

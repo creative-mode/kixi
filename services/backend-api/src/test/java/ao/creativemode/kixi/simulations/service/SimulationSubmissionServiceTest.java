@@ -76,6 +76,35 @@ class SimulationSubmissionServiceTest {
     }
 
     @Test
+    void theCommonStatementOfAGroupIsNeitherGradedNorLeftPendingForReview() {
+        // Issue #247: a group header has nothing to answer. Without this it would reach the
+        // teacher's queue as an open answer nobody wrote, and every group would hang a
+        // "pending review" on a finished simulation for good.
+        Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
+        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(10L, 7L)).thenReturn(Mono.just(simulation));
+        Question header = question(1L, 0);
+        header.setQuestionType("group");
+        header.setMaxScore(null);
+        Question item = question(2L, 2);
+        item.setParentId(1L);
+        item.setLabel("a");
+        when(questions.findAllByStatementIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(header, item));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L)))
+                .thenReturn(Flux.just(answer(2L, 201L)));
+        when(options.findAllByQuestionIdInAndDeletedAtIsNull(anyCollection()))
+                .thenReturn(Flux.just(option(201L, 2L, true)));
+        when(answers.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(simulations.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.submit(10L, 7L, false))
+                .assertNext(result -> assertThat(result.getFinalScore()).isEqualTo(2.0))
+                .verifyComplete();
+
+        verify(answers, org.mockito.Mockito.times(1)).save(any());
+        verify(answers).save(org.mockito.ArgumentMatchers.argThat(a -> a.getQuestionId().equals(2L)));
+    }
+
+    @Test
     void scoresPartialAnswersAndLeavesOpenQuestionPendingReview() {
         Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
         when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(10L, 7L)).thenReturn(Mono.just(simulation));

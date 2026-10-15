@@ -1,0 +1,112 @@
+[
+{
+"text": "PROVA DE EXAME DE HISTóRIA",
+"conf": 0.965,
+"bbox": [
+67,
+55,
+558,
+89
+],
+"i": 0
+},
+{
+"text": "10@ Classe Ano Lectivo: 2025/2026 Duracäo: 60 Min.",
+"conf": 0.981,
+"bbox": [
+69,
+103,
+839,
+130
+],
+"i": 1
+},
+{
+"text": "1) Diga quais das afirmacöes säo verdadeiras (V) ou falsas (F):",
+"conf": 0.969,
+"bbox": [
+70,
+192,
+947,
+219
+],
+"i": 2
+},
+{
+"text": "a) Angola tornou-se independente em 1975. ()",
+"conf": 0.997,
+"bbox": [
+70,
+236,
+728,
+262
+],
+"i": 3
+},
+{
+"text": "b) A capital de Angola é Benguela. ()",
+"conf": 0.991,
+"bbox": [
+67,
+275,
+595,
+308
+],
+"i": 4
+},
+{
+"text": "c) O rio Cuanza desagua no Atlantico. ()",
+"conf": 0.978,
+"bbox": [
+70,
+322,
+636,
+348
+],
+"i": 5
+},
+{
+"text": "2) Explique as causas da Conferéncia de Berlim.",
+"conf": 0.976,
+"bbox": [
+70,
+408,
+741,
+434
+],
+"i": 6
+},
+{
+"text": "3) Complete o quadro e comente o resultado.",
+"conf": 0.997,
+"bbox": [
+69,
+494,
+703,
+523
+],
+"i": 7
+},
+{
+"text": "a) Indique trés consequéncias.",
+"conf": 0.977,
+"bbox": [
+70,
+539,
+495,
+566
+],
+"i": 8
+},
+{
+"text": "b) Refira dois exemplos.",
+"conf": 1.0,
+"bbox": [
+67,
+581,
+403,
+612
+],
+"i": 9
+}
+]

@@ -587,7 +587,7 @@ public class OcrPersistenceService {
         }
 
         question.setOrderIndex(orderIndex);
-        question.setText(extracted.getTextValue());
+        question.setText(extracted.textWithSubitems());
         question.setQuestionType(mapQuestionType(extracted.getTypeValue()));
 
         // Cotação (score)
@@ -618,6 +618,8 @@ public class OcrPersistenceService {
         return switch (type.toLowerCase()) {
             case "dissertativa" -> "development";
             case "multipla_escolha" -> "multiple_choice";
+            // These two only exist as structure in the exam builder; stored as plain text they read as development.
+            case "verdadeiro_falso", "composta" -> "development";
             default -> type;
         };
     }

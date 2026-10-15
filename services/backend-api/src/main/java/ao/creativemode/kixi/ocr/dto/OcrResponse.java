@@ -224,6 +224,23 @@ public record OcrResponse(
         }
 
         /**
+         * The text with its alíneas written under it, for the paths that store a question as plain
+         * text. The exam builder keeps them as items instead (see {@code subitemsContent}).
+         */
+        public String textWithSubitems() {
+            String base = getTextValue() == null ? "" : getTextValue();
+            if (subitemsContent == null || subitemsContent.isEmpty()) {
+                return base;
+            }
+            StringBuilder out = new StringBuilder(base);
+            for (SubitemContent item : subitemsContent) {
+                out.append("\n").append(item.label() == null ? "" : item.label().trim()).append(") ")
+                    .append(item.text() == null ? "" : item.text().trim());
+            }
+            return out.toString();
+        }
+
+        /**
          * Get the question type value.
          */
         public String getTypeValue() {
@@ -255,7 +272,17 @@ public record OcrResponse(
     /**
      * Subitem content with label, text and optional cotação.
      */
-    public record SubitemContent(String label, String text, Double cotacao) {}
+    public record SubitemContent(
+        String label,
+        String text,
+        Double cotacao,
+        /** The alínea's own type: dissertativa, multipla_escolha or verdadeiro_falso. Null when the OCR did not say. */
+        String type
+    ) {
+        public SubitemContent(String label, String text, Double cotacao) {
+            this(label, text, cotacao, null);
+        }
+    }
 
     /**
      * Extracted question option.

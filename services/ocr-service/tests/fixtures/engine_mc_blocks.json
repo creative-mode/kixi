@@ -1,0 +1,178 @@
+[
+{
+"text": "PROVA DE EXAME DE MATEMATICA",
+"conf": 0.998,
+"bbox": [
+70,
+59,
+609,
+86
+],
+"i": 0
+},
+{
+"text": "12a Classe Ano Lectivo: 2024/2025 Duracäo: 120 Min. Série: A",
+"conf": 0.97,
+"bbox": [
+69,
+105,
+995,
+131
+],
+"i": 1
+},
+{
+"text": "Leia com atencao e responda de forma clara.",
+"conf": 0.981,
+"bbox": [
+69,
+152,
+700,
+173
+],
+"i": 2
+},
+{
+"text": "1. Qual é o valor de 2 + 3 x 4? (2 valores)",
+"conf": 0.986,
+"bbox": [
+69,
+234,
+653,
+261
+],
+"i": 3
+},
+{
+"text": "A)14 B)20 C)24 D)9",
+"conf": 0.951,
+"bbox": [
+64,
+273,
+462,
+309
+],
+"i": 4
+},
+{
+"text": "2. Resolva a equacäo 2x + 5 = 15.(3 valores)",
+"conf": 0.973,
+"bbox": [
+70,
+366,
+712,
+392
+],
+"i": 5
+},
+{
+"text": "3. Assinale a alternativa correcta: a raiz quadrada de 81 é (2",
+"conf": 0.995,
+"bbox": [
+69,
+450,
+920,
+481
+],
+"i": 6
+},
+{
+"text": "valores)",
+"conf": 0.999,
+"bbox": [
+64,
+489,
+183,
+525
+],
+"i": 7
+},
+{
+"text": "A) 7",
+"conf": 0.999,
+"bbox": [
+67,
+538,
+156,
+566
+],
+"i": 8
+},
+{
+"text": "B)8 C) 9",
+"conf": 0.934,
+"bbox": [
+145,
+536,
+339,
+567
+],
+"i": 9
+},
+{
+"text": " D) 10",
+"conf": 0.946,
+"bbox": [
+331,
+538,
+423,
+566
+],
+"i": 10
+},
+{
+"text": "4. Considere a funcao f(x) = x2 - 4. (5 valores)",
+"conf": 0.971,
+"bbox": [
+69,
+625,
+711,
+652
+],
+"i": 11
+},
+{
+"text": "a) Determine os zeros de f.",
+"conf": 0.996,
+"bbox": [
+67,
+666,
+447,
+695
+],
+"i": 12
+},
+{
+"text": "b) Calcule f(3).",
+"conf": 0.998,
+"bbox": [
+67,
+709,
+273,
+741
+],
+"i": 13
+},
+{
+"text": "c) Esboce o grafico de f.",
+"conf": 0.963,
+"bbox": [
+70,
+756,
+402,
+783
+],
+"i": 14
+},
+{
+"text": "5. Justifique a sua resposta final. (3 valores)",
+"conf": 0.994,
+"bbox": [
+70,
+844,
+681,
+870
+],
+"i": 15
+}
+]

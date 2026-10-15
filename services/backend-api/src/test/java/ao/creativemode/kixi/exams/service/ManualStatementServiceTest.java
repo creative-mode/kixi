@@ -308,4 +308,142 @@ class ManualStatementServiceTest {
 
         verify(statements, never()).save(any(Statement.class));
     }
+
+    // ── Questões com alíneas e tipos (issue #247) ───────────────────────────
+
+    private ManualStatementRequest paperOf(ManualStatementRequest.Question... questions) {
+        return new ManualStatementRequest(
+            1L, 2L, "Prova de Exame de OGI", "Exame", 90, "B", null,
+            null, null, CLASS_ID, null, false, List.of(questions));
+    }
+
+    private ManualStatementRequest.Item item(String text, String type, Double score) {
+        return new ManualStatementRequest.Item(null, text, type, score, null);
+    }
+
+    private List<Question> savedQuestions() {
+        ArgumentCaptor<Question> captor = ArgumentCaptor.forClass(Question.class);
+        verify(questions, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        return captor.getAllValues();
+    }
+
+    @Test
+    void aGroupIsOnlyTheCommonStatementAndItsItemsAreTheQuestionsThatGetAnswered() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        // The real exam: Q1 open, Q3 true/false with items a-d, Q5 composed with items a-b.
+        ManualStatementRequest paper = paperOf(
+            new ManualStatementRequest.Question("O que é aprovisionamento?", null, null, null, null),
+            new ManualStatementRequest.Question("Diga quais são verdadeiras (V) ou falsas (F)", null, null, "group", List.of(
+                item("Deve ser preocupação comprar ao melhor preço.", "true_false", 1.0),
+                item("A escolha das matérias só depois das aplicações.", "true_false", 1.0),
+                item("A escolha tem em conta o tratamento térmico.", "true_false", 1.0),
+                item("O tipo adquirido deve estar adaptado ao processo.", "true_false", 1.0))),
+            new ManualStatementRequest.Question("Uma empresa usa o Lote Económico...", null, null, null, List.of(
+                item("Demonstre a expressão do custo de manutenção.", "open", 2.0),
+                item("Calcule o custo anual e mensal.", "open", 3.0))));
+
+        StepVerifier.create(service.create(paper, 9L, false)).expectNextCount(1).verifyComplete();
+
+        List<Question> saved = savedQuestions();
+        // 1 open + (1 header + 4 items) + (1 header + 2 items)
+        assertThat(saved).hasSize(9);
+        // The order of the paper is order_index, flattened: number alone cannot say it (3 < 4 < 301).
+        assertThat(saved).extracting(Question::getOrderIndex).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
+
+        Question header = saved.stream().filter(q -> q.getNumber() == 2).findFirst().orElseThrow();
+        assertThat(header.getQuestionType()).isEqualTo("group");
+        assertThat(header.getMaxScore()).as("a group header has no score of its own").isNull();
+        assertThat(header.getParentId()).isNull();
+
+        // The items hang under their group, numbered 201.. so the order and the printed numbers survive.
+        List<Question> items = saved.stream().filter(q -> q.getParentId() != null && q.getParentId() == header.getId()).toList();
+        assertThat(items).extracting(Question::getNumber).containsExactly(201, 202, 203, 204);
+        assertThat(items).extracting(Question::getLabel).containsExactly("a", "b", "c", "d");
+        assertThat(items).extracting(Question::getQuestionType).containsOnly("true_false");
+
+        Question composed = saved.stream().filter(q -> q.getNumber() == 3).findFirst().orElseThrow();
+        assertThat(composed.getQuestionType()).as("items without a type on the group: derived from the items").isEqualTo("group");
+        assertThat(saved.stream().filter(q -> q.getNumber() >= 301)).extracting(Question::getLabel).containsExactly("a", "b");
+
+        ArgumentCaptor<Statement> statement = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(statement.capture());
+        assertThat(statement.getValue().getTotalMaxScore()).as("only the items score: 4 + 5").isEqualTo(9.0);
+        assertThat(statement.getValue().getDurationMinutes()).isEqualTo(90);
+    }
+
+    @Test
+    void trueFalseGetsItsTwoOptionsAndTheTeacherMarksWhichOneIsRight() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        ManualStatementRequest paper = paperOf(new ManualStatementRequest.Question(
+            "O Sol é uma estrela.", 1.0, null, "true_false", null));
+
+        StepVerifier.create(service.create(paper, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<QuestionOption> captor = ArgumentCaptor.forClass(QuestionOption.class);
+        verify(options, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(QuestionOption::getOptionText).containsExactly("Verdadeiro", "Falso");
+        assertThat(captor.getAllValues()).extracting(QuestionOption::getIsCorrect)
+            .as("no answer is invented: the approval gate asks the teacher to mark one").containsOnly(false);
+        assertThat(savedQuestions().get(0).getQuestionType()).isEqualTo("true_false");
+    }
+
+    @Test
+    void aTrueFalseQuestionKeepsTheAnswerTheTeacherMarked() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        ManualStatementRequest paper = paperOf(new ManualStatementRequest.Question(
+            "O Sol é uma estrela.", 1.0, List.of(
+                new ManualStatementRequest.Option("A", "Verdadeiro", true),
+                new ManualStatementRequest.Option("B", "Falso", false)), "true_false", null));
+
+        StepVerifier.create(service.create(paper, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<QuestionOption> captor = ArgumentCaptor.forClass(QuestionOption.class);
+        verify(options, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(QuestionOption::getIsCorrect).containsExactly(true, false);
+    }
+
+    @Test
+    void theOldRequestWithoutTypeStillDerivesItFromTheOptions() {
+        when(access.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        StepVerifier.create(service.create(request(), 9L, false)).expectNextCount(1).verifyComplete();
+
+        assertThat(savedQuestions()).extracting(Question::getQuestionType).containsExactly("open", "multiple_choice");
+        assertThat(savedQuestions()).extracting(Question::getParentId).containsOnlyNulls();
+    }
+
+    @Test
+    void aBadlyShapedPaperIsA400BeforeAnythingIsWritten() {
+        List<ManualStatementRequest> bad = List.of(
+            paperOf(new ManualStatementRequest.Question("g", null, null, "group", null)),
+            paperOf(new ManualStatementRequest.Question("g", null, null, "group", List.of())),
+            paperOf(new ManualStatementRequest.Question("q", null, null, "open", List.of(item("a", "open", 1.0)))),
+            paperOf(new ManualStatementRequest.Question("g", null, List.of(
+                new ManualStatementRequest.Option("A", "x", true)), "group", List.of(item("a", "open", 1.0)))),
+            paperOf(new ManualStatementRequest.Question("g", null, null, "group", List.of(item("a", "group", 1.0)))),
+            paperOf(new ManualStatementRequest.Question("g", null, null, "group", List.of(
+                new ManualStatementRequest.Item("a", "x", "open", 1.0, null),
+                new ManualStatementRequest.Item("a", "y", "open", 1.0, null)))),
+            paperOf(new ManualStatementRequest.Question("q", null, List.of(
+                new ManualStatementRequest.Option("A", "x", true)), "open", null)),
+            paperOf(new ManualStatementRequest.Question("q", null, null, "multiple_choice", null)),
+            paperOf(new ManualStatementRequest.Question("q", null, List.of(
+                new ManualStatementRequest.Option("A", "x", true)), "true_false", null)),
+            paperOf(new ManualStatementRequest.Question("q", null, null, "essay", null)));
+
+        for (ManualStatementRequest paper : bad) {
+            StepVerifier.create(service.create(paper, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                    .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+        }
+        verifyNoInteractions(statements, questions, options);
+    }
 }
