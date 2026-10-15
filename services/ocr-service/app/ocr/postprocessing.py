@@ -330,7 +330,7 @@ class OCRPostprocessor:
         # Class/Grade patterns (e.g., "12ª Classe", "10º Ano", "12a Classe")
         # More flexible patterns to catch various OCR outputs
         "class": [
-            r"(\d{1,2})\s*[ºª°aᵃ]?\s*classe",
+            r"(\d{1,2})\s*[ºª°aᵃ@]?\s*classe",
             r"(\d{1,2})\s*[ºª°oᵒ]?\s*ano",
             r"(\d{1,2})\s*classe",
             r"classe\s*[:\s]*(\d{1,2})",
@@ -394,7 +394,8 @@ class OCRPostprocessor:
         # Score/Cotação patterns - Angolan format
         "cotacao": [
             r"(\d+(?:[.,]\d+)?)\s*(?:valores?|pontos?|pts?|marks?|points?)",
-            r"[(\[]\s*(\d+(?:[.,]\d+)?)\s*(?:valores?|pontos?|pts?|marks?|points?)?\s*[)\]]",
+            # With the unit required: "(3)" alone is maths ("f(3)"), not a score.
+            r"[(\[]\s*(\d+(?:[.,]\d+)?)\s*(?:valores?|pontos?|pts?|marks?|points?)\s*[)\]]",
         ],
         # Cotação block pattern (e.g., "Cotação 1-a) 3 valores 2-) 4 valores")
         # Updated to be more flexible and capture multi-line cotação blocks
@@ -518,8 +519,8 @@ class OCRPostprocessor:
         unmapped = []
         images_to_upload = []
 
-        # Sort blocks by page and position
-        sorted_blocks = sorted(text_blocks, key=lambda b: (b.page_index, b.bbox[1], b.bbox[0]))
+        # Reading order: by page, then row by row, left to right inside each row
+        sorted_blocks = self._reading_order(text_blocks)
 
         # Repair the OCR text (accents, one-letter slips, glued words), then move handwriting out of the way.
         sorted_blocks = self._repair_blocks(sorted_blocks)
@@ -987,7 +988,34 @@ class OCRPostprocessor:
 
         return cotacao_map
 
-    # ------------------------------------------------------------------ preparation: text repair + noise
+    # ------------------------------------------------------------------ preparation: order, repair, noise
+
+    @staticmethod
+    def _reading_order(blocks: List[TextBlock]) -> List[TextBlock]:
+        """Page by page, row by row, left to right inside a row.
+
+        Sorting by ``(y, x)`` alone scrambles a row of options: the engine reports "A) 7" two pixels lower than
+        "B) 8 C) 9" beside it, so B came first. Two blocks are on the same row when they overlap vertically by at
+        least half of the shorter one.
+        """
+        ordered: List[TextBlock] = []
+        for page in sorted({b.page_index for b in blocks}):
+            rows: List[List[TextBlock]] = []
+            spans: List[Tuple[int, int]] = []
+            for block in sorted((b for b in blocks if b.page_index == page), key=lambda b: (b.bbox[1], b.bbox[0])):
+                top, bottom = block.bbox[1], block.bbox[3]
+                if rows:
+                    row_top, row_bottom = spans[-1]
+                    overlap = min(bottom, row_bottom) - max(top, row_top)
+                    if overlap >= 0.5 * min(bottom - top, row_bottom - row_top):
+                        rows[-1].append(block)
+                        spans[-1] = (min(row_top, top), max(row_bottom, bottom))
+                        continue
+                rows.append([block])
+                spans.append((top, bottom))
+            for row in rows:
+                ordered.extend(sorted(row, key=lambda b: b.bbox[0]))
+        return ordered
 
     def _repair_blocks(self, blocks: List[TextBlock]) -> List[TextBlock]:
         """Repair accents, one-letter OCR slips and glued words in every block (see ``ptlex``)."""
@@ -1029,30 +1057,26 @@ class OCRPostprocessor:
         Lines that carry structure (question numbers, alíneas, cotação) are never noise, and a page with too
         little printed text to tell what "beside a printed line" means is left alone.
         """
-        kept: List[TextBlock] = []
-        noise: List[Tuple[TextBlock, str]] = []
+        reasons: Dict[int, str] = {}
         for page in sorted({b.page_index for b in blocks}):
             page_blocks = [b for b in blocks if b.page_index == page]
             prose = [b for b in page_blocks if b.confidence >= 0.85 and self._words3(b.text) >= 2]
             if len(prose) < 4:
-                kept.extend(page_blocks)
                 continue
             first_y = min(b.bbox[1] for b in prose)
             for b in page_blocks:
-                reason = None
-                if self._words3(b.text) <= 1 and not self._is_structural(b.text):
-                    letters = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", b.text))
-                    if b.bbox[3] < first_y - 5:
-                        reason = "Marca ou manuscrito acima do texto impresso"
-                    elif b.confidence < 0.92 and self._beside_prose(b, prose):
-                        reason = "Marca ou manuscrito ao lado de uma linha impressa"
-                    elif b.confidence < 0.6 and letters <= 6:
-                        reason = "Leitura de confiança muito baixa"
-                if reason:
-                    noise.append((b, reason))
-                else:
-                    kept.append(b)
-        kept.sort(key=lambda b: (b.page_index, b.bbox[1], b.bbox[0]))
+                if self._words3(b.text) > 1 or self._is_structural(b.text):
+                    continue
+                letters = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", b.text))
+                if b.bbox[3] < first_y - 5:
+                    reasons[id(b)] = "Marca ou manuscrito acima do texto impresso"
+                elif b.confidence < 0.92 and self._beside_prose(b, prose):
+                    reasons[id(b)] = "Marca ou manuscrito ao lado de uma linha impressa"
+                elif b.confidence < 0.6 and letters <= 6:
+                    reasons[id(b)] = "Leitura de confiança muito baixa"
+        # The reading order the caller established is kept; only the noise leaves.
+        kept = [b for b in blocks if id(b) not in reasons]
+        noise = [(b, reasons[id(b)]) for b in blocks if id(b) in reasons]
         return kept, noise
 
     @staticmethod
@@ -1125,6 +1149,14 @@ class OCRPostprocessor:
                     start_y=block.bbox[1],
                     end_y=block.bbox[3],
                 )
+                # "1) Quanto é 2 + 2? A)3 B)4 C)5 D)6": the options may share the line with the stem.
+                inline_here = self._split_inline_options(remainder, 0) if remainder else None
+                if inline_here is not None:
+                    remainder = inline_here[0]
+                    question.options = [
+                        ExtractedOption(option_label=label, option_text=option_text, confidence=block.confidence)
+                        for label, option_text in inline_here[1]
+                    ]
                 draft = _Draft(question=question, stem_parts=[remainder] if remainder else [])
                 has_image, image_desc = self._detect_image_reference(text)
                 if has_image:
@@ -1136,6 +1168,19 @@ class OCRPostprocessor:
                 continue
 
             question = draft.question
+            inline = None if draft.alineas else self._split_inline_options(text, len(question.options or []))
+            if inline is not None:
+                lead, found = inline
+                if lead:
+                    self._append_part(draft, lead)
+                if question.options is None:
+                    question.options = []
+                question.options.extend(
+                    ExtractedOption(option_label=label, option_text=option_text, confidence=block.confidence)
+                    for label, option_text in found
+                )
+                question.end_y = max(question.end_y, block.bbox[3])
+                continue
             alinea = self._detect_alinea(text, draft, cotacao_map)
             if alinea is not None:
                 label, remainder = alinea
@@ -1163,6 +1208,37 @@ class OCRPostprocessor:
 
         close()
         return questions
+
+    _OPTION_MARK = re.compile(r"(?:(?<=\s)|^)\(?([A-D])\)\s*")
+
+    def _split_inline_options(self, text: str, already: int) -> Optional[Tuple[str, List[Tuple[str, str]]]]:
+        """Options that share one printed line ("A)14 B)20 C)24 D)9"), with or without a stem before them.
+
+        Returns ``(text before the first option, [(label, text), ...])``. They are options only when the labels
+        run in sequence: from A on a fresh question, or from the next letter after the ones already read. A line
+        that merely mentions "A)" is left alone.
+        """
+        start = chr(ord("A") + already)
+        marks = list(self._OPTION_MARK.finditer(text))
+        first = next((i for i, m in enumerate(marks) if m.group(1) == start), None)
+        if first is None:
+            return None
+        chosen = [marks[first]]
+        for mark in marks[first + 1:]:
+            if mark.group(1) == chr(ord(chosen[-1].group(1)) + 1):
+                chosen.append(mark)
+            else:
+                break
+        if len(chosen) < (1 if already else 2):
+            return None
+        found: List[Tuple[str, str]] = []
+        for index, mark in enumerate(chosen):
+            end = chosen[index + 1].start() if index + 1 < len(chosen) else len(text)
+            option_text = text[mark.end():end].strip()
+            if not option_text:
+                return None
+            found.append((mark.group(1), option_text))
+        return text[:chosen[0].start()].strip(), found
 
     @staticmethod
     def _append_part(draft: "_Draft", text: str) -> None:
@@ -1213,7 +1289,7 @@ class OCRPostprocessor:
         text = text.strip()
 
         # Skip blocks that look like class/grade indicators (e.g., "12ª Classe", "12a Classe")
-        class_pattern = r"^\d{1,2}\s*[ºª°a]?\s*(?:classe|class|ano|grade)"
+        class_pattern = r"^\d{1,2}\s*[ºª°a@]?\s*(?:classe|class|ano|grade)"
         if re.match(class_pattern, text, re.IGNORECASE):
             return None
 

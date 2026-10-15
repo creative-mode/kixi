@@ -190,6 +190,56 @@ def test_the_noun_escolha_does_not_make_a_choice_question():
     assert questions[0].question_type == QuestionType.DISSERTATIVA
 
 
+# --- ordem de leitura e opções na mesma linha -----------------------------------------------------------------
+
+def test_reading_order_is_by_row_then_by_x():
+    blocks = [
+        TextBlock("D) dez", 0.95, (331, 538, 423, 566)),
+        TextBlock("B) cinco C) seis", 0.95, (145, 536, 339, 567)),
+        TextBlock("A) quatro", 0.95, (67, 540, 156, 566)),
+        TextBlock("1) Qual é o número?", 0.95, (69, 480, 500, 510)),
+    ]
+    assert [b.text for b in OCRPostprocessor._reading_order(blocks)] == [
+        "1) Qual é o número?", "A) quatro", "B) cinco C) seis", "D) dez",
+    ]
+
+
+def test_reading_order_does_not_chain_separate_rows():
+    blocks = [TextBlock(f"linha {i}", 0.95, (10, 40 * i, 300, 40 * i + 30)) for i in range(5)]
+    assert [b.text for b in OCRPostprocessor._reading_order(blocks)] == [f"linha {i}" for i in range(5)]
+
+
+def test_options_sharing_a_line_with_the_stem():
+    _, questions, *_ = run("1) Quanto é 2 + 2? A)3 B)4 C)5 D)6")
+    q = questions[0]
+    assert q.text == "Quanto é 2 + 2?"
+    assert [(o.option_label, o.option_text) for o in q.options] == [("A", "3"), ("B", "4"), ("C", "5"), ("D", "6")]
+
+
+def test_a_line_that_merely_mentions_a_label_is_not_options():
+    _, questions, *_ = run("1) Considere o ponto A) e o ponto C) no plano.")
+    assert questions[0].options is None
+
+
+def test_options_must_run_in_sequence_from_the_next_letter():
+    p = OCRPostprocessor()
+    assert p._split_inline_options("B)8 C) 9", 1) == ("", [("B", "8"), ("C", "9")])
+    assert p._split_inline_options("C) 9", 1) is None          # falta o B
+    assert p._split_inline_options("A) 7", 0) is None          # uma opção sozinha não é uma linha de opções
+
+
+def test_class_with_an_at_sign_for_the_ordinal():
+    metadata, *_ = run("PROVA DE EXAME DE HISTÓRIA", "10@ Classe Ano Lectivo: 2025/2026", "1) Explique.")
+    assert metadata.class_grade.value == "10"
+
+
+def test_a_number_in_parentheses_is_maths_not_a_score():
+    # "(3)" sem a unidade era apagado como se fosse uma cotação: "Calcule f(3)." saía "Calcule f.".
+    _, questions, *_ = run("1) Calcule f(3) e g(4) para a função dada. (2 valores)")
+    assert questions[0].text == "Calcule f(3) e g(4) para a função dada."
+    assert questions[0].cotacao == 2.0
+
+
 # --- ruído ---------------------------------------------------------------------------------------------------
 
 def test_handwriting_beside_a_printed_line_is_set_aside():

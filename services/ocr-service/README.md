@@ -124,6 +124,53 @@ curl -X POST http://localhost:8000/ocr/v1/extract \
 }
 ```
 
+### Tipos de questão e alíneas
+
+O exemplo acima é resumido; o formato real de cada questão em `questions[]` é este (campo `type`):
+
+| `type` | O que é | Como vem |
+|---|---|---|
+| `dissertativa` | resposta escrita | `text` com a pergunta completa |
+| `multipla_escolha` | opções A/B/C/D (duas ou mais, seguidas, começando em A) | `text` só com a pergunta, `options[]` |
+| `verdadeiro_falso` | enunciado comum e alíneas a assinalar com V ou F | `text` só com o enunciado, `subitemsContent[]` com `type: "verdadeiro_falso"` e a afirmação **sem** o `( )` final |
+| `composta` | enunciado comum e alíneas que têm cada uma a sua resposta | `text` só com o enunciado, `subitemsContent[]` com o `type` de cada alínea |
+
+```json
+{
+  "number": "3",
+  "type": "verdadeiro_falso",
+  "text": { "value": "Para cada uma das questões abaixo, diga quais são verdadeiras (assinalar com V) ou falsas (assinalar com F):", "confidence": 0.93 },
+  "subitems": ["a)", "b)"],
+  "subitemsContent": [
+    { "label": "a", "text": "Deve ser preocupação da organização comprar ao melhor preço possível.", "cotacao": null, "type": "verdadeiro_falso" },
+    { "label": "b", "text": "A escolha das matérias só deve ser feita após a determinação das aplicações.", "cotacao": null, "type": "verdadeiro_falso" }
+  ],
+  "cotacao": null,
+  "options": null
+}
+```
+
+- `subitems` traz só os rótulos no formato antigo (`"a)"`); em `subitemsContent` o `label` é `"a"` (minúscula, sem parêntese)
+  e `type` pode ser `dissertativa`, `verdadeiro_falso` ou `multipla_escolha`.
+- **A numeração e as alíneas leem-se por sequência**: a próxima questão é o último número + 1 e a próxima alínea é a
+  letra seguinte. Por isso `1 O que consiste…` (sem `)`) e `aDeve…` (alínea colada) contam, e `2.500 unidades` ou
+  `90 mil` no meio de uma frase não.
+- Uma prova **sem cotações** devolve `cotacao: null`, `totalMaxScore: null` e o aviso
+  `{ "code": "NO_COTACAO", "field": "questions", "message": "6 questões sem cotação: …" }`. O serviço não inventa notas.
+- `unmappedContent[]` traz o que não coube na estrutura, cada item com um `reason`: manuscrito e marcas nas margens
+  (acima do texto, ao lado de uma linha impressa, leitura de confiança muito baixa) e o texto introdutório entre as
+  instruções e a questão 1.
+- `metadata.courseName` vale `"TODOS"` quando a prova diz `CURSO: TODOS`; a sigla da disciplina (`OGI`) mantém-se.
+
+### Reparação do texto
+
+O motor lê bem as letras mas tropeça no português: perde acentos (`organizacao`), troca letras parecidas
+(`cmpresa`, `quc`), cola palavras (`PROVADEEXAMEDEOGI`, `segurancaéde`) e números a palavras (`4mil`, `Duracao9o`).
+`app/ocr/ptlex.py` repara isto com um léxico de 36 mil palavras (`app/ocr/data/`, origem e licença no README ao lado)
+e regras prudentes: palavra que já está no léxico não se altera, só se corrige o que tem uma única correção clara
+(acentos, ou uma troca típica de OCR), e números, siglas, códigos e nomes próprios ficam como estão. Desliga-se com
+`OCRPostprocessor(repair_text=False)`. O léxico regenera-se com `python tools/build_pt_lexicon.py`.
+
 ## Quick Start
 
 ### Prerequisites
