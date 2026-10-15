@@ -72,8 +72,8 @@ public class AuthController {
         // platform with nothing counting how often it was knocked on. Two keys, because
         // either alone is half a defence: the address stops one host spraying names, the
         // identity stops many hosts converging on one account.
-        return loginRateLimiter.check("login-ip:" + clientAddress(exchange))
-                .then(loginRateLimiter.check(
+        return loginRateLimiter.checkAddress("login-ip:" + clientAddress(exchange))
+                .then(loginRateLimiter.checkIdentity(
                         "login-identity:" + request.usernameOrEmail().trim().toLowerCase(Locale.ROOT)))
                 // defer, not a bare call: `then(authService.login(...))` would assemble
                 // the credential lookup before the window had been consulted, so a

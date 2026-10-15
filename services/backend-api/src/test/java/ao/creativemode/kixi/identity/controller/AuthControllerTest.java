@@ -55,7 +55,8 @@ class AuthControllerTest {
         abuseRateLimiter = mock(ApiAbuseRateLimiter.class);
         when(registrationRateLimiter.check(anyString())).thenReturn(Mono.empty());
         loginRateLimiter = mock(LoginRateLimiter.class);
-        when(loginRateLimiter.check(anyString())).thenReturn(Mono.empty());
+        when(loginRateLimiter.checkIdentity(anyString())).thenReturn(Mono.empty());
+        when(loginRateLimiter.checkAddress(anyString())).thenReturn(Mono.empty());
         trustedProxies = new TrustedProxyProperties();
         when(abuseRateLimiter.checkLogin(anyString())).thenReturn(Mono.empty());
         controller = new AuthController(
@@ -147,8 +148,8 @@ class AuthControllerTest {
         // identity separately (#240). ApiAbuseRateLimiter.checkLogin was dropped from it:
         // two limiters in series on one door, with different windows, means the tighter
         // one silently wins and the other is paid for on every request.
-        verify(loginRateLimiter).check("login-ip:unknown");
-        verify(loginRateLimiter).check("login-identity:student@example.test");
+        verify(loginRateLimiter).checkAddress("login-ip:unknown");
+        verify(loginRateLimiter).checkIdentity("login-identity:student@example.test");
         verify(authService).login("student@example.test", "password123");
     }
 
@@ -200,8 +201,8 @@ class AuthControllerTest {
 
         controller.login(null, new LoginRequest("  Student@Kixi.AO  ", "secret")).block();
 
-        verify(loginRateLimiter).check("login-identity:student@kixi.ao");
-        verify(loginRateLimiter).check(startsWith("login-ip:"));
+        verify(loginRateLimiter).checkIdentity("login-identity:student@kixi.ao");
+        verify(loginRateLimiter).checkAddress(startsWith("login-ip:"));
         // The controller normalises the rate-limit key, not the credential lookup:
         // AuthService already folds case when it finds the account.
         verify(authService).login("  Student@Kixi.AO  ", "secret");
@@ -215,7 +216,7 @@ class AuthControllerTest {
      */
     @Test
     void aRefusedLoginNeverReachesTheCredentialCheck() {
-        when(loginRateLimiter.check(startsWith("login-identity:")))
+        when(loginRateLimiter.checkIdentity(startsWith("login-identity:")))
                 .thenReturn(Mono.error(new LoginRateLimitException(42L)));
 
         StepVerifier.create(controller.login(null, new LoginRequest("student", "guess")))
@@ -240,9 +241,19 @@ class AuthControllerTest {
 
         controller.login(null, new LoginRequest("someone", "secret")).block();
 
-        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
-        verify(loginRateLimiter, times(2)).check(keys.capture());
-        assertThat(keys.getAllValues()).hasSize(2).doesNotHaveDuplicates();
+        ArgumentCaptor<String> identities = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> addresses = ArgumentCaptor.forClass(String.class);
+        verify(loginRateLimiter, times(1)).checkAddress(addresses.capture());
+        verify(loginRateLimiter, times(1)).checkIdentity(identities.capture());
+
+        // Different rows, so exhausting one does not spend the other. An attacker could
+        // otherwise burn a victim's address budget without ever touching their account.
+        assertThat(identities.getAllValues()).hasSize(1);
+        assertThat(addresses.getAllValues()).hasSize(1);
+        assertThat(identities.getAllValues().get(0))
+                .isNotEqualTo(addresses.getAllValues().get(0))
+                .startsWith("login-identity:");
+        assertThat(addresses.getAllValues().get(0)).startsWith("login-ip:");
     }
 
     // ── Which address is counted (issue #123) ────────────────────────────
@@ -262,7 +273,7 @@ class AuthControllerTest {
 
         controller.login(from("203.0.113.7", "198.51.100.9"), new LoginRequest("aluno", "s")).block();
 
-        verify(loginRateLimiter).check("login-ip:203.0.113.7");
+        verify(loginRateLimiter).checkAddress("login-ip:203.0.113.7");
     }
 
     /**
@@ -281,7 +292,7 @@ class AuthControllerTest {
 
         controller.login(from("203.0.113.7", "198.51.100.9"), new LoginRequest("aluno", "s")).block();
 
-        verify(loginRateLimiter).check("login-ip:198.51.100.9");
+        verify(loginRateLimiter).checkAddress("login-ip:198.51.100.9");
     }
 
     /** An empty header is not evidence of an address, so the peer stands. */
@@ -294,7 +305,7 @@ class AuthControllerTest {
 
         controller.login(from("203.0.113.7", "  "), new LoginRequest("aluno", "s")).block();
 
-        verify(loginRateLimiter).check("login-ip:203.0.113.7");
+        verify(loginRateLimiter).checkAddress("login-ip:203.0.113.7");
     }
 
     private static ServerWebExchange from(String peer, String forwardedFor) {

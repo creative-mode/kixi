@@ -47,6 +47,7 @@ class LoginRateLimiterTest {
         databaseClient = mock(DatabaseClient.class);
         properties = new LoginRateLimitProperties();
         properties.setMaxAttempts(3);
+        properties.setMaxAttemptsPerAddress(20);
         properties.setWindowSeconds(60);
         limiter = new LoginRateLimiter(databaseClient, properties);
         bound = new HashMap<>();
@@ -56,14 +57,14 @@ class LoginRateLimiterTest {
     void allowsAttemptAtOrBelowMax() {
         stubReserve(3, 30L);
 
-        StepVerifier.create(limiter.check("login-ip:10.0.0.1")).verifyComplete();
+        StepVerifier.create(limiter.checkAddress("login-ip:10.0.0.1")).verifyComplete();
     }
 
     @Test
     void blocksAboveMaxWithRetryAfter() {
         stubReserve(4, 30L);
 
-        StepVerifier.create(limiter.check("login-ip:10.0.0.1"))
+        StepVerifier.create(limiter.checkIdentity("login-identity:alguem"))
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(LoginRateLimitException.class);
                     LoginRateLimitException limited = (LoginRateLimitException) error;
@@ -85,7 +86,7 @@ class LoginRateLimiterTest {
     void theKeyIsHashedSoNoIdentityIsStoredInTheClear() {
         stubReserve(1, 30L);
 
-        limiter.check("login-identity:alguem@kixi.ao").block();
+        limiter.checkIdentity("login-identity:alguem@kixi.ao").block();
 
         assertThat(bound.get("rateKey"))
                 .asString()
@@ -97,7 +98,7 @@ class LoginRateLimiterTest {
     void theWindowInSecondsReachesTheStatement() {
         stubReserve(1, 30L);
 
-        limiter.check("login-ip:10.0.0.1").block();
+        limiter.checkIdentity("login-identity:alguem").block();
 
         assertThat(bound).containsEntry("windowSeconds", 60L);
     }
@@ -117,7 +118,7 @@ class LoginRateLimiterTest {
         RowsFetchSpec<Object> failing = rows(Mono.error(new RuntimeException("connection reset")));
         when(reserve.map(any(BiFunction.class))).thenReturn(failing);
 
-        StepVerifier.create(limiter.check("login-ip:10.0.0.1"))
+        StepVerifier.create(limiter.checkIdentity("login-identity:alguem"))
                 .expectErrorSatisfies(error ->
                         assertThat(((ApiException) error).getStatusCode()).isEqualTo(503))
                 .verify();
@@ -132,9 +133,32 @@ class LoginRateLimiterTest {
         RowsFetchSpec<Object> empty = rows(Mono.empty());
         when(reserve.map(any(BiFunction.class))).thenReturn(empty);
 
-        StepVerifier.create(limiter.check("login-ip:10.0.0.1"))
+        StepVerifier.create(limiter.checkIdentity("login-identity:alguem"))
                 .expectErrorSatisfies(error ->
                         assertThat(((ApiException) error).getStatusCode()).isEqualTo(503))
+                .verify();
+    }
+
+
+    /**
+     * The address window is the looser one, and this is why.
+     *
+     * <p>A school puts every student behind one public address. With the same ten
+     * attempts a minute, one student fumbling their password locks every other user out
+     * for the rest of the window, and the attacker chooses the victim by being next.
+     * Twenty is already many more than the three this test configures for an identity,
+     * which is the point: the two keys are not the same decision.</p>
+     */
+    @Test
+    void theAddressWindowIsLooserThanTheIdentityOne() {
+        stubReserve(10, 30L);
+
+        StepVerifier.create(limiter.checkAddress("login-ip:10.0.0.1")).verifyComplete();
+
+        // The same number, read as an identity, is over the limit: three is the bar here.
+        stubReserve(10, 30L);
+        StepVerifier.create(limiter.checkIdentity("login-identity:alguem"))
+                .expectError(LoginRateLimitException.class)
                 .verify();
     }
 
