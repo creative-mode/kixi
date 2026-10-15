@@ -1,0 +1,52 @@
+# Caddy — proxy do Kixi (frontend e backend em contentores no mesmo host).
+#
+# A ordem das regras é o que importa. O `handle_path /api/*` tem de vir ANTES do
+# `handle_path /manager/*`, porque o primeiro bloco que faz match ganha e o resto
+# nunca é avaliado. Com a API depois do manager, `/api/v1/...` caía no fim do
+# ficheiro e respondia 404 — que é o que acontecia antes deste ficheiro existir.
+#
+# Nomes dos contentores: têm de coincidir com os de `docker-compose.yml`. O backend
+# publica 8080 (services/backend-api) e o gestor 3002 (kixi-frontend).
+
+{
+	email {$ACME_EMAIL:admin@kixi.ao}
+}
+
+{$KIXI_HOST:mgr.169-58-169-179.sslip.io} {
+	# zstd e gzip, que é o que a imagem standard do Caddy traz — verificado com
+	# `caddy list-modules | grep http.encoders`. Brotli não está lá, e declará-lo faz
+	# o container não arrancar com "module not registered: http.encoders.br".
+	encode zstd gzip
+
+	# 1. A API. Sem isto, nada do frontend funciona: as chamadas são relativas ao
+	#    próprio host e chegam aqui.
+	handle_path /api/* {
+		reverse_proxy backend-api:8080 {
+			# O limiter de login e de registo conta por endereço (#123/#240). Atrás de
+			# um proxy, o endereço que a aplicação vê é o do Caddy, partilhado por
+			# todos. Sem declarar o proxy aqui e ligá-lo com APP_TRUSTED_PROXY_IPS,
+			# uma escola inteira conta como um só cliente e o limite nunca se repõe.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+			header_up Host {host}
+		}
+	}
+
+	# 2. O gestor. `handle_path` remove o prefixo, que é o que o Next espera quando
+	#    tem basePath configurado. Os assets em /_next/static são servidos a partir
+	#    daqui, com cache de um ano.
+	handle_path /manager/* {
+		reverse_proxy manager:3002
+	}
+
+	# 3. Tudo o resto não é uma rota. Um 404 explícito é melhor do que o file_server
+	#    do Caddy, que devolve uma página sua e esconde o que está a acontecer.
+	handle {
+		respond "Não encontrado" 404
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
