@@ -1,0 +1,431 @@
+[
+{
+"text": "81",
+"conf": 0.982,
+"bbox": [
+732,
+9,
+769,
+36
+],
+"i": 0
+},
+{
+"text": "4181",
+"conf": 0.882,
+"bbox": [
+861,
+37,
+909,
+64
+],
+"i": 1
+},
+{
+"text": "X= 8146y",
+"conf": 0.708,
+"bbox": [
+775,
+68,
+921,
+119
+],
+"i": 2
+},
+{
+"text": "Yoay",
+"conf": 0.507,
+"bbox": [
+859,
+105,
+909,
+136
+],
+"i": 3
+},
+{
+"text": "REPÜBLICADEANGOLA",
+"conf": 0.958,
+"bbox": [
+473,
+131,
+729,
+157
+],
+"i": 4
+},
+{
+"text": "GOVERNODAPROVINCIADE LUANDA",
+"conf": 0.964,
+"bbox": [
+397,
+157,
+801,
+181
+],
+"i": 5
+},
+{
+"text": "GABINETE PROVINCIALDE EDUCACAO",
+"conf": 0.964,
+"bbox": [
+389,
+180,
+809,
+208
+],
+"i": 6
+},
+{
+"text": "DEPARTAMENTODEEDUCACAO E ENSINO",
+"conf": 0.969,
+"bbox": [
+371,
+209,
+828,
+232
+],
+"i": 7
+},
+{
+"text": "PROVADEEXAMEDEOGI",
+"conf": 0.97,
+"bbox": [
+480,
+241,
+716,
+260
+],
+"i": 8
+},
+{
+"text": "12aClasseAno Lectivo2024/2025Duracao9o Min.SérieB",
+"conf": 0.932,
+"bbox": [
+301,
+260,
+899,
+287
+],
+"i": 9
+},
+{
+"text": "CURSO:TODOS",
+"conf": 0.959,
+"bbox": [
+531,
+284,
+671,
+304
+],
+"i": 10
+},
+{
+"text": "Leia a prova com atencao, coloque na folha de prova a variante correspondente e responda de",
+"conf": 0.948,
+"bbox": [
+196,
+305,
+996,
+331
+],
+"i": 11
+},
+{
+"text": "uma forma clara.",
+"conf": 0.94,
+"bbox": [
+197,
+335,
+348,
+352
+],
+"i": 12
+},
+{
+"text": "\"Quando lidamos com urma empresa é fundarmental adotar a organizacao empresarial em seu dia a dia.Isso",
+"conf": 0.921,
+"bbox": [
+196,
+352,
+1003,
+376
+],
+"i": 13
+},
+{
+"text": "todasas funcöes de um grande escritorio.lsso é impossivel!\"",
+"conf": 0.907,
+"bbox": [
+193,
+403,
+652,
+420
+],
+"i": 14
+},
+{
+"text": "1 O que consiste o aprovisionamento em uma organizacao empresarial e quais sao os aspectos que",
+"conf": 0.948,
+"bbox": [
+224,
+476,
+1004,
+495
+],
+"i": 15
+},
+{
+"text": "devemos levar cm consideracao?",
+"conf": 0.962,
+"bbox": [
+223,
+509,
+472,
+528
+],
+"i": 16
+},
+{
+"text": "2 O quc entendes por ciclo de vida do produto c argumenta cada uma das fases que o compoe?",
+"conf": 0.924,
+"bbox": [
+220,
+553,
+932,
+576
+],
+"i": 17
+},
+{
+"text": "3) Para cada uma das questocs abaixo, diga quais sao verdadeiras (assinalar com V ou falsas (assinalar",
+"conf": 0.931,
+"bbox": [
+219,
+599,
+1011,
+625
+],
+"i": 18
+},
+{
+"text": "comF):",
+"conf": 0.93,
+"bbox": [
+217,
+637,
+283,
+656
+],
+"i": 19
+},
+{
+"text": "aDeve ser prcocupacao da organizacao comprar ao melhor prcco possivel estabelecido pelo",
+"conf": 0.948,
+"bbox": [
+276,
+676,
+1017,
+703
+],
+"i": 20
+},
+{
+"text": "produtor).",
+"conf": 0.933,
+"bbox": [
+305,
+705,
+417,
+725
+],
+"i": 21
+},
+{
+"text": "bA escolha das matérias a utilizar só deve ser feita após a determinacao das possiveis aplicacöes",
+"conf": 0.938,
+"bbox": [
+271,
+724,
+1024,
+751
+],
+"i": 22
+},
+{
+"text": "que se irao fazer com os insumos..",
+"conf": 0.961,
+"bbox": [
+300,
+751,
+611,
+777
+],
+"i": 23
+},
+{
+"text": "c) A escolha das matérias tem de ter cm conta as qualidades do tratamento térmico que se",
+"conf": 0.959,
+"bbox": [
+265,
+773,
+1031,
+801
+],
+"i": 24
+},
+{
+"text": "pretende que  produto final possua..",
+"conf": 0.946,
+"bbox": [
+295,
+801,
+631,
+827
+],
+"i": 25
+},
+{
+"text": "dAo comprar as matérias a cmpresa deve ainda ter em atencao se o tipo adquirido esta adaptado",
+"conf": 0.941,
+"bbox": [
+263,
+823,
+1035,
+853
+],
+"i": 26
+},
+{
+"text": "ao processo de laboracao na empresa ().",
+"conf": 0.917,
+"bbox": [
+291,
+853,
+633,
+880
+],
+"i": 27
+},
+{
+"text": "4) Explique c esquematize as fases que abrange o planeamento dentro de uma organizacao?",
+"conf": 0.972,
+"bbox": [
+187,
+893,
+935,
+927
+],
+"i": 28
+},
+{
+"text": "5) Uma cmpresa utiliza o Lote Economico, para repor o estoque de uma das suas pecas cujo o Lote previsto",
+"conf": 0.941,
+"bbox": [
+183,
+940,
+1047,
+972
+],
+"i": 29
+},
+{
+"text": "‘ de 6000 unidades diario.Se o custo de colocacao de um pedido é de 4mil kze a demanda a ser utilizado",
+"conf": 0.911,
+"bbox": [
+179,
+968,
+1048,
+996
+],
+"i": 30
+},
+{
+"text": "é de 90 mil unidades mensal.",
+"conf": 0.916,
+"bbox": [
+176,
+1000,
+425,
+1024
+],
+"i": 31
+},
+{
+"text": "aDemostre a expressao matemätica para o calculo do custo de manutencao de estoques",
+"conf": 0.953,
+"bbox": [
+205,
+1037,
+961,
+1069
+],
+"i": 32
+},
+{
+"text": "bCalcule do custo de manutencao de estoques anual e mensal?",
+"conf": 0.969,
+"bbox": [
+205,
+1069,
+760,
+1096
+],
+"i": 33
+},
+{
+"text": "6 Determinada pecaé consumida em 2.500 unidades mensalmente e sabemos que seu tempo de",
+"conf": 0.954,
+"bbox": [
+171,
+1117,
+1059,
+1147
+],
+"i": 34
+},
+{
+"text": "reposicao é 1,8% da demanda em dias. Entao, qual é o seu ponto de pedido, uma vez que seu",
+"conf": 0.957,
+"bbox": [
+167,
+1147,
+1064,
+1179
+],
+"i": 35
+},
+{
+"text": "estoque de segurancaéde 400 unidades?",
+"conf": 0.953,
+"bbox": [
+167,
+1183,
+549,
+1209
+],
+"i": 36
+},
+{
+"text": "M=31D",
+"conf": 0.869,
+"bbox": [
+920,
+1190,
+1043,
+1240
+],
+"i": 37
+},
+{
+"text": "Pz (D.Tr) tER",
+"conf": 0.751,
+"bbox": [
+640,
+1192,
+855,
+1253
+],
+"i": 38
+}
+]
