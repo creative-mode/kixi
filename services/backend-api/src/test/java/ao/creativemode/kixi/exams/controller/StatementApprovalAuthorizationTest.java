@@ -153,6 +153,8 @@ class StatementApprovalAuthorizationTest {
 
     @BeforeEach
     void setUp() {
+        when(curriculum.requireInClassCurriculum(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Mono.empty());
         statement = new Statement("Teste", "Prova de Matemática");
         statement.setId(1L);
         statement.setInstitutionId(INSTITUTION_ID);
@@ -512,6 +514,7 @@ givenTheStatementIsReadable();
         // classes.course_id is NOT NULL in V10; leaving it null would NPE the
         // validator's course branch as soon as a payload carried a courseId.
         klass.setCourseId(COURSE_ID);
+        klass.setInstitutionId(INSTITUTION_ID);
         return klass;
     }
 
