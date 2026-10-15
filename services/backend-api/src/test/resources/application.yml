@@ -1,0 +1,21 @@
+# Configuração dos testes.
+#
+# Existe um único ficheiro de propósito, e serve para uma coisa: a pool do R2DBC é
+# pequena em todos os testes.
+#
+# Cada `@SpringBootTest` com um conjunto de propriedades diferente cria o seu próprio
+# contexto Spring, e cada contexto traz a sua pool. Com seis contextos a correr em
+# paralelo contra o mesmo PostgreSQL de integração, cada uma a pedir dez ligações por
+# omissão, o servidor responde `sorry, too many clients already` e o teste morre a
+# tries to load the context, em vez de falhar uma asserção. Já aconteceu três vezes e da
+# última vez foi a `dev` ficar vermelha por causa de uma suite nova que não tinha nada a
+# ver com o que testava.
+#
+# Uma pool de 2 resolve, porque os testes correm em série e não precisam de concorrência.
+# Quem precisar de mais declara no seu próprio `@SpringBootTest(properties = ...)`, que
+# tem precedência sobre isto.
+spring:
+  r2dbc:
+    pool:
+      initial-size: 0
+      max-size: 2
