@@ -19,7 +19,7 @@ from app.ocr import (
     OCRResult,
     load_image_from_bytes,
 )
-from app.api.pdf_handler import extract_images_from_pdf, is_pdf
+from app.api.pdf_handler import extract_images_from_pdf, is_pdf, validate_pdf
 from app.api.security import require_ocr_api_key
 
 import structlog
@@ -109,13 +109,6 @@ def validate_file_type(filename: str) -> str:
         )
 
 
-def safe_filename(filename: Optional[str]) -> str:
-    """Keep filenames safe for logs and public error details."""
-    if not filename:
-        return "<unnamed>"
-    return filename.replace("\r", "").replace("\n", "")[:255]
-
-
 def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
     """Validate file size."""
     max_size = max_size_mb or settings.max_image_size_mb
@@ -126,6 +119,27 @@ def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
             status_code=400,
             detail=f"File size exceeds maximum allowed size of {max_size}MB"
         )
+
+
+async def read_bounded_upload(
+    upload_file: UploadFile, remaining_request_bytes: int = None
+) -> bytes:
+    """Read within both the per-file and aggregate request limits."""
+    if remaining_request_bytes is None:
+        remaining_request_bytes = settings.max_upload_size_bytes
+    max_bytes = min(settings.max_image_size_bytes, remaining_request_bytes)
+    content = await upload_file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        if remaining_request_bytes < settings.max_image_size_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Total upload size exceeds maximum allowed size of "
+                    f"{settings.max_upload_size_mb}MB"
+                ),
+            )
+        validate_file_size(content)
+    return content
 
 
 def _status_code_for_result(status: str) -> int:
@@ -215,6 +229,7 @@ async def extract_text(
     # Process images
     all_images = []
     source_file_indices = []
+    total_upload_bytes = 0
 
     for source_file_index, upload_file in enumerate(images):
         try:
@@ -222,22 +237,29 @@ async def extract_text(
             file_type = validate_file_type(upload_file.filename)
 
             # Read file content
-            content = await upload_file.read()
-
-            # Validate file size
-            validate_file_size(content)
+            remaining_request_bytes = settings.max_upload_size_bytes - total_upload_bytes
+            content = await read_bounded_upload(upload_file, remaining_request_bytes)
+            total_upload_bytes += len(content)
 
             logger.debug(
                 "Processing file",
                 request_id=request_id,
-                filename=safe_filename(upload_file.filename),
                 file_type=file_type,
                 size_bytes=len(content),
             )
 
             # Handle PDF files
             if file_type == 'pdf' or is_pdf(content):
+                validate_pdf(content, max_pages=settings.max_pdf_pages)
                 pdf_images = extract_images_from_pdf(content)
+                if len(all_images) + len(pdf_images) > settings.max_ocr_pages_per_request:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Maximum "
+                            f"{settings.max_ocr_pages_per_request} pages allowed per request"
+                        ),
+                    )
                 all_images.extend(pdf_images)
                 source_file_indices.extend([source_file_index] * len(pdf_images))
                 logger.debug(
@@ -259,7 +281,6 @@ async def extract_text(
             logger.error(
                 "Failed to process uploaded file",
                 request_id=request_id,
-                filename=safe_filename(upload_file.filename),
                 error_type=type(e).__name__,
             )
             raise HTTPException(
@@ -334,7 +355,6 @@ async def extract_text_simple(
     logger.info(
         "Simple OCR extraction request received",
         request_id=request_id,
-        filename=safe_filename(image.filename),
     )
 
     # Validate file type
@@ -348,8 +368,7 @@ async def extract_text_simple(
 
     try:
         # Read and validate
-        content = await image.read()
-        validate_file_size(content)
+        content = await read_bounded_upload(image)
 
         # Load image
         img = load_image_from_bytes(content)

@@ -34,7 +34,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-kixi}
       POSTGRES_USER: ${POSTGRES_USER:-kixi}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kixi_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a strong value}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
@@ -69,7 +69,7 @@ services:
       # Database Configuration
       SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/${POSTGRES_DB:-kixi}
       SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-kixi}
-      SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:-kixi_secret}
+      SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a strong value}
       # Existing databases created by the legacy init.sql are baselined at V16;
       # fresh databases are empty and run the complete migration chain.
       SPRING_FLYWAY_BASELINE_ON_MIGRATE: ${SPRING_FLYWAY_BASELINE_ON_MIGRATE:-true}
@@ -104,6 +104,10 @@ services:
       APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       APP_AUTH_GOOGLE_STATE_COOKIE_SECURE: ${GOOGLE_OAUTH_STATE_COOKIE_SECURE:-true}
       OCR_SERVICE_API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
+      APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS:-10}
+      APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS: ${APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS:-900}
+      APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS:-10}
+      APP_SECURITY_RATE_LIMIT_UPLOAD_WINDOW_SECONDS: ${APP_SECURITY_RATE_LIMIT_UPLOAD_WINDOW_SECONDS:-60}
       # AI tutor (Groq). Optional by design: the compose file must start without
       # it, and /api/v1/chat answers 503 until a key is provided.
       APP_GROQ_API_KEY: ${GROQ_API_KEY:-}
@@ -171,7 +175,10 @@ services:
       OCR_SHOW_LOG: ${OCR_SHOW_LOG:-false}
       # Processing Configuration
       MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB:-20.0}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50.0}
       MAX_IMAGES_PER_REQUEST: ${MAX_IMAGES_PER_REQUEST:-10}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-50}
+      MAX_OCR_PAGES_PER_REQUEST: ${MAX_OCR_PAGES_PER_REQUEST:-50}
       PROCESSING_TIMEOUT_SECONDS: ${PROCESSING_TIMEOUT_SECONDS:-120}
       MIN_CONFIDENCE_THRESHOLD: ${MIN_CONFIDENCE_THRESHOLD:-0.5}
       # Preprocessing Configuration
@@ -234,7 +241,10 @@ services:
       OCR_USE_ANGLE_CLS: "true"
       OCR_SHOW_LOG: "false"
       MAX_IMAGE_SIZE_MB: "20.0"
+      MAX_UPLOAD_SIZE_MB: "50.0"
       MAX_IMAGES_PER_REQUEST: "10"
+      MAX_PDF_PAGES: "50"
+      MAX_OCR_PAGES_PER_REQUEST: "50"
       PROCESSING_TIMEOUT_SECONDS: "120"
       MIN_CONFIDENCE_THRESHOLD: "0.5"
       ENABLE_DESKEW: "true"

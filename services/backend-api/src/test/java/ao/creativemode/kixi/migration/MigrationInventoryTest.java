@@ -89,6 +89,18 @@ class MigrationInventoryTest {
         assertTrue(sql.contains("topic_mastered"));
     }
 
+    @Test
+    void securityRateLimitMigrationCreatesHashedAbuseBuckets() throws IOException, URISyntaxException {
+        Path migrationPath = migrationDirectory().resolve("V49__create_api_abuse_rate_limits.sql");
+        String migration = Files.readString(migrationPath).toLowerCase();
+
+        assertTrue(migration.contains("create table api_abuse_rate_limits"));
+        assertTrue(migration.contains("rate_key varchar(64) primary key"));
+        assertTrue(migration.contains("window_started_at"));
+        assertTrue(migration.contains("attempts integer not null check (attempts > 0)"));
+        assertTrue(migration.contains("idx_api_abuse_rate_limits_updated_at"));
+    }
+
     private Path migrationDirectory() throws URISyntaxException {
         return Path.of(Objects.requireNonNull(
                 getClass().getClassLoader().getResource("db/migration")

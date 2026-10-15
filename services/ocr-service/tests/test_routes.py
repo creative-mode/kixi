@@ -9,6 +9,7 @@ from dataclasses import replace
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 import io
+import fitz
 from PIL import Image
 
 from app.main import app
@@ -231,6 +232,88 @@ class TestExtractEndpoint:
         assert response.status_code == 400
         data = response.json()
         assert "Unsupported file type" in data.get("detail", str(data))
+
+    def test_extract_rejects_oversized_file_before_reading_it_into_memory(
+        self, client, engine_override, sample_image_bytes, monkeypatch
+    ):
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+        monkeypatch.setattr(settings, "max_image_size_mb", 0.000001)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("large.png", sample_image_bytes, "image/png"))],
+        )
+
+        assert response.status_code == 400
+        assert "File size exceeds" in response.json()["detail"]
+        mock_engine.process_image_async.assert_not_awaited()
+
+    def test_extract_rejects_too_many_files_before_ocr(
+        self, client, engine_override, sample_image_bytes, monkeypatch
+    ):
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+        monkeypatch.setattr(settings, "max_images_per_request", 1)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[
+                ("images", ("one.png", sample_image_bytes, "image/png")),
+                ("images", ("two.png", sample_image_bytes, "image/png")),
+            ],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Maximum 1 images allowed per request"
+        mock_engine.process_image_async.assert_not_awaited()
+
+    def test_extract_rejects_pdf_over_page_limit_before_ocr(
+        self, client, engine_override, monkeypatch
+    ):
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+        monkeypatch.setattr(settings, "max_pdf_pages", 1)
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        pdf_bytes = pdf.tobytes()
+        pdf.close()
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("exam.pdf", pdf_bytes, "application/pdf"))],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid uploaded file"
+        mock_engine.process_image_async.assert_not_awaited()
+
+    def test_extract_rejects_request_over_aggregate_upload_limit(
+        self, client, engine_override, sample_image_bytes, monkeypatch
+    ):
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+        total_limit_bytes = len(sample_image_bytes) + 1
+        monkeypatch.setattr(
+            settings, "max_upload_size_mb", total_limit_bytes / (1024 * 1024)
+        )
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[
+                ("images", ("one.png", sample_image_bytes, "image/png")),
+                ("images", ("two.png", sample_image_bytes, "image/png")),
+            ],
+        )
+
+        assert response.status_code == 400
+        assert "Total upload size exceeds" in response.json()["detail"]
+        mock_engine.process_image_async.assert_not_awaited()
 
 
 class TestSimpleExtractEndpoint:

@@ -86,7 +86,7 @@ public class FeedRateLimiter {
                                 "Feed protection is temporarily unavailable"))
                 .flatMap(state -> {
                     if (state.attempts() > properties.getMaxAttempts()) {
-                        log.warn("Feed rate limit exceeded for accountId={}", accountId);
+                        log.warn("Feed rate limit exceeded");
                         return Mono.error(new FeedRateLimitException(state.retryAfterSeconds()));
                     }
                     return Mono.empty();

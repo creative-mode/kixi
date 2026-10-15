@@ -125,6 +125,13 @@ public class SecurityConfig {
                         .authenticated()
                         .pathMatchers("/api/v1/ocr/**")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // Trash views expose records the normal catalog hides.
+                        // Keep them staff-only before the authenticated read rules.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/school-years/trash", "/api/v1/terms/trash",
+                                "/api/v1/subjects/trash", "/api/v1/courses/trash",
+                                "/api/v1/classes/trash", "/api/v1/question-images/trash")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/school-years", "/api/v1/school-years/**",
                                 "/api/v1/terms", "/api/v1/terms/**",
@@ -221,7 +228,10 @@ public class SecurityConfig {
                         // follows a colleague exactly like a student does.
                         .pathMatchers("/api/v1/friends", "/api/v1/friends/**")
                         .authenticated()
-                        .anyExchange().authenticated()
+                        // Unknown routes fail closed. A new controller must
+                        // receive an explicit rule above before any role can
+                        // reach it.
+                        .anyExchange().denyAll()
                 )
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED))

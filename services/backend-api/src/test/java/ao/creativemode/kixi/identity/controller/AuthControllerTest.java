@@ -19,6 +19,7 @@ import ao.creativemode.kixi.identity.service.AuthService;
 import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.List;
@@ -41,6 +42,7 @@ class AuthControllerTest {
     private RegistrationRateLimiter registrationRateLimiter;
     private LoginRateLimiter loginRateLimiter;
     private TrustedProxyProperties trustedProxies;
+    private ApiAbuseRateLimiter abuseRateLimiter;
     private AuthController controller;
 
     @BeforeEach
@@ -50,13 +52,15 @@ class AuthControllerTest {
         googleProperties.setClientId("google-client");
         googleProperties.setRedirectUri("https://api.example.test/api/v1/auth/google/callback");
         registrationRateLimiter = mock(RegistrationRateLimiter.class);
+        abuseRateLimiter = mock(ApiAbuseRateLimiter.class);
         when(registrationRateLimiter.check(anyString())).thenReturn(Mono.empty());
         loginRateLimiter = mock(LoginRateLimiter.class);
         when(loginRateLimiter.check(anyString())).thenReturn(Mono.empty());
         trustedProxies = new TrustedProxyProperties();
+        when(abuseRateLimiter.checkLogin(anyString())).thenReturn(Mono.empty());
         controller = new AuthController(
                 authService, googleProperties, registrationRateLimiter, loginRateLimiter,
-                trustedProxies);
+                trustedProxies, abuseRateLimiter);
     }
 
     @Test
@@ -76,7 +80,7 @@ class AuthControllerTest {
 
     @Test
     void callbackRejectsMissingOrMismatchedStateBeforeCallingGoogle() {
-        StepVerifier.create(controller.googleCallback("code", "received", "stored"))
+        StepVerifier.create(controller.googleCallback("code", "received", "stored", null))
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatusCode()).isEqualTo(400);
@@ -99,7 +103,7 @@ class AuthControllerTest {
                 .thenReturn(Mono.just(loginResponse));
 
         ResponseEntity<LoginResponse> response = controller
-                .googleCallback("code", "same-state", "same-state")
+                .googleCallback("code", "same-state", "same-state", null)
                 .block();
 
         assertThat(response).isNotNull();
@@ -107,6 +111,7 @@ class AuthControllerTest {
         assertThat(response.getHeaders().getFirst("Set-Cookie"))
                 .contains("kixi_oauth_state=")
                 .contains("Max-Age=0");
+        verify(abuseRateLimiter).checkLogin("unknown");
     }
 
     @Test
@@ -123,7 +128,37 @@ class AuthControllerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(201);
         assertThat(response.getBody()).isEqualTo(loginResponse);
         verify(authService).register(request);
-        verify(registrationRateLimiter, org.mockito.Mockito.times(2)).check(anyString());
+        verify(registrationRateLimiter).check("unknown");
+    }
+
+    @Test
+    void loginChecksAbuseLimitsBeforeAuthenticating() {
+        LoginResponse loginResponse = new LoginResponse(
+                "token", LoginResponse.TOKEN_TYPE, Instant.now(), 42L, List.of("STUDENT"));
+        org.mockito.Mockito.when(authService.login("student@example.test", "password123"))
+                .thenReturn(Mono.just(loginResponse));
+
+        ResponseEntity<LoginResponse> response = controller.login(
+                null, new LoginRequest("student@example.test", "password123")).block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        // The login path goes through LoginRateLimiter, which counts the address and the
+        // identity separately (#240). ApiAbuseRateLimiter.checkLogin was dropped from it:
+        // two limiters in series on one door, with different windows, means the tighter
+        // one silently wins and the other is paid for on every request.
+        verify(loginRateLimiter).check("login-ip:unknown");
+        verify(loginRateLimiter).check("login-identity:student@example.test");
+        verify(authService).login("student@example.test", "password123");
+    }
+
+    @Test
+    void googleRedirectChecksAbuseLimitBeforeRedirecting() {
+        ResponseEntity<Void> response = controller.googleRedirect(null).block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getStatusCode().value()).isEqualTo(302);
+        verify(abuseRateLimiter).checkLogin("unknown");
     }
 
     @Test
