@@ -53,6 +53,7 @@ public class ManualStatementService {
             .then(Mono.defer(() -> accessService.requireCanAuthor(
                 accountId, admin, request.institutionId(), request.subjectId(), request.classId())))
             .then(Mono.defer(() -> validator.validate(
+                request.institutionId(),
                 request.schoolYearId(),
                 request.termId(),
                 request.classId(),

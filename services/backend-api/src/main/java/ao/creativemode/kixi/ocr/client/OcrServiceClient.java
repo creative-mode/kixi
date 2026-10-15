@@ -198,8 +198,7 @@ public class OcrServiceClient {
             return Mono.error(new IllegalArgumentException("Image bytes cannot be empty"));
         }
 
-        log.info("Sending OCR request for single image: {} ({} bytes)",
-                safeFilename(filename), imageBytes.length);
+        log.info("Sending OCR request for single image ({} bytes)", imageBytes.length);
 
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("images", imageBytes)
@@ -237,14 +236,6 @@ public class OcrServiceClient {
         if (!apiKey.isBlank()) {
             headers.set("X-OCR-API-Key", apiKey);
         }
-    }
-
-    private static String safeFilename(String filename) {
-        if (filename == null || filename.isBlank()) {
-            return "<unnamed>";
-        }
-        String sanitized = filename.replace("\r", "").replace("\n", "");
-        return sanitized.substring(0, Math.min(sanitized.length(), 255));
     }
 
     /**

@@ -43,8 +43,11 @@ class Settings(BaseSettings):
     ocr_show_log: bool = Field(default=False, description="Show PaddleOCR logs")
 
     # Processing configuration
-    max_image_size_mb: float = Field(default=20.0, description="Maximum image size in MB")
-    max_images_per_request: int = Field(default=10, description="Maximum images per request")
+    max_image_size_mb: float = Field(default=20.0, gt=0, description="Maximum image size in MB")
+    max_upload_size_mb: float = Field(default=50.0, gt=0, description="Maximum total upload size per request in MB")
+    max_images_per_request: int = Field(default=10, ge=1, description="Maximum images per request")
+    max_pdf_pages: int = Field(default=50, ge=1, description="Maximum pages in one uploaded PDF")
+    max_ocr_pages_per_request: int = Field(default=50, ge=1, description="Maximum pages processed per request")
     processing_timeout_seconds: int = Field(default=120, description="Timeout for OCR processing in seconds")
     min_confidence_threshold: float = Field(default=0.5, description="Minimum confidence threshold for text extraction")
 
@@ -59,8 +62,6 @@ class Settings(BaseSettings):
     redis_url: Optional[str] = Field(default=None, description="Redis URL for caching")
 
     # Security
-    jwt_secret_key: Optional[str] = Field(default=None, description="JWT secret key for authentication")
-    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     api_key: Optional[str] = Field(default=None, description="API key for simple authentication")
     enable_auth: bool = Field(default=False, description="Enable authentication")
     cors_origins: str = Field(default="", description="Comma-separated allowed CORS origins")
@@ -110,6 +111,11 @@ class Settings(BaseSettings):
     def max_image_size_bytes(self) -> int:
         """Get maximum image size in bytes."""
         return int(self.max_image_size_mb * 1024 * 1024)
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        """Get maximum aggregate upload size in bytes."""
+        return int(self.max_upload_size_mb * 1024 * 1024)
 
     @property
     def ocr_languages(self) -> list[str]:

@@ -21,12 +21,18 @@ import reactor.test.StepVerifier;
 class SubjectServiceTest {
 
     private SubjectRepository repository;
+    private ao.creativemode.kixi.academic.repository.CourseSubjectRepository curriculum;
+    private ao.creativemode.kixi.shared.service.AcademicDependencyReader dependencies;
     private SubjectService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(SubjectRepository.class);
-        service = new SubjectService(repository);
+        curriculum = mock(ao.creativemode.kixi.academic.repository.CourseSubjectRepository.class);
+        dependencies = mock(ao.creativemode.kixi.shared.service.AcademicDependencyReader.class);
+        when(curriculum.countActiveBySubject(any())).thenReturn(Mono.just(0L));
+        when(dependencies.activeAssignmentsOfSubject(any())).thenReturn(Mono.just(0L));
+        service = new SubjectService(repository, curriculum, dependencies);
     }
 
     @Test
@@ -116,6 +122,32 @@ class SubjectServiceTest {
 
         StepVerifier.create(service.softDelete("XXX"))
                 .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(ApiException.class))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void softDeleteIsRefusedWhileTheSubjectIsInACurriculum() {
+        Subject existing = subject(1L, "MAT", "Matemática");
+        when(repository.findByCodeAndDeletedAtIsNull("MAT")).thenReturn(Mono.just(existing));
+        when(curriculum.countActiveBySubject(1L)).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(service.softDelete("MAT"))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatusCode()).isEqualTo(409))
+                .verify();
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void softDeleteIsRefusedWhileTheSubjectHasAssignments() {
+        Subject existing = subject(1L, "MAT", "Matemática");
+        when(repository.findByCodeAndDeletedAtIsNull("MAT")).thenReturn(Mono.just(existing));
+        when(dependencies.activeAssignmentsOfSubject(1L)).thenReturn(Mono.just(1L));
+
+        StepVerifier.create(service.softDelete("MAT"))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatusCode()).isEqualTo(409))
                 .verify();
 
         verify(repository, never()).save(any());

@@ -125,6 +125,9 @@ class QuestionWriteAuthorizationTest {
     private InstitutionTeacherRepository institutionTeachers;
 
     @MockBean
+    private ao.creativemode.kixi.academic.service.CurriculumService curriculum;
+
+    @MockBean
     private TeacherRepository teachers;
 
     @MockBean
@@ -328,6 +331,8 @@ class QuestionWriteAuthorizationTest {
                 .bodyValue(questionPayload())
                 .exchange()
                 .expectStatus().isNotFound();
+
+        verify(questions, never()).save(any(Question.class));
     }
 
     // ── Students ────────────────────────────────────────────────────────────

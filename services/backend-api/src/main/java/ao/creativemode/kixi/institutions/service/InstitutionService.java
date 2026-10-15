@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.institutions.service;
 
+import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.institutions.dto.institution.InstitutionRequest;
 import ao.creativemode.kixi.institutions.dto.institution.InstitutionResponse;
 import ao.creativemode.kixi.institutions.model.Institution;
@@ -21,17 +22,20 @@ public class InstitutionService {
     private final InstitutionSubjectRepository subjectLinks;
     private final InstitutionTeacherRepository teacherLinks;
     private final InstitutionStudentRepository studentLinks;
+    private final CourseRepository courses;
 
     public InstitutionService(
         InstitutionRepository repository,
         InstitutionSubjectRepository subjectLinks,
         InstitutionTeacherRepository teacherLinks,
-        InstitutionStudentRepository studentLinks
+        InstitutionStudentRepository studentLinks,
+        CourseRepository courses
     ) {
         this.repository = repository;
         this.subjectLinks = subjectLinks;
         this.teacherLinks = teacherLinks;
         this.studentLinks = studentLinks;
+        this.courses = courses;
     }
 
     public Flux<InstitutionResponse> findAllActive() {
@@ -40,6 +44,11 @@ public class InstitutionService {
 
     public Flux<InstitutionResponse> findAllDeleted() {
         return repository.findAllByDeletedAtIsNotNull().map(InstitutionService::toResponse);
+    }
+
+    /** Only the schools that have classes in the school year, for pickers that depend on one. */
+    public Flux<InstitutionResponse> findAllActiveWithClassesInYear(Long schoolYearId) {
+        return repository.findAllActiveWithClassesInYear(schoolYearId).map(InstitutionService::toResponse);
     }
 
     public Mono<InstitutionResponse> findByIdActive(Long id) {
@@ -83,6 +92,12 @@ public class InstitutionService {
         return repository
             .findByIdAndDeletedAtIsNull(id)
             .switchIfEmpty(Mono.error(ApiException.notFound("Institution not found")))
+            .flatMap(institution -> courses.countByInstitutionIdAndDeletedAtIsNull(id)
+                .flatMap(active -> active > 0
+                    ? Mono.<Institution>error(ApiException.conflict(
+                        "The institution still has " + active
+                            + " active course(s): remove or move them first"))
+                    : Mono.just(institution)))
             .flatMap(institution -> {
                 institution.markAsDeleted();
                 return repository.save(institution);

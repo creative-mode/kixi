@@ -6,7 +6,10 @@ import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.LoginRateLimiter;
+import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
@@ -39,13 +42,22 @@ public class AuthController {
     private final AuthService authService;
     private final GoogleOAuth2Properties googleProperties;
     private final RegistrationRateLimiter registrationRateLimiter;
+    private final LoginRateLimiter loginRateLimiter;
+    private final TrustedProxyProperties trustedProxies;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
     public AuthController(AuthService authService,
                           GoogleOAuth2Properties googleProperties,
-                          RegistrationRateLimiter registrationRateLimiter) {
+                          RegistrationRateLimiter registrationRateLimiter,
+                          LoginRateLimiter loginRateLimiter,
+                          TrustedProxyProperties trustedProxies,
+                          ApiAbuseRateLimiter abuseRateLimiter) {
         this.authService = authService;
         this.googleProperties = googleProperties;
         this.registrationRateLimiter = registrationRateLimiter;
+        this.loginRateLimiter = loginRateLimiter;
+        this.trustedProxies = trustedProxies;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /**
@@ -53,8 +65,22 @@ public class AuthController {
      * Devolve JWT e roles para uso em Authorization: Bearer &lt;token&gt;.
      */
     @PostMapping("/login")
-    public Mono<ResponseEntity<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
-        return authService.login(request.usernameOrEmail(), request.password())
+    public Mono<ResponseEntity<LoginResponse>> login(
+            ServerWebExchange exchange,
+            @Valid @RequestBody LoginRequest request) {
+        // Issue #123: /api/v1/auth/** is permitAll, so this was the one door of the
+        // platform with nothing counting how often it was knocked on. Two keys, because
+        // either alone is half a defence: the address stops one host spraying names, the
+        // identity stops many hosts converging on one account.
+        return loginRateLimiter.checkAddress("login-ip:" + clientAddress(exchange))
+                .then(loginRateLimiter.checkIdentity(
+                        "login-identity:" + request.usernameOrEmail().trim().toLowerCase(Locale.ROOT)))
+                // defer, not a bare call: `then(authService.login(...))` would assemble
+                // the credential lookup before the window had been consulted, so a
+                // refused attempt still paid for building it. Nothing subscribes under
+                // defer until the checks have completed.
+                .then(Mono.defer(() -> authService.login(
+                        request.usernameOrEmail(), request.password())))
                 .map(ResponseEntity::ok);
     }
 
@@ -67,7 +93,6 @@ public class AuthController {
             ServerWebExchange exchange,
             @Valid @RequestBody RegisterRequest request) {
         return registrationRateLimiter.check(clientAddress(exchange))
-                .then(registrationRateLimiter.check(identityKey(request)))
                 .then(authService.register(request))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
@@ -76,15 +101,23 @@ public class AuthController {
         return "identity:" + request.email().trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * The address to count an attempt against.
+     *
+     * <p>{@code X-Forwarded-For} is read only when the peer that sent it is listed in
+     * {@link TrustedProxyProperties}. That condition is the whole design and it cuts both
+     * ways: believing the header unconditionally lets any caller invent a fresh address
+     * per attempt, while ignoring it behind a real proxy makes every user on the platform
+     * share one bucket, and a login limiter counting the whole school as a single client
+     * locks everyone out at once. So the default is to believe nothing, and the operator
+     * names the proxy when the topology makes the header the honest answer.</p>
+     *
+     * <p>The leftmost entry is the original client; each proxy appends the peer it saw.
+     * It is taken only when non-blank, so a proxy that forwards an empty header falls
+     * back to the address rather than keying everyone on "".
+     */
     private String clientAddress(ServerWebExchange exchange) {
-        if (exchange == null) {
-            return "unknown";
-        }
-        InetSocketAddress remoteAddress = exchange.getRequest().getRemoteAddress();
-        if (remoteAddress == null || remoteAddress.getAddress() == null) {
-            return "unknown";
-        }
-        return remoteAddress.getAddress().getHostAddress();
+        return ao.creativemode.kixi.shared.security.ClientAddress.resolve(exchange, trustedProxies);
     }
 
     /**
@@ -98,10 +131,11 @@ public class AuthController {
         }
         String state = java.util.UUID.randomUUID().toString();
         String url = googleProperties.buildAuthorizationUrl(state);
-        return Mono.just(ResponseEntity.status(302)
-                .header(HttpHeaders.SET_COOKIE, stateCookie(state).toString())
-                .location(URI.create(url))
-                .build());
+        return abuseRateLimiter.checkLogin(clientAddress(exchange))
+                .then(Mono.fromSupplier(() -> ResponseEntity.status(302)
+                        .header(HttpHeaders.SET_COOKIE, stateCookie(state).toString())
+                        .location(URI.create(url))
+                        .build()));
     }
 
     /**
@@ -112,12 +146,14 @@ public class AuthController {
     public Mono<ResponseEntity<LoginResponse>> googleCallback(
             @RequestParam String code,
             @RequestParam(required = false) String state,
-            @CookieValue(name = STATE_COOKIE_NAME, required = false) String expectedState) {
+            @CookieValue(name = STATE_COOKIE_NAME, required = false) String expectedState,
+            ServerWebExchange exchange) {
         if (!isValidState(state, expectedState)) {
             return Mono.error(ApiException.badRequest("Invalid OAuth state"));
         }
 
-        return authService.loginWithGoogle(code)
+        return abuseRateLimiter.checkLogin(clientAddress(exchange))
+                .then(authService.loginWithGoogle(code))
                 .map(response -> ResponseEntity.ok()
                         .header(HttpHeaders.SET_COOKIE, clearStateCookie().toString())
                         .body(response));
