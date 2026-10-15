@@ -328,6 +328,8 @@ class QuestionWriteAuthorizationTest {
                 .bodyValue(questionPayload())
                 .exchange()
                 .expectStatus().isNotFound();
+
+        verify(questions, never()).save(any(Question.class));
     }
 
     // ── Students ────────────────────────────────────────────────────────────
