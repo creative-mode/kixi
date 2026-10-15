@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.academic.repository;
 
 import ao.creativemode.kixi.academic.model.Class;
+import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -70,4 +71,8 @@ public interface ClassRepository extends ReactiveCrudRepository<Class, Long> {
      * Find classes by school year
      */
     Flux<Class> findBySchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
+
+    /** Active classes of any of the courses, for the read models that group by course (#253). */
+    @Query("SELECT * FROM classes WHERE course_id IN (:courseIds) AND deleted_at IS NULL ORDER BY grade, code")
+    Flux<Class> findAllActiveByCourseIds(java.util.Collection<Long> courseIds);
 }

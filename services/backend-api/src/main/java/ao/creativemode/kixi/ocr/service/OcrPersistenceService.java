@@ -14,8 +14,6 @@ import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.academic.model.Subject;
-import ao.creativemode.kixi.academic.repository.ClassRepository;
-import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
@@ -60,9 +58,7 @@ public class OcrPersistenceService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final SchoolYearRepository schoolYearRepository;
-    private final CourseRepository courseRepository;
     private final SubjectRepository subjectRepository;
-    private final ClassRepository classRepository;
     private final OcrImageAssociationService imageAssociationService;
     private final TransactionalOperator transactionalOperator;
 
@@ -72,9 +68,7 @@ public class OcrPersistenceService {
         QuestionRepository questionRepository,
         QuestionOptionRepository optionRepository,
         SchoolYearRepository schoolYearRepository,
-        CourseRepository courseRepository,
         SubjectRepository subjectRepository,
-        ClassRepository classRepository,
         OcrImageAssociationService imageAssociationService,
         TransactionalOperator transactionalOperator
     ) {
@@ -83,9 +77,7 @@ public class OcrPersistenceService {
         this.questionRepository = questionRepository;
         this.optionRepository = optionRepository;
         this.schoolYearRepository = schoolYearRepository;
-        this.courseRepository = courseRepository;
         this.subjectRepository = subjectRepository;
-        this.classRepository = classRepository;
         this.imageAssociationService = imageAssociationService;
         this.transactionalOperator = transactionalOperator;
     }
@@ -167,69 +159,62 @@ public class OcrPersistenceService {
         // Step 1: Find or create SchoolYear
         Mono<SchoolYear> schoolYearMono = findOrCreateSchoolYear(metadata);
 
-        // Step 2: Find or create Course
-        Mono<Course> courseMono = findOrCreateCourse(metadata);
-
-        // Step 3: Find or create Subject
+        // Step 2: Find or create Subject
         Mono<Subject> subjectMono = findOrCreateSubject(metadata);
 
-        // Combine the lookups and then create Class and Statement
-        return Mono.zip(schoolYearMono, courseMono, subjectMono).flatMap(
+        // The statement is left without a course and without a class. Courses and classes belong to
+        // a school since V30 (and a course code only to be unique inside one, since V50), so
+        // creating or reusing one by the name read from the paper would either fail or attach the
+        // statement to some other school's course. The builder links it to the right class later
+        // (issue #253).
+        return Mono.zip(schoolYearMono, subjectMono).flatMap(
             tuple -> {
                 SchoolYear schoolYear = tuple.getT1();
-                Course course = tuple.getT2();
-                Subject subject = tuple.getT3();
+                Subject subject = tuple.getT2();
 
-                // Step 4: Find or create Class
-                return findOrCreateClass(metadata, course, schoolYear).flatMap(
-                    classEntity -> {
-                        // Step 5: Create Statement
-                        return createStatement(
-                            ocrResponse,
-                            metadata,
-                            createdBy,
-                            schoolYear,
-                            course,
-                            subject,
-                            classEntity
-                        ).flatMap(statement -> {
-                            // Step 6: Create Questions
-                            return createQuestions(
-                                statement.getId(),
-                                ocrResponse.questions()
-                            )
+                // Step 3: Create Statement
+                return createStatement(
+                    ocrResponse,
+                    metadata,
+                    createdBy,
+                    schoolYear,
+                    subject
+                ).flatMap(statement -> {
+                    // Step 4: Create Questions
+                    return createQuestions(
+                        statement.getId(),
+                        ocrResponse.questions()
+                    )
+                        .collectList()
+                        .flatMap(questions -> {
+                            // Step 5: Load all options
+                            List<Long> questionIds = questions
+                                .stream()
+                                .map(Question::getId)
+                                .toList();
+
+                            return optionRepository
+                                .findAllByQuestionIds(questionIds)
                                 .collectList()
-                                .flatMap(questions -> {
-                                    // Step 7: Load all options
-                                    List<Long> questionIds = questions
-                                        .stream()
-                                        .map(Question::getId)
-                                        .toList();
-
-                                    return optionRepository
-                                        .findAllByQuestionIds(questionIds)
-                                        .collectList()
-                                        .flatMap(options -> imageAssociationService
-                                            .persistQuestionImages(
-                                                questions,
-                                                ocrResponse.imagesToUpload(),
-                                                sourceFiles
-                                            )
-                                            .map(ignoredImages ->
-                                            new StatementWithRelations(
-                                                statement,
-                                                schoolYear,
-                                                course,
-                                                subject,
-                                                classEntity,
-                                                questions,
-                                                options,
-                                                ocrResponse.imagesToUpload()
-                                            )));
-                                });
+                                .flatMap(options -> imageAssociationService
+                                    .persistQuestionImages(
+                                        questions,
+                                        ocrResponse.imagesToUpload(),
+                                        sourceFiles
+                                    )
+                                    .map(ignoredImages ->
+                                    new StatementWithRelations(
+                                        statement,
+                                        schoolYear,
+                                        null,
+                                        subject,
+                                        null,
+                                        questions,
+                                        options,
+                                        ocrResponse.imagesToUpload()
+                                    )));
                         });
-                    }
-                );
+                });
             }
         );
     }
@@ -285,34 +270,6 @@ public class OcrPersistenceService {
     }
 
     /**
-     * Find or create a Course based on OCR metadata.
-     */
-    private Mono<Course> findOrCreateCourse(OcrMetadata metadata) {
-        String courseName = metadata.getCourseNameValue();
-
-        if (courseName == null || courseName.isBlank()) {
-            courseName = "TODOS"; // Default course for general exams
-        }
-
-        // Normalize course name
-        String normalizedName = normalizeCourseName(courseName);
-        final String finalCourseName = normalizedName;
-
-        return courseRepository
-            .findByNameIgnoreCaseAndDeletedAtIsNull(normalizedName)
-            .next()
-            .switchIfEmpty(
-                Mono.defer(() -> {
-                    log.info("Creating new course from OCR metadata");
-                    Course newCourse = new Course();
-                    newCourse.setName(finalCourseName);
-                    newCourse.setCode(generateCourseCode(finalCourseName));
-                    return courseRepository.save(newCourse);
-                })
-            );
-    }
-
-    /**
      * Find or create a Subject based on OCR metadata.
      */
     private Mono<Subject> findOrCreateSubject(OcrMetadata metadata) {
@@ -347,85 +304,6 @@ public class OcrPersistenceService {
             );
     }
 
-    /**
-     * Find or create a Class based on OCR metadata.
-     */
-    private Mono<Class> findOrCreateClass(
-        OcrMetadata metadata,
-        Course course,
-        SchoolYear schoolYear
-    ) {
-        String gradeStr = metadata.getClassGradeValue();
-
-        if (gradeStr == null || gradeStr.isBlank()) {
-            gradeStr = "12"; // Default to 12th grade for exams
-            log.warn("Class grade not extracted, using default");
-        }
-
-        // Parse grade to Integer
-        Integer grade;
-        try {
-            grade = Integer.parseInt(gradeStr.replaceAll("[^0-9]", ""));
-        } catch (NumberFormatException e) {
-            grade = 12; // Default to 12th grade
-            log.warn("Could not parse OCR class grade, using default: 12");
-        }
-
-        final Integer finalGrade = grade;
-        final String gradeCode = String.valueOf(grade);
-
-        // Try to find with course first
-        if (course != null && course.getId() != null) {
-            return classRepository
-                .findByGradeAndCourseIdAndSchoolYearIdAndDeletedAtIsNull(
-                    grade,
-                    course.getId(),
-                    schoolYear.getId()
-                )
-                .next()
-                .switchIfEmpty(
-                    Mono.defer(() -> {
-                        log.info(
-                            "Creating new class: grade={}, courseId={}, schoolYearId={}",
-                            finalGrade,
-                            course.getId(),
-                            schoolYear.getId()
-                        );
-                        Class newClass = new Class();
-                        newClass.setGrade(finalGrade);
-                        newClass.setCourseId(course.getId());
-                        newClass.setSchoolYearId(schoolYear.getId());
-                        newClass.setCode(
-                            generateClassCode(gradeCode, course.getCode())
-                        );
-                        return classRepository.save(newClass);
-                    })
-                );
-        }
-
-        // Find without course
-        return classRepository
-            .findByGradeAndSchoolYearIdAndDeletedAtIsNull(
-                grade,
-                schoolYear.getId()
-            )
-            .next()
-            .switchIfEmpty(
-                Mono.defer(() -> {
-                    log.info(
-                        "Creating new class: grade={}, schoolYearId={}",
-                        finalGrade,
-                        schoolYear.getId()
-                    );
-                    Class newClass = new Class();
-                    newClass.setGrade(finalGrade);
-                    newClass.setSchoolYearId(schoolYear.getId());
-                    newClass.setCode(generateClassCode(gradeCode, null));
-                    return classRepository.save(newClass);
-                })
-            );
-    }
-
     // =========================================================================
     // Statement and Questions Creation
     // =========================================================================
@@ -438,9 +316,7 @@ public class OcrPersistenceService {
         OcrMetadata metadata,
         Long createdBy,
         SchoolYear schoolYear,
-        Course course,
-        Subject subject,
-        Class classEntity
+        Subject subject
     ) {
         Statement statement = new Statement();
 
@@ -449,7 +325,7 @@ public class OcrPersistenceService {
             statement.setTitle(metadata.title().value());
         } else {
             statement.setTitle(
-                buildDefaultTitle(metadata, subject, classEntity, schoolYear)
+                buildDefaultTitle(metadata, subject, schoolYear)
             );
         }
 
@@ -504,9 +380,7 @@ public class OcrPersistenceService {
 
         // Set foreign keys
         statement.setSchoolYearId(schoolYear.getId());
-        statement.setCourseId(course != null ? course.getId() : null);
         statement.setSubjectId(subject.getId());
-        statement.setClassId(classEntity.getId());
         statement.setCreatedBy(createdBy);
 
         // OCR metadata
@@ -650,14 +524,6 @@ public class OcrPersistenceService {
     // =========================================================================
 
     /**
-     * Normalize course name for consistent storage.
-     */
-    private String normalizeCourseName(String name) {
-        if (name == null) return null;
-        return name.trim().toUpperCase();
-    }
-
-    /**
      * Normalize subject name with proper Portuguese capitalization.
      */
     private String normalizeSubjectName(String name) {
@@ -700,16 +566,6 @@ public class OcrPersistenceService {
     }
 
     /**
-     * Generate course code from name.
-     */
-    private String generateCourseCode(String name) {
-        if (name == null) return "GEN";
-        return name.length() > 3
-            ? name.substring(0, 3).toUpperCase()
-            : name.toUpperCase();
-    }
-
-    /**
      * Generate subject code from name.
      */
     private String generateSubjectCode(String name) {
@@ -734,22 +590,11 @@ public class OcrPersistenceService {
     }
 
     /**
-     * Generate class code.
-     */
-    private String generateClassCode(String grade, String courseCode) {
-        if (courseCode != null && !courseCode.isBlank()) {
-            return grade + "-" + courseCode;
-        }
-        return grade + "-GEN";
-    }
-
-    /**
      * Build a default title from metadata.
      */
     private String buildDefaultTitle(
         OcrMetadata metadata,
         Subject subject,
-        Class classEntity,
         SchoolYear schoolYear
     ) {
         StringBuilder title = new StringBuilder("Prova de Exame");
@@ -758,8 +603,10 @@ public class OcrPersistenceService {
             title.append(" de ").append(subject.getName());
         }
 
-        if (classEntity != null) {
-            title.append(" ").append(classEntity.getGrade()).append("ª Classe");
+        String grade = metadata.getClassGradeValue() == null
+            ? "" : metadata.getClassGradeValue().replaceAll("[^0-9]", "");
+        if (!grade.isEmpty()) {
+            title.append(" ").append(grade).append("ª Classe");
         }
 
         if (metadata.variant() != null && metadata.variant().value() != null) {

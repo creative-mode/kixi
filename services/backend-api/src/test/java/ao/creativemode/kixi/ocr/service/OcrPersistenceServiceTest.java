@@ -20,12 +20,8 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.ConfidenceField;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
-import ao.creativemode.kixi.academic.model.Class;
-import ao.creativemode.kixi.academic.model.Course;
 import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.academic.model.Subject;
-import ao.creativemode.kixi.academic.repository.ClassRepository;
-import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
@@ -42,9 +38,7 @@ class OcrPersistenceServiceTest {
     private QuestionRepository questionRepository;
     private QuestionOptionRepository optionRepository;
     private SchoolYearRepository schoolYearRepository;
-    private CourseRepository courseRepository;
     private SubjectRepository subjectRepository;
-    private ClassRepository classRepository;
     private OcrImageAssociationService imageAssociationService;
     private OcrPersistenceService service;
 
@@ -55,9 +49,7 @@ class OcrPersistenceServiceTest {
         questionRepository = mock(QuestionRepository.class);
         optionRepository = mock(QuestionOptionRepository.class);
         schoolYearRepository = mock(SchoolYearRepository.class);
-        courseRepository = mock(CourseRepository.class);
         subjectRepository = mock(SubjectRepository.class);
-        classRepository = mock(ClassRepository.class);
         imageAssociationService = mock(OcrImageAssociationService.class);
 
         service = new OcrPersistenceService(
@@ -66,9 +58,7 @@ class OcrPersistenceServiceTest {
             questionRepository,
             optionRepository,
             schoolYearRepository,
-            courseRepository,
             subjectRepository,
-            classRepository,
             imageAssociationService,
             // The OCR HTTP call must run outside the transaction; only the
             // persistence step is wrapped. Here the operator just invokes the
@@ -133,54 +123,50 @@ class OcrPersistenceServiceTest {
     // success-path fixture the OcrResponse record would otherwise require.
     // =========================================================================
 
+    // Courses and classes belong to a school, which the paper does not say (issue #253): the
+    // legacy path leaves the statement without them instead of creating or borrowing one.
     @Test
-    void findOrCreateClassPicksFirstMatchInsteadOfErroringOnDuplicateRows() throws Exception {
-        Course course = new Course();
-        course.setId(1L);
-        SchoolYear schoolYear = new SchoolYear();
-        schoolYear.setId(1L);
+    void persistingAnOcrResponseLeavesTheStatementWithoutCourseAndClass() {
+        Subject subject = new Subject();
+        subject.setId(3L);
+        subject.setName("Matemática");
+        SchoolYear year = new SchoolYear();
+        year.setId(2L);
+        year.setStartYear(2025);
+        year.setEndYear(2026);
+        when(schoolYearRepository.findByStartYearAndEndYearAndDeletedAtIsNull(2025, 2026))
+            .thenReturn(Mono.just(year));
+        when(subjectRepository.findByNameIgnoreCaseAndDeletedAtIsNull("Matemática"))
+            .thenReturn(Flux.just(subject));
+        when(statementRepository.save(org.mockito.ArgumentMatchers.any(ao.creativemode.kixi.exams.model.Statement.class)))
+            .thenAnswer(invocation -> {
+                ao.creativemode.kixi.exams.model.Statement saved = invocation.getArgument(0);
+                saved.setId(9L);
+                return Mono.just(saved);
+            });
+        when(optionRepository.findAllByQuestionIds(anyList())).thenReturn(Flux.empty());
+        when(imageAssociationService.persistQuestionImages(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(Mono.just(List.of()));
 
-        Class firstMatch = new Class();
-        firstMatch.setId(1L);
-        Class secondMatch = new Class();
-        secondMatch.setId(4L);
-        when(classRepository.findByGradeAndCourseIdAndSchoolYearIdAndDeletedAtIsNull(12, 1L, 1L))
-            .thenReturn(Flux.just(firstMatch, secondMatch));
+        OcrMetadata metadata = new OcrMetadata(
+            null, null, null, null, null,
+            new ConfidenceField<Integer>(2025, 0.9), new ConfidenceField<Integer>(2026, 0.9),
+            new ConfidenceField<String>("12", 0.9), new ConfidenceField<String>("INFORMÁTICA", 0.9),
+            new ConfidenceField<String>("Matemática", 0.9),
+            null, null, null, null, null, null);
+        OcrResponse response = new OcrResponse(
+            "success", "req-1", 10, 0.9, null, metadata, List.of(), List.of(), List.of(), List.of(), null);
 
-        OcrMetadata metadata = metadataWithGrade("12");
-
-        Method findOrCreateClass = OcrPersistenceService.class.getDeclaredMethod(
-            "findOrCreateClass", OcrMetadata.class, Course.class, SchoolYear.class);
-        findOrCreateClass.setAccessible(true);
-
-        @SuppressWarnings("unchecked")
-        Mono<Class> result = (Mono<Class>) findOrCreateClass.invoke(service, metadata, course, schoolYear);
-
-        StepVerifier.create(result)
-            .assertNext(resolved -> assertThat(resolved.getId()).isEqualTo(1L))
-            .verifyComplete();
-    }
-
-    @Test
-    void findOrCreateCoursePicksFirstMatchInsteadOfErroringOnDuplicateRows() throws Exception {
-        Course firstMatch = new Course();
-        firstMatch.setId(1L);
-        Course secondMatch = new Course();
-        secondMatch.setId(9L);
-        when(courseRepository.findByNameIgnoreCaseAndDeletedAtIsNull("TODOS"))
-            .thenReturn(Flux.just(firstMatch, secondMatch));
-
-        OcrMetadata metadata = metadataWithCourseName("TODOS");
-
-        Method findOrCreateCourse = OcrPersistenceService.class.getDeclaredMethod(
-            "findOrCreateCourse", OcrMetadata.class);
-        findOrCreateCourse.setAccessible(true);
-
-        @SuppressWarnings("unchecked")
-        Mono<Course> result = (Mono<Course>) findOrCreateCourse.invoke(service, metadata);
-
-        StepVerifier.create(result)
-            .assertNext(resolved -> assertThat(resolved.getId()).isEqualTo(1L))
+        StepVerifier.create(service.persistOcrResponse(response, 7L, List.of()))
+            .assertNext(result -> {
+                assertThat(result.statement().getCourseId()).isNull();
+                assertThat(result.statement().getClassId()).isNull();
+                assertThat(result.course()).isNull();
+                assertThat(result.classEntity()).isNull();
+                assertThat(result.statement().getSubjectId()).isEqualTo(3L);
+                assertThat(result.statement().getTitle()).contains("12ª Classe");
+            })
             .verifyComplete();
     }
 

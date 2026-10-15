@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.academic.service;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.AcademicDependencyReader;
 import ao.creativemode.kixi.academic.dto.classe.ClassRequest;
 import ao.creativemode.kixi.academic.dto.classe.ClassResponse;
 import ao.creativemode.kixi.academic.model.Class;
@@ -20,14 +21,17 @@ public class ClassService {
     private final ClassRepository repository;
     private final CourseRepository courseRepository;
     private final SchoolYearRepository schoolYearRepository;
+    private final AcademicDependencyReader dependencies;
 
     public ClassService(
             ClassRepository repository,
             CourseRepository courseRepository,
-            SchoolYearRepository schoolYearRepository) {
+            SchoolYearRepository schoolYearRepository,
+            AcademicDependencyReader dependencies) {
         this.repository = repository;
         this.courseRepository = courseRepository;
         this.schoolYearRepository = schoolYearRepository;
+        this.dependencies = dependencies;
     }
 
     // Retrieve all active classes
@@ -89,7 +93,8 @@ public class ClassService {
     public Mono<ClassResponse> update(Long id, ClassRequest data) {
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("class with this id not found")))
-                .flatMap(entity -> requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())
+                .flatMap(entity -> requireTheMoveIsSafe(entity, data)
+                        .then(Mono.defer(() -> requireCourseAndSchoolYear(data.courseId(), data.schoolYearId())))
                         .flatMap(institutionId -> {
                             entity.setCode(data.code());
                             entity.setGrade(data.grade());
@@ -101,6 +106,27 @@ public class ClassService {
                 .flatMap(this::toResponse)
                 .onErrorMap(DataIntegrityViolationException.class,
                         e -> ApiException.conflict("Class violates a database constraint"));
+    }
+
+    /**
+     * Changing the course or the school year of a class that already has people in it would leave
+     * its enrollments and teaching assignments pointing at the old course (its curriculum) or the old
+     * year (their {@code school_year_id}). Refused while there are any; code and grade can still change.
+     */
+    private Mono<Void> requireTheMoveIsSafe(Class entity, ClassRequest data) {
+        boolean moves = !java.util.Objects.equals(entity.getCourseId(), data.courseId())
+                || !java.util.Objects.equals(entity.getSchoolYearId(), data.schoolYearId());
+        if (!moves) {
+            return Mono.empty();
+        }
+        return Mono.zip(dependencies.activeEnrollmentsOfClass(entity.getId()),
+                        dependencies.activeAssignmentsOfClass(entity.getId()))
+                .flatMap(counts -> counts.getT1() + counts.getT2() == 0
+                        ? Mono.<Void>empty()
+                        : Mono.error(ApiException.conflict(
+                                "This class has " + counts.getT1() + " active enrollment(s) and "
+                                        + counts.getT2() + " active teaching assignment(s): "
+                                        + "its course and school year cannot change while they exist")));
     }
 
     /**
@@ -127,6 +153,16 @@ public class ClassService {
     public Mono<Void> softDelete(Long id){
         return repository.findByIdAndDeletedAtIsNull(id)
                 .switchIfEmpty(Mono.error(ApiException.notFound("class with this id not found")))
+                // Nothing cascades (issue #253): a class with students or teachers is refused,
+                // with the numbers, so the owner moves them first.
+                .flatMap(entity -> Mono.zip(dependencies.activeEnrollmentsOfClass(entity.getId()),
+                                dependencies.activeAssignmentsOfClass(entity.getId()))
+                        .flatMap(counts -> counts.getT1() + counts.getT2() == 0
+                                ? Mono.just(entity)
+                                : Mono.<Class>error(ApiException.conflict(
+                                        "This class still has " + counts.getT1() + " active enrollment(s) and "
+                                                + counts.getT2() + " active teaching assignment(s): "
+                                                + "cancel or move them first"))))
                 .flatMap(entity->{
                     entity.markAsDeleted();
                     return repository.save(entity);

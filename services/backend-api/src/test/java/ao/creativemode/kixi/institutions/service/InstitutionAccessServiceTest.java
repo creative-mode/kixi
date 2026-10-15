@@ -165,7 +165,8 @@ class InstitutionAccessServiceTest {
         // test told it to do. An administrator who never taught has no teacher
         // profile, and must still be able to author.
         TeachingAssignmentService realAssignments = new TeachingAssignmentService(
-                assignmentRepository, teachers, classes, subjects);
+                assignmentRepository, teachers, classes, subjects, teacherLinks,
+                mock(ao.creativemode.kixi.academic.service.CurriculumService.class));
         InstitutionAccessService wired = new InstitutionAccessService(
                 institutions, subjectLinks, teacherLinks, teachers, realAssignments);
 
@@ -180,7 +181,8 @@ class InstitutionAccessServiceTest {
     @Test
     void anAdministratorWithATeacherProfileAndNoAssignmentIsNotStopped() {
         TeachingAssignmentService realAssignments = new TeachingAssignmentService(
-                assignmentRepository, teachers, classes, subjects);
+                assignmentRepository, teachers, classes, subjects, teacherLinks,
+                mock(ao.creativemode.kixi.academic.service.CurriculumService.class));
         InstitutionAccessService wired = new InstitutionAccessService(
                 institutions, subjectLinks, teacherLinks, teachers, realAssignments);
 
