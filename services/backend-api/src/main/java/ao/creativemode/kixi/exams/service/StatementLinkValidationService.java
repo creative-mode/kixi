@@ -6,6 +6,7 @@ import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
 import ao.creativemode.kixi.academic.repository.TermRepository;
+import ao.creativemode.kixi.academic.service.CurriculumService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.util.function.Function;
 import org.springframework.stereotype.Service;
@@ -31,22 +32,43 @@ public class StatementLinkValidationService {
     private final SubjectRepository subjects;
     private final CourseRepository courses;
     private final ClassRepository classes;
+    private final CurriculumService curriculum;
 
     public StatementLinkValidationService(
         SchoolYearRepository schoolYears,
         TermRepository terms,
         SubjectRepository subjects,
         CourseRepository courses,
-        ClassRepository classes
+        ClassRepository classes,
+        CurriculumService curriculum
     ) {
         this.schoolYears = schoolYears;
         this.terms = terms;
         this.subjects = subjects;
         this.courses = courses;
         this.classes = classes;
+        this.curriculum = curriculum;
     }
 
     public Mono<Void> validate(
+        Long schoolYearId,
+        Long termId,
+        Long classId,
+        Long subjectId,
+        Long courseId
+    ) {
+        return validate(null, schoolYearId, termId, classId, subjectId, courseId);
+    }
+
+    /**
+     * As above, and the school has to agree with the rest (issue #253): the class and the course
+     * must belong to {@code institutionId} when it is given, and the subject has to be in the
+     * curriculum of the class. A statement without a class is checked against the school catalog by
+     * the access service instead. Applied when a statement is written or edited; the statements
+     * already stored are not revisited.
+     */
+    public Mono<Void> validate(
+        Long institutionId,
         Long schoolYearId,
         Long termId,
         Long classId,
@@ -57,7 +79,34 @@ public class StatementLinkValidationService {
             .then(mustExist(terms::findByIdAndDeletedAtIsNull, termId, "The term"))
             .then(mustExist(subjects::findByIdAndDeletedAtIsNull, subjectId, "The subject"))
             .then(mustExist(courses::findByIdAndDeletedAtIsNull, courseId, "The course"))
-            .then(mustBelongToItsOwnYearAndCourse(classId, schoolYearId, courseId));
+            .then(mustBelongToItsOwnYearAndCourse(classId, schoolYearId, courseId))
+            .then(mustBelongToTheSchool(institutionId, classId, courseId))
+            .then(mustBeInTheCurriculum(classId, subjectId));
+    }
+
+    private Mono<Void> mustBelongToTheSchool(Long institutionId, Long classId, Long courseId) {
+        if (institutionId == null) {
+            return Mono.empty();
+        }
+        Mono<Void> classOk = classId == null ? Mono.empty()
+            : Mono.defer(() -> classes.findByIdAndDeletedAtIsNull(classId))
+                .filter(klass -> !institutionId.equals(klass.getInstitutionId()))
+                .flatMap(klass -> Mono.<Void>error(ApiException.unprocessableEntity(
+                    "The class belongs to another institution than the statement")));
+        Mono<Void> courseOk = courseId == null ? Mono.empty()
+            : Mono.defer(() -> courses.findByIdAndDeletedAtIsNull(courseId))
+                .filter(course -> !institutionId.equals(course.getInstitutionId()))
+                .flatMap(course -> Mono.<Void>error(ApiException.unprocessableEntity(
+                    "The course belongs to another institution than the statement")));
+        return classOk.then(courseOk);
+    }
+
+    private Mono<Void> mustBeInTheCurriculum(Long classId, Long subjectId) {
+        if (classId == null || subjectId == null) {
+            return Mono.empty();
+        }
+        return Mono.defer(() -> classes.findByIdAndDeletedAtIsNull(classId))
+            .flatMap(klass -> curriculum.requireInClassCurriculum(klass, subjectId));
     }
 
     /**

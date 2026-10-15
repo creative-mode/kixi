@@ -446,6 +446,7 @@ public class StatementService {
             .flatMap(statement -> requireCanEdit(statement, accountId, admin).thenReturn(statement))
             .flatMap(statement -> requireCanWriteAs(request, accountId, admin).thenReturn(statement))
             .flatMap(statement -> validator.validate(
+                    request.institutionId(),
                     request.schoolYearId(),
                     request.termId(),
                     request.classId(),

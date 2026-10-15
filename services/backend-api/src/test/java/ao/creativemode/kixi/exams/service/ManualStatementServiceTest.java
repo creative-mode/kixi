@@ -63,9 +63,12 @@ class ManualStatementServiceTest {
         schoolYears = mock(SchoolYearRepository.class);
         // The real validator: the rule that a teacher must name a class is the
         // point of several tests here and would say nothing if stubbed out.
+        ao.creativemode.kixi.academic.service.CurriculumService curriculum =
+                mock(ao.creativemode.kixi.academic.service.CurriculumService.class);
+        when(curriculum.requireInClassCurriculum(any(), any())).thenReturn(Mono.empty());
         validator = new StatementLinkValidationService(
                 schoolYears, mock(TermRepository.class),
-                subjects, mock(CourseRepository.class), classes);
+                subjects, mock(CourseRepository.class), classes, curriculum);
         service = new ManualStatementService(statements, questions, options, access, validator);
         givenTheAcademicReferencesExist();
     }
@@ -88,6 +91,8 @@ class ManualStatementServiceTest {
         // classes.course_id is NOT NULL in V10, so a fixture without it is a trap
         // for the validator's course branch.
         klass.setCourseId(COURSE_ID);
+        // The school of the statement (institutionId 1 in the request): the class has to be its own.
+        klass.setInstitutionId(1L);
         when(classes.findByIdAndDeletedAtIsNull(CLASS_ID)).thenReturn(Mono.just(klass));
     }
 
