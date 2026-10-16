@@ -4,7 +4,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-import ao.creativemode.kixi.donations.service.UploadSniffer;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;

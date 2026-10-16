@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.donations.service;
+package ao.creativemode.kixi.shared.storage;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.io.ByteArrayInputStream;
