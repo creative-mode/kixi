@@ -1,5 +1,12 @@
 # Vocabulário de provas escolares angolanas que a lista de frequências (legendas) não traz.
 # Uma palavra por linha, minúsculas, com acentos. Só entram palavras que faltam; as outras mantêm a frequência original.
+#
+# Por que é que este suplemento existe, e por que é que importa: o léxico de origem são
+# legendas de filmes, e nele "espira" não está. Sem estar, o reparador de texto não a
+# reconhece como palavra e "corrige-a" para "espia", que é o verbo espiar e está na lista.
+# Medido na prova de fotografia de Física (tests/fixtures/ogi_12a_fisica_serie_a.jpeg):
+# o Paddle lia 6 "espira" e o nosso código devolvia 6 "espia". Uma prova de electromagnetismo
+# em que a bobina se chama "espia".
 lectivo
 lectiva
 lectivos
@@ -69,3 +76,139 @@ huambo
 lobito
 cabinda
 namibe
+
+# Vocabulário científico das disciplinas do programa, medido: são as palavras do
+# tests/fixtures/pt_clean_corpus.txt e da prova de Física de 12ª que o léxico de legendas
+# não traz. Faltar uma delas não é neutro, é o enunciado sair com a palavra trocada.
+# Só entram as que são português correcto. Não entram as que o motor leu mal:
+# "deslcamento" é um erro de leitura e tem de continuar a ser corrigido para "deslocamento",
+# e "bmax", "aaixas", "minttics" ou "itel" são lixo de carimbo que ninguém deve proteger.
+# A grafia é a europeia, que é a que Angola segue: rectângulo, polinómio, vector.
+espira
+vectores
+actuada
+perpendicular
+electromagnéticos
+catetos
+hipotenusa
+concavidade
+verticalmente
+rectângulo
+quadrática
+graficamente
+gráficas
+polinómio
+numérico
+algarismos
+adverbiais
+analítica
+cinética
+gravítica
+homeotérmicos
+fotossíntese
+clorofiladas
+clorídrico
+hidróxido
+síntese
+dissipada
+finita
+unitária
+mamárias
+vertebrados
+vivíparos
+organelos
+consumíveis
+algoritmo
+cuito
+malanje
+bactérias
+fungos
+leveduras
+enxofre
+ferro
+cobre
+magnésio
+potássio
+sódio
+cloro
+nitrogénio
+oxigénio
+argila
+calcário
+gneiss
+granito
+basalto
+erosão
+rochedo
+vertente
+humidade
+amplitude
+frequência
+temperatura
+velocidade
+aceleração
+distância
+massa
+volume
+densidade
+pressão
+energia
+potência
+corrente
+tensão
+resistência
+carga
+campo
+indução
+electrão
+protão
+neutrão
+átomo
+molécula
+substância
+composto
+reação
+equilíbrio
+solução
+concentração
+diluição
+filtração
+destilação
+evaporação
+condensação
+fusão
+solidificação
+conjuntivo
+análise
+hipótese
+conclusão
+interpretação
+explicação
+comparações
+pertinentes
+subordinadas
+propostos
+proclamada
+patrimonial
+argumentativo
+narrativo
+predicado
+adjetivo
+adjetiva
+verbos
+orgânica
+inorgânica
+alíquota
+biomas
+ecossistema
+transpiração
+germinação
+polinização
+hereditário
+genética
+cromossoma
+tecidos
+órgãos
+sistemas
+citologia
+ecologia
