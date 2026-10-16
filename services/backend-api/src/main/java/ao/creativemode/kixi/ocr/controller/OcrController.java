@@ -5,6 +5,7 @@ import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.ocr.dto.ExamExtractionResponse;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
+import ao.creativemode.kixi.ocr.service.OcrImageAssociationService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -63,17 +64,20 @@ public class OcrController {
     private final OcrPersistenceService ocrPersistenceService;
     private final CurrentAccountService currentAccountService;
     private final ApiAbuseRateLimiter abuseRateLimiter;
+    private final OcrImageAssociationService imageAssociationService;
 
     public OcrController(
         OcrServiceClient ocrServiceClient,
         OcrPersistenceService ocrPersistenceService,
         CurrentAccountService currentAccountService,
-        ApiAbuseRateLimiter abuseRateLimiter
+        ApiAbuseRateLimiter abuseRateLimiter,
+        OcrImageAssociationService imageAssociationService
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.ocrPersistenceService = ocrPersistenceService;
         this.currentAccountService = currentAccountService;
         this.abuseRateLimiter = abuseRateLimiter;
+        this.imageAssociationService = imageAssociationService;
     }
 
     /**
@@ -255,13 +259,17 @@ public class OcrController {
                     fileList.size()
                 );
 
-                // Call OCR service
-                return ocrServiceClient.extractText(fileList);
+                // Keep the source bytes: the figures the OCR finds are cropped from them for the builder.
+                return bufferFilesForPersistence(fileList).flatMap(uploaded ->
+                    ocrServiceClient.extractTextFromUploadedFiles(uploaded)
+                        .map(ocrResponse -> new ExtractedExam(ocrResponse, uploaded)));
             })
-            .map(ocrResponse -> {
-                // Convert to structured exam format
-                ExamExtractionResponse examResponse =
-                    ExamExtractionResponse.fromOcrResponse(ocrResponse);
+            .map(extracted -> {
+                OcrResponse ocrResponse = extracted.response();
+                // Convert to structured exam format, with each figure next to its question
+                ExamExtractionResponse examResponse = ExamExtractionResponse.fromOcrResponse(
+                    ocrResponse,
+                    imageAssociationService.previewCrops(ocrResponse.imagesToUpload(), extracted.files()));
 
                 if (ocrResponse.isSuccess()) {
                     return ResponseEntity.ok(examResponse);
@@ -424,6 +432,8 @@ public class OcrController {
                     error.getClass().getSimpleName())
             );
     }
+
+    private record ExtractedExam(OcrResponse response, List<OcrUploadedFile> files) {}
 
     private Mono<List<OcrUploadedFile>> bufferFilesForPersistence(List<FilePart> files) {
         return Flux.fromIterable(files)

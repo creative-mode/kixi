@@ -313,8 +313,23 @@ public record OcrResponse(
 
         @JsonProperty("contractVersion") Integer contractVersion,
 
-        @JsonProperty("sourceFileIndex") Integer sourceFileIndex
+        @JsonProperty("sourceFileIndex") Integer sourceFileIndex,
+
+        /** figure, table or formula for a region found by the layout model; null for the header and signature. */
+        String kind,
+
+        Double score
     ) {
+        /** The shape before the layout model: no kind and no score. */
+        public ImageToUpload(
+            String suggestedFilename, String description, String region, Integer pageIndex,
+            List<Integer> bbox, Integer sourceWidth, Integer sourceHeight, Integer contractVersion,
+            Integer sourceFileIndex
+        ) {
+            this(suggestedFilename, description, region, pageIndex, bbox, sourceWidth, sourceHeight,
+                contractVersion, sourceFileIndex, null, null);
+        }
+
         /**
          * Check if this is a header/logo image.
          */
