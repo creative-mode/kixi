@@ -1125,6 +1125,7 @@ class OCRPostprocessor:
         questions: List[ExtractedQuestion] = []
         draft: Optional[_Draft] = None
         blocks = self._repair_lost_labels(blocks)
+        blocks = self._label_by_cotacao(blocks)
 
         def close() -> None:
             nonlocal draft
@@ -1216,6 +1217,58 @@ class OCRPostprocessor:
 
         close()
         return questions
+
+    _UNIT_END = re.compile(r"\(\s*\d+(?:[.,]\d+)?\s*valores?\s*\)\s*\.?\s*$", re.IGNORECASE)
+
+    def _label_by_cotacao(self, blocks: List[TextBlock]) -> List[TextBlock]:
+        """Number the questions of a paper whose numbers the photo did not carry, by their «( N VALORES )» ends.
+
+        On a curved page the numbers of the left margin are the first thing the detector loses: the thorough read of
+        the parcelar exam has every stem but only the "4" and the "5-". Such a paper marks the end of each question
+        with its cotação, so a line after one starts the next question, unless it is the next alínea (a), b)…).
+        It only runs when no question carries a number, which is when the stems would otherwise be lost, and only
+        when every question would start on a capital letter: a lowercase start is the tail of a stem whose first
+        line was not read, and numbering that would turn fragments into questions.
+        """
+        ends = [i for i, b in enumerate(blocks) if self._UNIT_END.search(b.text.strip())]
+        if len(ends) < 2:
+            return blocks
+
+        labeled, last = 0, 0
+        for block in blocks:
+            info = self._detect_question_number(block.text.strip(), expected=last + 1)
+            if info is not None:
+                labeled, last = labeled + 1, info[0]
+        if labeled >= 1:
+            return blocks
+
+        def body_like(block: TextBlock) -> bool:
+            return len(block.text.strip()) >= 25 and block.confidence >= self.min_confidence_threshold
+
+        start = ends[0]
+        while start > 0 and body_like(blocks[start - 1]):
+            start -= 1
+
+        starts = [start]
+        for i in range(start, len(blocks) - 1):
+            if self._UNIT_END.search(blocks[i].text.strip()):
+                following = blocks[i + 1].text.strip()
+                if not self._ALINEA_LABEL.match(following) and not re.match(r"^[a-z](?=[A-ZÀ-ÝÇ])", following):
+                    starts.append(i + 1)
+        if len(starts) < 2 or any(not re.match(r"^[A-ZÀ-ÝÇ0-9]", blocks[i].text.strip()) for i in starts):
+            return blocks
+
+        out = list(blocks)
+        number = 0
+        for i in starts:
+            text = blocks[i].text.strip()
+            info = self._detect_question_number(text, expected=number + 1)
+            if info is not None:
+                number = info[0]
+            else:
+                number += 1
+                out[i] = replace(blocks[i], text=f"{number}. {text}")
+        return out
 
     _LEADING_NOISE = re.compile(r"^[.,;:·•\-–—]+\s*(?=[A-ZÀ-ÝÇ][a-zà-ÿç])")
     _ALINEA_LABEL = re.compile(r"^\(?([a-z])\s*[.)]")
