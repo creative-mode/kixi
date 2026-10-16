@@ -4,8 +4,11 @@ uvicorn[standard]==0.27.1
 python-multipart==0.0.9
 
 # PaddleOCR and dependencies
-paddlepaddle==2.6.2
-paddleocr==2.7.3
+# paddlepaddle 3.2.2, not 3.3.x: with 3.3.1 the oneDNN kernels die on any real page (ConvertPirAttribute2RuntimeAttribute
+# not support), which makes OCR 3 to 10 times slower on CPU. paddleocr 3.3.3 is the release built against 3.2.x.
+paddlepaddle==3.2.2
+paddleocr==3.3.3
+# OCR_PIPELINE=vl (PaddleOCR-VL, for a machine with a GPU) also needs the doc-parser extra: paddleocr[doc-parser]==3.3.3
 
 # Image processing
 opencv-python-headless==4.9.0.80

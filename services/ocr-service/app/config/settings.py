@@ -36,21 +36,51 @@ class Settings(BaseSettings):
     # OCR configuration
     ocr_lang: str = Field(default="pt", description="Primary OCR language (pt, en, etc.)")
     ocr_use_gpu: bool = Field(default=False, description="Use GPU for OCR processing")
-    ocr_use_angle_cls: bool = Field(default=True, description="Use angle classification for rotated text")
+    ocr_use_angle_cls: bool = Field(default=False, description="Use angle classification for rotated text")
     ocr_det_model_dir: Optional[str] = Field(default=None, description="Custom detection model directory")
     ocr_rec_model_dir: Optional[str] = Field(default=None, description="Custom recognition model directory")
     ocr_cls_model_dir: Optional[str] = Field(default=None, description="Custom classification model directory")
     ocr_show_log: bool = Field(default=False, description="Show PaddleOCR logs")
     ocr_enable_mkldnn: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Enable the oneDNN accelerated kernels. Off by default because with "
-            "paddle 3.3.1 the detection model dies on any real page with "
-            "NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support "
-            "[pir::ArrayAttribute<pir::DoubleAttribute>]. Turn it back on only if a "
-            "Paddle upgrade fixes that, and measure before believing it."
+            "Use the oneDNN accelerated kernels on CPU. Needs paddlepaddle 3.2.x: with 3.3.1 the detection "
+            "model dies on any real page with NotImplementedError: ConvertPirAttribute2RuntimeAttribute not "
+            "support, and without oneDNN a page takes 30 to 140 s instead of 9 to 11 s."
         ),
     )
+    ocr_det_model_name: str = Field(
+        default="PP-OCRv5_mobile_det",
+        description="Text detection model (PaddleOCR 3.x name). The mobile one is as good on photographed exams and much faster.",
+    )
+    ocr_rec_model_name: str = Field(
+        default="latin_PP-OCRv5_mobile_rec",
+        description="Text recognition model. The latin one covers Portuguese accents; PP-OCRv4 has no pt model in PaddleOCR 3.x.",
+    )
+    ocr_det_thresh: Optional[float] = Field(
+        default=None, gt=0, lt=1,
+        description="Pixel threshold of the text detector; unset keeps PaddleOCR's 0.3. Lowering it on the mobile model found more lines but also merged boxes and cost questions on the real exams, so it stays opt-in.",
+    )
+    ocr_det_box_thresh: Optional[float] = Field(
+        default=None, gt=0, lt=1,
+        description="Box score threshold of the text detector; unset keeps PaddleOCR's 0.6. Opt-in for the same reason as ocr_det_thresh.",
+    )
+    ocr_fallback_det_model_name: Optional[str] = Field(
+        default="PP-OCRv5_server_det",
+        description="Detector for a second read when the fast one finds fewer than ocr_min_questions questions. Slower (25 to 40 s) and sees faint lines the mobile model misses. Empty disables the second read.",
+    )
+    ocr_min_questions: int = Field(default=2, ge=0, description="Below this many questions the page is read again with the fallback detector")
+    ocr_pipeline: str = Field(
+        default="ppocr",
+        description=(
+            "ppocr: PP-OCRv5 text lines + PP-DocLayout regions (CPU, seconds per photo). "
+            "vl: PaddleOCR-VL 0.9B document parsing, meant for a machine with a GPU."
+        ),
+    )
+    ocr_layout_enabled: bool = Field(default=True, description="Detect figures, tables and formulas and tie them to the question they belong to")
+    ocr_layout_model_name: str = Field(default="PP-DocLayout_plus-L", description="Layout detection model")
+    ocr_layout_min_score: float = Field(default=0.5, ge=0, le=1, description="Minimum score of a layout region")
+    ocr_formula_images: bool = Field(default=False, description="Also crop formulas that stand alone on their line. Off: the layout model takes the cotação line and handwriting for a formula, so it needs a model that reads them (PaddleOCR-VL).")
 
     # Processing configuration
     max_image_size_mb: float = Field(default=20.0, gt=0, description="Maximum image size in MB")
