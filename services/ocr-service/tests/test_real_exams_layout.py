@@ -104,3 +104,25 @@ def test_a_paper_with_its_numbers_is_not_renumbered_by_the_cotacao_ends():
     _, questions, *_ = interpret("ogi_12b_layout.json")
 
     assert [q.number for q in questions] == ["1", "2", "3", "4", "5", "6"]
+
+
+def test_a_choice_paper_has_three_multiple_choice_questions_with_their_options_and_the_figure_on_the_first():
+    # SEAC: each question asks something ("…qual seria o ID…?") and its a) b) c) are the answers; a teacher's
+    # scribbles ("m ached)", "0.0.3.25", the ticked X) sit around them, and "5V" closes each stem.
+    metadata, questions, figures, _ = interpret("seac_12a.json")
+
+    assert metadata.subject_name.value == "SEAC"
+    assert [q.question_type.value for q in questions] == ["multipla_escolha"] * 3
+    assert [[o.option_label for o in q.options] for q in questions] == [["A", "B", "C"]] * 3
+    assert [o.option_text for o in questions[0].options] == ["10.1.0.1", "192.168.1.100", "209.165.201.1"]
+    assert [o.option_text for o in questions[2].options] == ["0.0.3.255", "0.0.0.7", "0.0.0.3"]
+    assert [q.cotacao for q in questions] == [5.0, 5.0, 5.0]
+    assert all(not q.subitems_content for q in questions)
+    assert figures == [("questao_1", "figure")]
+
+
+def test_alineas_that_are_instructions_stay_alineas_even_under_a_question():
+    # The physics paper's first question lists three things to study; they are not answers to choose from.
+    _, questions, *_ = interpret("fisica_12a.json")
+
+    assert questions[0].question_type.value == "composta" and not questions[0].options
