@@ -17,6 +17,7 @@ import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
+import ao.creativemode.kixi.shared.storage.UploadSniffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

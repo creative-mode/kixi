@@ -558,6 +558,12 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void anImageUploadNeedsASession() {
+        client.post().uri("/api/v1/images?kind=avatar").exchange().expectStatus().isUnauthorized();
+        client.get().uri("/uploads/images/avatar/x.png").exchange().expectStatus().isNotFound();
+    }
+
+    @Test
     void rejectsAnonymousTeachingAssignmentReads() {
         client.get()
                 .uri("/api/v1/teaching-assignments")
