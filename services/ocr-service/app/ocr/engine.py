@@ -6,7 +6,6 @@ Provides the main engine for text extraction from images.
 """
 
 import asyncio
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -189,9 +188,25 @@ class OCREngine:
                 "use_doc_unwarping": False,
                 "use_textline_orientation": self.use_angle_cls,
                 "device": "gpu:0" if self.use_gpu else "cpu",
-                # Preserve the existing PP-OCRv4 model family during the
-                # migration to PaddleOCR 3.x.
-                "ocr_version": "PP-OCRv4",
+                # PP-OCRv5, and not PP-OCRv4, despite v4 being the older of the two.
+                # The choice is forced by the language, not by preference: in PaddleOCR
+                # 3.x the PP-OCRv4 family only ships `ch` and `en` recognition models,
+                # and PP-OCRv3 and PP-OCRv5 are the ones with per-language models. Since
+                # `lang` is Portuguese here, asking for v4 means no model at all, and the
+                # PaddleOCR constructor says so:
+                #
+                #     ValueError: No models are available for lang='pt' and
+                #     ocr_version='PP-OCRv4'.
+                #
+                # That is not a startup warning, it is every single request answering
+                # 500, which is exactly what the service was doing. tests/ asserts
+                # against the installed PaddleOCR so this cannot come back silently.
+                "ocr_version": "PP-OCRv5",
+                # Off by default, see settings.ocr_enable_mkldnn. With paddle 3.3.1
+                # the oneDNN path kills the detection model on the first real page,
+                # and the failure is swallowed further down, so the request answers
+                # 500 with no clue why.
+                "enable_mkldnn": settings.ocr_enable_mkldnn,
             }
             if self.det_model_dir:
                 ocr_options["text_detection_model_dir"] = self.det_model_dir
@@ -228,44 +243,8 @@ class OCREngine:
         if self._ocr is None:
             raise RuntimeError("OCR engine not initialized")
 
-        result = list(self._ocr.predict(image))
-        if not result:
-            return [[]]
-
-        # PaddleOCR 3 returns result objects whose JSON payload stores the
-        # recognized text, confidence, and polygon arrays separately. Normalize
-        # them to the 2.x line format consumed by the existing postprocessor.
-        first_result = result[0]
-        payload = getattr(first_result, "json", None)
-        if callable(payload):
-            payload = payload()
-        if payload is None and isinstance(first_result, dict):
-            payload = first_result
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                return result
-        if not isinstance(payload, dict):
-            return result
-
-        data = payload.get("res", payload)
-        if not isinstance(data, dict):
-            return result
-        texts = data.get("rec_texts", [])
-        scores = data.get("rec_scores", [])
-        boxes = data.get("rec_polys")
-        if boxes is None:
-            boxes = data.get("dt_polys", [])
-        if boxes is None:
-            boxes = []
-        lines = []
-        for index, text in enumerate(texts):
-            if index >= len(boxes):
-                break
-            score = float(scores[index]) if index < len(scores) else 0.5
-            lines.append([boxes[index], (str(text), score)])
-        return [lines]
+        result = self._ocr.ocr(image, cls=self.use_angle_cls)
+        return result
 
     def _parse_ocr_results(
         self,
@@ -505,6 +484,11 @@ class OCREngine:
                 "Image processing failed",
                 request_id=request_id,
                 error_type=type(e).__name__,
+                # The message is what says why, and leaving it out is what made the
+                # oneDNN failure take a bisection to find: the log said
+                # "NotImplementedError" and nothing else, from deep inside Paddle.
+                error=str(e),
+                exc_info=True,
             )
 
             return OCRResult(
