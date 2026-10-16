@@ -88,3 +88,19 @@ def test_the_parcelar_exam_read_fast_gives_no_questions_and_read_thoroughly_give
 
     assert len(fast) < 2
     assert [q.number for q in thorough] == ["1", "4", "5"]  # "I-" is the 1; 2 and 3 are not in the lines
+
+
+def test_the_parcelar_exam_read_on_the_raw_photo_has_its_stems_but_not_their_numbers_and_gets_five_questions():
+    # The thorough detector on the photo as it came reads the stems of all five questions, but the margin numbers
+    # "1-", "2-" and "3-" are lost (the "4" and "5-" survive). The «( N VALORES )» that ends each question numbers them.
+    _, questions, *_ = interpret("ogi_parcelar_raw.json")
+
+    assert [q.number for q in questions] == ["1", "2", "3", "4", "5"]
+    assert "consiste sistema de produção" in questions[0].text
+    assert "plano estratégico" in questions[1].text and "Pert" in questions[4].text
+
+
+def test_a_paper_with_its_numbers_is_not_renumbered_by_the_cotacao_ends():
+    _, questions, *_ = interpret("ogi_12b_layout.json")
+
+    assert [q.number for q in questions] == ["1", "2", "3", "4", "5", "6"]
