@@ -182,45 +182,25 @@ class OCREngine:
 
         try:
             # Initialize PaddleOCR with configured options
-            ocr_options = {
-                "lang": self.lang,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": self.use_angle_cls,
-                "device": "gpu:0" if self.use_gpu else "cpu",
-                # PP-OCRv5, and not PP-OCRv4, despite v4 being the older of the two.
-                # The choice is forced by the language, not by preference: in PaddleOCR
-                # 3.x the PP-OCRv4 family only ships `ch` and `en` recognition models,
-                # and PP-OCRv3 and PP-OCRv5 are the ones with per-language models. Since
-                # `lang` is Portuguese here, asking for v4 means no model at all, and the
-                # PaddleOCR constructor says so:
-                #
-                #     ValueError: No models are available for lang='pt' and
-                #     ocr_version='PP-OCRv4'.
-                #
-                # That is not a startup warning, it is every single request answering
-                # 500, which is exactly what the service was doing. tests/ asserts
-                # against the installed PaddleOCR so this cannot come back silently.
-                "ocr_version": "PP-OCRv5",
-                # Off by default, see settings.ocr_enable_mkldnn. With paddle 3.3.1
-                # the oneDNN path kills the detection model on the first real page,
-                # and the failure is swallowed further down, so the request answers
-                # 500 with no clue why.
-                "enable_mkldnn": settings.ocr_enable_mkldnn,
-            }
-            if self.det_model_dir:
-                ocr_options["text_detection_model_dir"] = self.det_model_dir
-            if self.rec_model_dir:
-                ocr_options["text_recognition_model_dir"] = self.rec_model_dir
-            if self.cls_model_dir:
-                ocr_options["textline_orientation_model_dir"] = self.cls_model_dir
-            self._ocr = _get_paddle_ocr()(**ocr_options)
+            self._ocr = _get_paddle_ocr()(
+                lang=self.lang,
+                use_gpu=self.use_gpu,
+                use_angle_cls=self.use_angle_cls,
+                det_model_dir=self.det_model_dir,
+                rec_model_dir=self.rec_model_dir,
+                cls_model_dir=self.cls_model_dir,
+                show_log=self.show_log,
+                # Use PP-OCRv4 models for better accuracy
+                ocr_version="PP-OCRv4",
+                # Enable structure detection for better layout analysis
+                structure_version="PP-StructureV2",
+            )
 
             self._initialized = True
             logger.info("PaddleOCR engine initialized successfully")
 
         except Exception as e:
-            logger.error("Failed to initialize PaddleOCR engine", error_type=type(e).__name__)
+            logger.error("Failed to initialize PaddleOCR engine", error_type=type(e).__name__, error=str(e))
             raise RuntimeError(f"Failed to initialize OCR engine: {e}")
 
     def _ensure_initialized(self) -> None:
@@ -484,11 +464,6 @@ class OCREngine:
                 "Image processing failed",
                 request_id=request_id,
                 error_type=type(e).__name__,
-                # The message is what says why, and leaving it out is what made the
-                # oneDNN failure take a bisection to find: the log said
-                # "NotImplementedError" and nothing else, from deep inside Paddle.
-                error=str(e),
-                exc_info=True,
             )
 
             return OCRResult(
