@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.issue122;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Duration;
@@ -236,9 +237,22 @@ class FeedPostgresIntegrationTest {
                 + commentId.get() + "/hide").exchange().expectStatus().isNotFound();
         bearer(adminToken).patch().uri("/api/v1/feed/posts/" + (id + 100000) + "/comments/"
                 + commentId.get() + "/hide").exchange().expectStatus().isNotFound();
-        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
-                .exchange().expectStatus().isOk().expectBody()
-                .jsonPath("$[?(@.id == " + id + ")][0].commentCount").isEqualTo(1);
+
+        // What the two 404s did not do, read where it actually lives. The row is the
+        // claim: an earlier version of this assertion went through the feed with a
+        // JsonPath filter ("$[?(@.id == 3)][0].commentCount"), which asks the provider
+        // to match a post inside an array it does not index and fails on a response
+        // that is perfectly correct - the filter, not the code, was what broke.
+        assertThat(visibleComments(id)).isEqualTo(1L);
+        assertThat(visibleComments(otherPostId.get())).isZero();
+    }
+
+    /** The comments of a post the database still considers visible, hidden or not. */
+    private long visibleComments(long postId) {
+        Long count = database.sql("SELECT COUNT(*) FROM post_comments"
+                        + " WHERE post_id = " + postId + " AND is_hidden = FALSE")
+                .map((row, meta) -> row.get(0, Long.class)).one().block(Duration.ofSeconds(10));
+        return count == null ? 0L : count;
     }
 
     private WebTestClient bearer(String token) {
