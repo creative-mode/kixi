@@ -53,6 +53,42 @@ def test_valid_words_the_lexicon_lacks_are_not_corrupted(lex):
     assert fix("aprovisionamento insumos esquematize", lex) == "aprovisionamento insumos esquematize"
 
 
+@pytest.mark.parametrize("word", [
+    "espira",      # bobina, electromagnetismo
+    "vectores",    # vector, grafia europeia
+    "catetos",
+    "hipotenusa",
+    "rectângulo",
+    "polinómio",
+    "concavidade",
+])
+def test_exam_vocabulary_is_not_rewritten_into_a_commoner_word(lex, word):
+    """Scientific vocabulary must survive the repair untouched.
+
+    "espira" is the one that matters and the reason this exists. The repair treats an
+    unknown word as a reading error and looks for a neighbour one edit away, and one of
+    the edits it allows is dropping an "r", because "urma" must become "uma". Applied
+    to a word it has never seen, that turns the coil in an electromagnetism paper into
+    the verb "espiar": measured on the photographed 12th grade Physics paper, the
+    recogniser read six "espira" and this repair returned six "espia".
+
+    Adding the word to app/ocr/data/pt_extra.txt is what stops it. The word is in the
+    lexicon, so the repair leaves it alone.
+    """
+    assert fix(f"a {word} b", lex) == f"a {word} b"
+
+
+def test_the_measured_physics_line_comes_back_unchanged(lex):
+    """The line from the real exam that used to lose the coil.
+
+    This is the string as the recogniser produced it, not as we want it. Every word in
+    it was either right or a reading error of one letter; the repair must not turn a
+    correct one into a different word.
+    """
+    raw = "2)Uma espira circular de 8π cm de perímetro é perpendicular a um campo magnético"
+    assert fix(raw, lex) == raw
+
+
 def test_a_function_word_opening_a_lowercase_word_is_not_a_glue(lex):
     # "Determine" não é "De termine"; "emprego" não é "em prego"; "ascender" não é "as cender".
     assert fix("Determine o valor", lex) == "Determine o valor"
