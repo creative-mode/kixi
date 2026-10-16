@@ -15,6 +15,29 @@ from unittest.mock import MagicMock, patch
 # Image Fixtures
 # =============================================================================
 
+
+def to_predict(pages):
+    """PaddleOCR 3.x ``predict`` output for what used to be the 2.x ``ocr`` output: [[ [box, (text, conf)], ... ]]."""
+    import numpy as np
+
+    results = []
+    for lines in pages:
+        lines = lines or []
+        results.append({
+            "rec_texts": [line[1][0] for line in lines],
+            "rec_scores": [line[1][1] for line in lines],
+            "rec_polys": [np.array(line[0]) for line in lines],
+        })
+    return results
+
+
+@pytest.fixture(autouse=True)
+def no_layout_model(monkeypatch):
+    """The layout model is a real download; tests that want it say so (see test_layout.py)."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ocr_layout_enabled", False)
+
 @pytest.fixture
 def sample_image():
     """Create a sample test image (BGR format for OpenCV)."""
@@ -222,7 +245,7 @@ def mock_paddle_ocr():
         mock_cls.return_value = mock_instance
 
         # Mock OCR result format
-        mock_instance.ocr.return_value = [
+        mock_instance.predict.return_value = to_predict([
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("PROVA DE MATEMÁTICA", 0.95)],
                 [[[10, 50], [250, 50], [250, 80], [10, 80]], ("Ano Letivo 2024/2025", 0.92)],
@@ -233,7 +256,7 @@ def mock_paddle_ocr():
                 [[[30, 280], [110, 280], [110, 310], [30, 310]], ("C) 15", 0.93)],
                 [[[30, 320], [110, 320], [110, 350], [30, 350]], ("D) 20", 0.90)],
             ]
-        ]
+        ])
 
         yield mock_cls
 
@@ -244,7 +267,7 @@ def mock_paddle_ocr_empty():
     with patch("app.ocr.engine.PaddleOCR") as mock_cls:
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance
-        mock_instance.ocr.return_value = [[]]
+        mock_instance.predict.return_value = to_predict([[]])
         yield mock_cls
 
 
@@ -254,7 +277,7 @@ def mock_paddle_ocr_error():
     with patch("app.ocr.engine.PaddleOCR") as mock_cls:
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance
-        mock_instance.ocr.side_effect = Exception("OCR processing failed")
+        mock_instance.predict.side_effect = Exception("OCR processing failed")
         yield mock_cls
 
 

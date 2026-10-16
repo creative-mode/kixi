@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 
+from .layout import LayoutRegion
 from .ptlex import Lexicon, load_lexicon, repair_text
 
 
@@ -67,6 +68,8 @@ class ImageToUpload:
     source_height: Optional[int] = None
     contract_version: int = 1
     source_file_index: int = 0
+    kind: Optional[str] = None  # figure, table or formula; None for the header and signature crops
+    score: Optional[float] = None
 
 
 @dataclass
@@ -309,7 +312,7 @@ class OCRPostprocessor:
             # "PROVA DE RECURSO DE MATEMÁTICA"
             r"prova\s+de\s+recurso\s+de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             # "EXAME DE MATEMÁTICA"
-            r"exame\s+de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
+            r"exame\s+(?:especial\s+)?de\s+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             # Generic patterns
             r"(?:recurso\s+de\s+)([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)",
             r"(?:disciplina|subject|matéria|cadeira)[:\s]+([A-Za-záàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s\-]+)",
@@ -504,6 +507,8 @@ class OCRPostprocessor:
         page_count: int = 1,
         page_dimensions: Optional[Dict[int, Tuple[int, int]]] = None,
         source_file_indices: Optional[Dict[int, int]] = None,
+        layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
+        formula_images: bool = False,
     ) -> Tuple[ExtractedMetadata, List[ExtractedQuestion], List[ImageToUpload], List[UnmappedContent], List[Warning]]:
         """
         Process OCR text blocks into structured data.
@@ -565,6 +570,8 @@ class OCRPostprocessor:
             full_text,
             page_dimensions or {},
             source_file_indices or {},
+            layout_regions,
+            formula_images,
         )
 
         # Collect unmapped content
@@ -1117,6 +1124,7 @@ class OCRPostprocessor:
         """
         questions: List[ExtractedQuestion] = []
         draft: Optional[_Draft] = None
+        blocks = self._repair_lost_labels(blocks)
 
         def close() -> None:
             nonlocal draft
@@ -1208,6 +1216,51 @@ class OCRPostprocessor:
 
         close()
         return questions
+
+    _LEADING_NOISE = re.compile(r"^[.,;:·•\-–—]+\s*(?=[A-ZÀ-ÝÇ][a-zà-ÿç])")
+    _ALINEA_LABEL = re.compile(r"^\(?([a-z])\s*[.)]")
+
+    def _repair_lost_labels(self, blocks: List[TextBlock]) -> List[TextBlock]:
+        """Give back the label that a photographed line lost: ".Quantos…" is alínea a when b follows, and
+        ". Dado o circuito…" is the next question when it is a that follows; a "6." among the alíneas is a b.
+
+        A printed "4." or "a." that the OCR read as a bare dot leaves a line with no number or letter, which
+        then glues to the previous text and shifts every number after it. The label that comes next says
+        which one was lost: a question stem is followed by its first alínea (a), an alínea by the second (b).
+        """
+        repaired: List[TextBlock] = []
+        last_number = 0
+        last_alinea: Optional[str] = None
+        for position, block in enumerate(blocks):
+            text = block.text.strip()
+            following = blocks[position + 1].text.strip() if position + 1 < len(blocks) else ""
+            next_label = self._ALINEA_LABEL.match(following)
+            next_letter = next_label.group(1) if next_label else None
+
+            if last_number == 0 and re.match(r"^[Il|]\s*[-–.)]\s*\S", text):
+                text = "1" + text[1:]  # the first question's 1, read as the capital I it resembles
+            elif last_alinea == "a" and re.match(r"^6\s*[.)]\s*\S", text):
+                text = "b" + text[1:]  # the printed b, read as the digit it resembles
+            elif last_number and self._LEADING_NOISE.match(text):
+                rest = self._LEADING_NOISE.sub("", text, count=1)
+                if next_letter == "a":
+                    text = f"{last_number + 1}. {rest}"
+                elif next_letter == "b" and last_alinea is None:
+                    text = f"a. {rest}"
+
+            if text != block.text.strip():
+                block = replace(block, text=text)
+            repaired.append(block)
+
+            info = self._detect_question_number(text, expected=last_number + 1)
+            if info is not None:
+                last_number = info[0]
+                last_alinea = None
+                continue
+            label = self._ALINEA_LABEL.match(text)
+            if label:
+                last_alinea = label.group(1)
+        return repaired
 
     _OPTION_MARK = re.compile(r"(?:(?<=\s)|^)\(?([A-D])\)\s*")
 
@@ -1743,8 +1796,15 @@ class OCRPostprocessor:
         full_text: str,
         page_dimensions: Dict[int, Tuple[int, int]],
         source_file_indices: Dict[int, int],
+        layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
+        formula_images: bool = False,
     ) -> List[ImageToUpload]:
-        """Detect regions that should be uploaded as images."""
+        """Detect regions that should be uploaded as images.
+
+        ``layout_regions`` (page -> regions) comes from the layout model: the figures, tables and formulas that
+        are tied to the question they sit under. ``None`` means no layout was run (disabled, or it failed): then
+        a question that mentions a figure falls back to a crop of its whole text span.
+        """
         images = []
 
         def dimensions(page_index: int) -> Tuple[Optional[int], Optional[int]]:
@@ -1802,25 +1862,30 @@ class OCRPostprocessor:
                     source_file_index=source_file_index(page_index),
                 ))
 
-        # Add images for questions with visual content
-        for question in questions:
-            if question.has_image:
-                source_width, source_height = dimensions(question.page_index)
-                bbox = region_bbox(
-                    question.page_index,
-                    question.start_y,
-                    max(question.end_y, question.start_y + 1),
-                )
-                images.append(ImageToUpload(
-                    suggested_filename=f"{base_name}-questao-{question.number}.png",
-                    description=question.image_description or f"Imagem da questão {question.number}",
-                    region=f"questao_{question.number}",
-                    bbox=bbox,
-                    page_index=question.page_index,
-                    source_width=source_width,
-                    source_height=source_height,
-                    source_file_index=source_file_index(question.page_index),
-                ))
+        # Figures, tables and formulas, each tied to the question it sits under
+        if layout_regions is not None:
+            images.extend(self._question_figures(
+                questions, blocks, layout_regions, dimensions, source_file_index, base_name, formula_images,
+            ))
+        else:
+            for question in questions:
+                if question.has_image:
+                    source_width, source_height = dimensions(question.page_index)
+                    bbox = region_bbox(
+                        question.page_index,
+                        question.start_y,
+                        max(question.end_y, question.start_y + 1),
+                    )
+                    images.append(ImageToUpload(
+                        suggested_filename=f"{base_name}-questao-{question.number}.png",
+                        description=question.image_description or f"Imagem da questão {question.number}",
+                        region=f"questao_{question.number}",
+                        bbox=bbox,
+                        page_index=question.page_index,
+                        source_width=source_width,
+                        source_height=source_height,
+                        source_file_index=source_file_index(question.page_index),
+                    ))
 
         # Check for coordination/signature at footer
         for pattern in self.PATTERNS["coordination"]:
@@ -1844,6 +1909,127 @@ class OCRPostprocessor:
                 break
 
         return images
+
+    # Figures smaller than this share of the page are marks, stamps or a circled number, not drawings.
+    _MIN_FIGURE_AREA = 0.02
+    _MIN_FORMULA_WIDTH = 0.08
+    _FIGURE_LABELS = {
+        "figure": "Figura da questão {n}",
+        "table": "Tabela da questão {n}",
+        "formula": "Fórmula da questão {n}",
+    }
+
+    @staticmethod
+    def _overlap(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> int:
+        width = min(a[2], b[2]) - max(a[0], b[0])
+        height = min(a[3], b[3]) - max(a[1], b[1])
+        return max(0, width) * max(0, height)
+
+    def _coordination_y(self, blocks: List[TextBlock], page_index: int) -> Optional[int]:
+        """Top of the «A coordenação» signature line of the page, if there is one."""
+        for block in blocks:
+            if block.page_index != page_index:
+                continue
+            text = block.text.lower()
+            if any(re.search(pattern, text) for pattern in self.PATTERNS["coordination"]):
+                return block.bbox[1]
+        return None
+
+    def _standalone_formula(self, region: LayoutRegion, blocks: List[TextBlock], page_width: Optional[int]) -> bool:
+        """A display formula: wide enough, and no other text on its line (an inline one is part of the sentence)."""
+        x1, y1, x2, y2 = region.bbox
+        if page_width and (x2 - x1) < self._MIN_FORMULA_WIDTH * page_width:
+            return False
+        height = max(1, y2 - y1)
+        for block in blocks:
+            overlap_y = min(y2, block.bbox[3]) - max(y1, block.bbox[1])
+            if overlap_y < 0.5 * height:
+                continue
+            outside = (block.bbox[2] - block.bbox[0]) - max(0, min(x2, block.bbox[2]) - max(x1, block.bbox[0]))
+            if outside > 40:
+                return False
+        return True
+
+    def _question_figures(
+        self,
+        questions: List[ExtractedQuestion],
+        blocks: List[TextBlock],
+        layout_regions: Dict[int, List[LayoutRegion]],
+        dimensions,
+        source_file_index,
+        base_name: str,
+        formula_images: bool = False,
+    ) -> List[ImageToUpload]:
+        """Tie each figure, table and standalone formula of the layout to the question it sits under."""
+        if not questions:
+            return []
+        ordered = sorted(questions, key=lambda q: (q.page_index, q.start_y))
+        found: List[ImageToUpload] = []
+        per_question: Dict[str, int] = {}
+
+        for page_index in sorted(layout_regions):
+            width, height = dimensions(page_index)
+            page_area = (width * height) if width and height else 0
+            coordination = self._coordination_y(blocks, page_index)
+            page_blocks = [b for b in blocks if b.page_index == page_index]
+            kept: List[LayoutRegion] = []
+
+            for region in sorted(layout_regions[page_index], key=lambda r: (r.bbox[1], r.bbox[0])):
+                x1, y1, x2, y2 = region.bbox
+                area = region.area
+                if region.kind in ("figure", "table") and page_area and area < self._MIN_FIGURE_AREA * page_area:
+                    continue
+                if coordination is not None and y1 >= coordination - 30:
+                    continue  # the signature and the logos of the footer
+                inside = sum(self._overlap(b.bbox, region.bbox) for b in page_blocks)
+                if region.kind == "figure" and area and inside > 0.5 * area:
+                    continue  # mostly text: the layout model took a paragraph for a picture
+                if region.kind == "formula" and not (formula_images and self._standalone_formula(region, page_blocks, width)):
+                    continue  # formulas are cropped only on request: the layout model also takes the cotação line and handwriting for one
+                if any(
+                    self._overlap(region.bbox, other.bbox) > 0.5 * min(area, other.area)
+                    for other in kept
+                    if other.kind == region.kind
+                ):
+                    continue  # the same drawing found twice
+                kept.append(region)
+
+            for region in kept:
+                center = (region.bbox[1] + region.bbox[3]) / 2
+                owner = None
+                for question in ordered:
+                    if (question.page_index, question.start_y) <= (page_index, center):
+                        owner = question
+                if owner is None:
+                    continue  # above the first question: the header
+                number = owner.number
+                count = per_question.get(number, 0) + 1
+                per_question[number] = count
+                owner.has_image = True
+                padding = 8
+                bbox = (
+                    max(0, region.bbox[0] - padding),
+                    max(0, region.bbox[1] - padding),
+                    min(width, region.bbox[2] + padding) if width else region.bbox[2] + padding,
+                    min(height, region.bbox[3] + padding) if height else region.bbox[3] + padding,
+                )
+                description = self._FIGURE_LABELS[region.kind].format(n=number)
+                if region.kind == "figure" and owner.image_description and len(owner.image_description.split()) > 2:
+                    description = owner.image_description
+                found.append(ImageToUpload(
+                    suggested_filename=f"{base_name}-questao-{number}-{region.kind}-{count}.png",
+                    description=description,
+                    region=f"questao_{number}",
+                    bbox=bbox,
+                    page_index=page_index,
+                    source_width=width,
+                    source_height=height,
+                    source_file_index=source_file_index(page_index),
+                    kind=region.kind,
+                    score=round(region.score, 3),
+                ))
+
+        return found
 
     def _infer_question_type(self, question: ExtractedQuestion) -> Tuple[QuestionType, float]:
         """Infer question type based on text and options."""
