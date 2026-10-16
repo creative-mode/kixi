@@ -232,12 +232,18 @@ public class SecurityConfig {
                         // anyExchange(): a role rule here, not inside the
                         // service alone, is what stops a student reaching
                         // them at all rather than being refused by business
-                        // logic after the fact.
+                        // logic after the fact. The comment routes (issue
+                        // #313) are moderation of the same kind and are
+                        // listed here for the same reason - a comment became
+                        // readable, and a readable comment a student cannot
+                        // take down is a hole, not a detail.
                         .pathMatchers(HttpMethod.GET, "/api/v1/feed/posts/reported")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/feed/posts/*/hide",
-                                "/api/v1/feed/posts/*/unhide")
+                                "/api/v1/feed/posts/*/unhide",
+                                "/api/v1/feed/posts/*/comments/*/hide",
+                                "/api/v1/feed/posts/*/comments/*/unhide")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/feed/**")
                         .authenticated()
