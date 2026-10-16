@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     ocr_rec_model_dir: Optional[str] = Field(default=None, description="Custom recognition model directory")
     ocr_cls_model_dir: Optional[str] = Field(default=None, description="Custom classification model directory")
     ocr_show_log: bool = Field(default=False, description="Show PaddleOCR logs")
+    ocr_enable_mkldnn: bool = Field(
+        default=False,
+        description=(
+            "Enable the oneDNN accelerated kernels. Off by default because with "
+            "paddle 3.3.1 the detection model dies on any real page with "
+            "NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support "
+            "[pir::ArrayAttribute<pir::DoubleAttribute>]. Turn it back on only if a "
+            "Paddle upgrade fixes that, and measure before believing it."
+        ),
+    )
 
     # Processing configuration
     max_image_size_mb: float = Field(default=20.0, gt=0, description="Maximum image size in MB")

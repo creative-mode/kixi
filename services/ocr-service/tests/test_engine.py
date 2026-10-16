@@ -78,7 +78,7 @@ def mock_paddle_ocr():
         mock_cls.return_value = mock_instance
 
         # Mock OCR result format
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("1. Calcule o valor de x:", 0.95)],
                 [[[10, 50], [300, 50], [300, 80], [10, 80]], ("A) 5", 0.92)],
@@ -409,8 +409,62 @@ class TestOCREngine:
 
         assert engine._initialized is True
         mock_paddle.assert_called_once()
-        assert mock_paddle.call_args.kwargs["ocr_version"] == "PP-OCRv4"
+        assert mock_paddle.call_args.kwargs["ocr_version"] == "PP-OCRv5"
         assert mock_paddle.call_args.kwargs["device"] == "cpu"
+
+    @patch("app.ocr.engine.PaddleOCR")
+    def test_initialize_leaves_one_dnn_off(self, mock_paddle):
+        """oneDNN must stay off unless somebody has measured it working.
+
+        With paddle 3.3.1 the accelerated kernels kill the detection model on the
+        first real page, and process_image catches everything, so the request answers
+        500 with a log line that says only "NotImplementedError". Turn this on only
+        after a Paddle upgrade, and only with a measurement behind it.
+        """
+        mock_paddle.return_value = MagicMock()
+
+        OCREngine().initialize()
+
+        assert mock_paddle.call_args.kwargs["enable_mkldnn"] is False
+
+    @patch("app.ocr.engine.PaddleOCR")
+    def test_initialize_passes_a_model_paddleocr_actually_has(self, mock_paddle):
+        """The language and the version the engine asks for must exist together.
+
+        Every other test in this file mocks PaddleOCR, so they all pass whatever pair
+        of values the engine passes, and a pair that PaddleOCR cannot satisfy looks
+        fine to them. This is the only test that asks the installed PaddleOCR whether
+        the pair resolves to real detection and recognition models.
+
+        It matters because the pair was wrong for a while: the engine asked for
+        PP-OCRv4, whose family in PaddleOCR 3.x only ships `ch` and `en`, while the
+        language here is Portuguese. PaddleOCR accepts the constructor call far enough
+        to look healthy and then fails on every request, so nothing short of asking
+        PaddleOCR itself catches it.
+        """
+        mock_paddle.return_value = MagicMock()
+
+        engine = OCREngine()
+        engine.initialize()
+
+        kwargs = mock_paddle.call_args.kwargs
+        real_paddleocr = pytest.importorskip("paddleocr").PaddleOCR
+        # Unbound on purpose: the method is `_get_ocr_model_names(self, lang, version)`
+        # and only reads module constants, so it is called with a placeholder self
+        # rather than constructing an engine, which would download the models.
+        det_name, rec_name = real_paddleocr._get_ocr_model_names(
+            None, kwargs["lang"], kwargs["ocr_version"]
+        )
+
+        assert det_name is not None, (
+            f"PaddleOCR has no detection model for lang={kwargs['lang']!r} and "
+            f"ocr_version={kwargs['ocr_version']!r}. Initialization would raise "
+            "ValueError and every extract request would answer 500."
+        )
+        assert rec_name is not None, (
+            f"PaddleOCR has no recognition model for lang={kwargs['lang']!r} and "
+            f"ocr_version={kwargs['ocr_version']!r}."
+        )
 
     @patch("app.ocr.engine.PaddleOCR")
     def test_run_ocr_normalizes_paddleocr_v3_result(self, mock_paddle, sample_image):
@@ -449,12 +503,58 @@ class TestOCREngine:
         assert result == [[[[[0, 0], [1, 0], [1, 1], [0, 1]], ("Linha", 0.8)]]]
 
     @patch("app.ocr.engine.PaddleOCR")
+    def test_run_ocr_reads_the_real_paddleocr_3_result(self, mock_paddle, sample_image):
+        """Read the result object PaddleOCR 3 actually returns on a real page.
+
+        The two tests above feed payloads with the arrays nested under a "res" key.
+        That nesting is the older serialization. What comes back from
+        `PaddleOCR.predict` today is a paddlex `OCRResult`, and its JSON payload has
+        `rec_texts`, `rec_scores` and `rec_polys` at the top level with no "res"
+        wrapper at all.
+
+        The difference is not cosmetic. When the payload shape is not recognized,
+        `_run_ocr` returns the raw result unconverted and `_parse_ocr_results`
+        iterates it as the 2.x line format, so a page whose 46 lines were recognized
+        at 0.93 average confidence comes out as a handful of one-character blocks.
+        The unit tests never saw it, because they never used the real shape.
+        """
+        mock_paddle.return_value = MagicMock()
+        mock_paddle.return_value.predict.return_value = [
+            MagicMock(
+                json={
+                    "input_path": None,
+                    "page_index": None,
+                    "rec_texts": ["REPÚBLICA DE ANGOLA", "1) Enunciado"],
+                    "rec_scores": [0.99, 0.97],
+                    "rec_polys": [
+                        [[0, 0], [400, 0], [400, 20], [0, 20]],
+                        [[0, 40], [400, 40], [400, 60], [0, 60]],
+                    ],
+                }
+            )
+        ]
+
+        engine = OCREngine()
+        lines = engine._run_ocr(sample_image)
+        blocks = engine._parse_ocr_results(lines, 0)
+
+        assert len(blocks) == 2, (
+            f"Both recognized lines should survive as blocks, got {len(blocks)}. "
+            f"Parsed as: {[b.text for b in blocks]}"
+        )
+        assert [b.text for b in blocks] == [
+            "REPÚBLICA DE ANGOLA",
+            "1) Enunciado",
+        ]
+        assert blocks[0].bbox == (0, 0, 400, 20)
+
+    @patch("app.ocr.engine.PaddleOCR")
     def test_process_image(self, mock_paddle, sample_image):
         """Test processing a single image."""
         # Setup mock
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Test text", 0.95)],
             ]
@@ -472,7 +572,7 @@ class TestOCREngine:
         """Test error handling during processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.side_effect = Exception("OCR failed")
+        mock_instance.ocr.side_effect = Exception("OCR failed")
 
         engine = OCREngine()
         result = engine.process_image(sample_image)
@@ -485,7 +585,7 @@ class TestOCREngine:
         """Test processing image from bytes."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = engine.process_bytes(sample_image_bytes)
@@ -505,7 +605,7 @@ class TestOCREngine:
         """Test processing multiple images."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Page content", 0.9)],
             ]
@@ -669,7 +769,7 @@ class TestAsyncOCR:
         """Test async image processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = await engine.process_image_async(sample_image)
@@ -681,7 +781,7 @@ class TestAsyncOCR:
         """Test async bytes processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = await engine.process_bytes_async(sample_image_bytes)

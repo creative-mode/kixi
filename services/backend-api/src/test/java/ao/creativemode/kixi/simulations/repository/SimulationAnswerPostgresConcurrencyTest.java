@@ -31,6 +31,12 @@ import reactor.core.scheduler.Schedulers;
 /** Runs the public services against a database migrated by Flyway V1 through V37. */
 @SpringBootTest(properties = {
         "spring.main.web-application-type=none",
+        // This one suite opts out of the pool cap that src/test/resources/application.yml
+        // puts on every other test, because it is the test whose whole point is two
+        // writes racing each other. With two connections the loser never gets a slot and
+        // the race deadlocks into a 15 s timeout instead of producing an ordering.
+        "spring.r2dbc.pool.initial-size=0",
+        "spring.r2dbc.pool.max-size=8",
         "app.simulations.expiry-poll-ms=86400000",
         "app.simulations.expiry-enabled=false",
         "app.jwt.secret=integration-test-secret-which-is-long-enough",

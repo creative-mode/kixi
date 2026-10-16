@@ -20,7 +20,15 @@
 
 	# 1. A API. Sem isto, nada do frontend funciona: as chamadas são relativas ao
 	#    próprio host e chegam aqui.
-	handle_path /api/* {
+	#
+	#    `handle` e NÃO `handle_path`. A diferença é o caminho que o backend recebe,
+	#    e é a diferença entre funcionar e não funcionar. Medido com um Caddy a correr:
+	#    um pedido a /api/v1/auth/login chega ao backend como /v1/auth/login com
+	#    handle_path, porque handle_path retira o prefixo, e como /api/v1/auth/login com
+	#    handle. O backend serve /api/v1/auth, portanto handle_path dava-lhe um caminho
+	#    que não existe e a resposta era 404 outra vez, com a página do frontend em vez
+	#    de JSON.
+	handle /api/* {
 		reverse_proxy backend-api:8080 {
 			# O limiter de login e de registo conta por endereço (#123/#240). Atrás de
 			# um proxy, o endereço que a aplicação vê é o do Caddy, partilhado por
@@ -32,9 +40,9 @@
 		}
 	}
 
-	# 2. O gestor. `handle_path` remove o prefixo, que é o que o Next espera quando
-	#    tem basePath configurado. Os assets em /_next/static são servidos a partir
-	#    daqui, com cache de um ano.
+	# 2. O gestor. Aqui `handle_path` é o certo e é o oposto do caso de cima: o Next
+	#    tem basePath /manager e espera recebê-lo já removido. Os assets em
+	#    /_next/static são servidos a partir daqui, com cache de um ano.
 	handle_path /manager/* {
 		reverse_proxy manager:3002
 	}
