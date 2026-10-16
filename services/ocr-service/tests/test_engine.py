@@ -78,7 +78,7 @@ def mock_paddle_ocr():
         mock_cls.return_value = mock_instance
 
         # Mock OCR result format
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("1. Calcule o valor de x:", 0.95)],
                 [[[10, 50], [300, 50], [300, 80], [10, 80]], ("A) 5", 0.92)],
@@ -554,7 +554,7 @@ class TestOCREngine:
         # Setup mock
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Test text", 0.95)],
             ]
@@ -572,7 +572,7 @@ class TestOCREngine:
         """Test error handling during processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.side_effect = Exception("OCR failed")
+        mock_instance.ocr.side_effect = Exception("OCR failed")
 
         engine = OCREngine()
         result = engine.process_image(sample_image)
@@ -585,7 +585,7 @@ class TestOCREngine:
         """Test processing image from bytes."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = engine.process_bytes(sample_image_bytes)
@@ -605,7 +605,7 @@ class TestOCREngine:
         """Test processing multiple images."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [
+        mock_instance.ocr.return_value = [
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Page content", 0.9)],
             ]
@@ -769,7 +769,7 @@ class TestAsyncOCR:
         """Test async image processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = await engine.process_image_async(sample_image)
@@ -781,7 +781,7 @@ class TestAsyncOCR:
         """Test async bytes processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.predict.return_value = [[]]
+        mock_instance.ocr.return_value = [[]]
 
         engine = OCREngine()
         result = await engine.process_bytes_async(sample_image_bytes)
