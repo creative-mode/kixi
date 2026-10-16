@@ -70,7 +70,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # OCR settings
     OCR_LANG=pt \
     OCR_USE_GPU=false \
-    OCR_USE_ANGLE_CLS=true \
+    OCR_USE_ANGLE_CLS=false \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     OCR_SHOW_LOG=false \
     # Processing settings
     MAX_IMAGE_SIZE_MB=20.0 \
@@ -123,6 +124,7 @@ WORKDIR /app
 
 # Copy application code from services/ocr-service
 COPY --chown=ocr:ocr services/ocr-service/app ./app
+COPY --chown=ocr:ocr services/ocr-service/tools ./tools
 COPY --chown=ocr:ocr services/ocr-service/tests ./tests
 
 # Create directories for models and cache
@@ -134,6 +136,10 @@ RUN mkdir -p /home/ocr/.paddleocr && \
 
 # Switch to non-root user
 USER ocr
+
+# Bake the PP-OCRv5 and layout models into the image (~/.paddlex): they survive container recreation and need
+# no internet at runtime. The same step as services/ocr-service/Dockerfile; this is the file CI publishes.
+RUN ENVIRONMENT=development ENABLE_AUTH=false PYTHONPATH=/app python tools/prefetch_models.py
 
 # Expose port
 EXPOSE 8000
