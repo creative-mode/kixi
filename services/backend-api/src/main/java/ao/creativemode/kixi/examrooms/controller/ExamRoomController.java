@@ -29,12 +29,20 @@ public class ExamRoomController {
     private final ExamRoomService service;
     private final CurrentAccountService current;
     private final ExamRoomMonitoringService monitoring;
+    private final ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction;
 
     public ExamRoomController(ExamRoomService service, CurrentAccountService current,
             ExamRoomMonitoringService monitoring) {
+        this(service, current, monitoring, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ExamRoomController(ExamRoomService service, CurrentAccountService current,
+            ExamRoomMonitoringService monitoring, ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction) {
         this.service = service;
         this.current = current;
         this.monitoring = monitoring;
+        this.correction = correction;
     }
 
     @PostMapping
@@ -115,6 +123,21 @@ public class ExamRoomController {
     @GetMapping("/{id}/grades")
     public Mono<ResponseEntity<List<ExamRoomGradeResponse>>> grades(@PathVariable Long id) {
         return staffContext().flatMap(context -> monitoring.grades(id, context.accountId(), context.admin()))
+                .map(ResponseEntity::ok);
+    }
+
+    /** As respostas abertas da sala, questão a questão, com a chave ao lado. */
+    @GetMapping("/{id}/review")
+    public Mono<ResponseEntity<ao.creativemode.kixi.examrooms.dto.ExamRoomReviewResponse>> review(@PathVariable Long id) {
+        return staffContext().flatMap(context -> correction.review(id, context.accountId(), context.admin()))
+                .map(ResponseEntity::ok);
+    }
+
+    /** Grava as notas das respostas abertas de uma vez e, se pedido, corrige pela chave. */
+    @PostMapping("/{id}/grade")
+    public Mono<ResponseEntity<ao.creativemode.kixi.examrooms.dto.ExamRoomBulkGradeResponse>> gradeInBulk(
+            @PathVariable Long id, @Valid @RequestBody ao.creativemode.kixi.examrooms.dto.ExamRoomBulkGradeRequest request) {
+        return staffContext().flatMap(context -> correction.grade(id, context.accountId(), context.admin(), request))
                 .map(ResponseEntity::ok);
     }
 
