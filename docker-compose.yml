@@ -366,9 +366,6 @@ volumes:
   postgres_data:
     name: kixi-postgres-data
 
-  # PaddleOCR models cache (CPU version)
-    name: kixi-ocr-models
-
   # PaddleOCR models cache (GPU version)
   ocr_models_gpu:
     name: kixi-ocr-models-gpu
