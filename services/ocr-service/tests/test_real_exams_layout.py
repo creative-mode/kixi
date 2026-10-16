@@ -20,16 +20,20 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def interpret(name, formula_images=False):
     data = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
     blocks = [
-        TextBlock(text=b["text"], confidence=b["conf"], bbox=tuple(b["bbox"]), page_index=0, line_index=b["i"])
+        TextBlock(text=b["text"], confidence=b["conf"], bbox=tuple(b["bbox"]), page_index=0, line_index=b["i"], handwritten=b.get("hw", False))
         for b in data["blocks"]
     ]
-    layout = [LayoutRegion(r["kind"], r["label"], r["score"], tuple(r["bbox"])) for r in data["layout"]]
+    layout = [LayoutRegion(r["kind"], r["label"], r["score"], tuple(r["bbox"]), r.get("hw", False)) for r in data["layout"]]
     metadata, questions, images, *_ = OCRPostprocessor().process(
         blocks, page_dimensions={0: (data["width"], data["height"])}, layout_regions={0: layout},
         formula_images=formula_images,
     )
     figures = [(i.region, i.kind) for i in images if i.region.startswith("questao_")]
     return metadata, questions, figures, images
+
+
+def texts(questions):
+    return " ".join(q.text + " " + " ".join(s.text for s in q.subitems_content) for q in questions)
 
 
 def test_electrotecnia_has_its_two_circuits_on_the_questions_that_ask_for_them():
@@ -126,3 +130,38 @@ def test_alineas_that_are_instructions_stay_alineas_even_under_a_question():
     _, questions, *_ = interpret("fisica_12a.json")
 
     assert questions[0].question_type.value == "composta" and not questions[0].options
+
+
+def test_a_maths_exam_keeps_its_five_questions_its_scores_and_none_of_the_pen():
+    # Blue-pen working in the margins, a total beside question 4, workings above the header and big scribbles round
+    # the stamp under the cotação line: none of it may reach a question.
+    metadata, questions, _, _ = interpret("matematica_12b.json", formula_images=True)
+
+    assert [q.number for q in questions] == ["1", "2", "3", "4", "5"]
+    assert [q.cotacao for q in questions] == [4.0, 4.0, 4.0, 5.0, 3.0]
+    everything = texts(questions)
+    for scribble in ("√2y", "11+9+13", "4,4", "11×0,4", "12-8", "lca)", "k[P(h)", "BAIRRO", "COORP", "5^2"):
+        assert scribble not in everything, scribble
+    assert "2)" not in questions[4].text  # the rest of the cotação line did not leak into question 5
+
+
+def test_maths_the_engine_cannot_read_becomes_a_marker_and_a_picture_of_the_formula():
+    _, questions, figures, images = interpret("matematica_12b.json", formula_images=True)
+
+    assert [s.label for s in questions[0].subitems_content] == ["c", "d"]  # the paper starts at c)
+    assert "[fórmula]" in questions[1].text and "[fórmula]" in questions[4].text
+    assert {kind for _, kind in figures} == {"formula"}  # the stamp round «A COORDENAÇÃO» is not a figure
+    assert {region for region, _ in figures} <= {f"questao_{n}" for n in range(1, 6)}
+    assert len([f for f in figures if f[0] == "questao_3"]) >= 2
+
+
+def test_no_formula_picture_is_taken_from_a_pen_region():
+    # a handwritten working the layout model found as a «formula» is not cropped
+    _, _, figures, images = interpret("matematica_12b.json", formula_images=True)
+    data = json.loads((FIXTURES / "matematica_12b.json").read_text(encoding="utf-8"))
+    pen = [r["bbox"] for r in data["layout"] if r.get("hw")]
+    assert pen, "the fixture must have formula regions in pen"
+    for image in (i for i in images if i.region.startswith("questao_")):
+        for box in pen:
+            overlap = min(image.bbox[2], box[2]) - max(image.bbox[0], box[0])
+            assert not (overlap > 0.6 * (box[2] - box[0]) and min(image.bbox[3], box[3]) - max(image.bbox[1], box[1]) > 0.6 * (box[3] - box[1]))

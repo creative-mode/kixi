@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     ocr_layout_enabled: bool = Field(default=True, description="Detect figures, tables and formulas and tie them to the question they belong to")
     ocr_layout_model_name: str = Field(default="PP-DocLayout_plus-L", description="Layout detection model")
     ocr_layout_min_score: float = Field(default=0.5, ge=0, le=1, description="Minimum score of a layout region")
-    ocr_formula_images: bool = Field(default=False, description="Also crop formulas that stand alone on their line. Off: the layout model takes the cotação line and handwriting for a formula, so it needs a model that reads them (PaddleOCR-VL).")
+    ocr_formula_images: bool = Field(default=True, description="Crop the printed formulas as pictures that travel with their question: the text engine cannot read maths, so the picture is the formula. Formulas in a pen colour are never cropped.")
 
     # Processing configuration
     max_image_size_mb: float = Field(default=20.0, gt=0, description="Maximum image size in MB")
