@@ -42,7 +42,7 @@ FROM python:3.11-slim as runtime
 LABEL maintainer="Kixi Team" \
     service="ocr-service" \
     version="1.0.0" \
-    description="OCR Service using PaddleOCR-VL for text extraction"
+    description="OCR Service using PaddleOCR 3.x (PP-OCRv5 and PP-DocLayout)"
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -60,7 +60,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # OCR settings
     OCR_LANG=pt \
     OCR_USE_GPU=false \
-    OCR_USE_ANGLE_CLS=true \
+    OCR_USE_ANGLE_CLS=false \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     OCR_SHOW_LOG=false \
     # Processing settings
     MAX_IMAGE_SIZE_MB=20.0 \
@@ -112,6 +113,9 @@ RUN mkdir -p /home/ocr/.paddleocr && \
 
 # Switch to non-root user
 USER ocr
+
+# Bake the PP-OCRv5 and layout models into the image (~/.paddlex): they survive container recreation
+RUN ENVIRONMENT=development ENABLE_AUTH=false PYTHONPATH=/app python tools/prefetch_models.py
 
 # Expose port
 EXPOSE 8000

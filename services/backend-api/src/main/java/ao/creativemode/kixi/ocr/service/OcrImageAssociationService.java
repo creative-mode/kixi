@@ -36,6 +36,8 @@ public class OcrImageAssociationService {
 
     private static final int REGION_CONTRACT_VERSION = 1;
     private static final int MAX_CROP_BYTES = 10 * 1024 * 1024;
+    private static final int MAX_PREVIEW_BYTES = 1536 * 1024;
+    private static final int MAX_PREVIEW_TOTAL_BYTES = 8 * 1024 * 1024;
 
     private final QuestionImageRepository repository;
     private final ImageStorage storage;
@@ -73,13 +75,17 @@ public class OcrImageAssociationService {
         }
 
         List<StoredObject> createdObjects = new ArrayList<>();
+        // A question with several figures keeps them in the order the page has them.
+        Map<Long, Integer> nextOrder = new java.util.HashMap<>();
         return Flux.fromIterable(candidates)
                 .concatMap(candidate -> storage.put(
                                 candidate.key(),
                                 MediaType.IMAGE_PNG,
                                 candidate.pngBytes())
                         .doOnNext(createdObjects::add)
-                        .flatMap(stored -> saveEntity(candidate, stored)))
+                        .flatMap(stored -> saveEntity(
+                                candidate, stored,
+                                nextOrder.merge(candidate.question().getId(), 1, Integer::sum) - 1)))
                 .collectList()
                 .onErrorResume(error -> cleanup(createdObjects).then(Mono.error(error)));
     }
@@ -116,13 +122,42 @@ public class OcrImageAssociationService {
                 png));
     }
 
-    private Mono<QuestionImage> saveEntity(RegionCandidate candidate, StoredObject stored) {
+    /**
+     * The crop of each region as a PNG data URL, by position (null where there is none), so the exam builder
+     * can show the figure with its question before anything is saved. Header and signature regions get none;
+     * a crop over {@link #MAX_PREVIEW_BYTES}, or past {@link #MAX_PREVIEW_TOTAL_BYTES} in all, is left out.
+     */
+    public List<String> previewCrops(List<OcrResponse.ImageToUpload> regions, List<OcrUploadedFile> sourceFiles) {
+        List<String> crops = new ArrayList<>();
+        if (regions == null) {
+            return crops;
+        }
+        java.util.Map<Integer, Boolean> raster = new java.util.HashMap<>();
+        long total = 0;
+        for (OcrResponse.ImageToUpload region : regions) {
+            String dataUrl = null;
+            Integer index = region == null ? null : region.sourceFileIndex();
+            if (region != null && region.isQuestionImage() && region.bbox() != null && region.bbox().size() == 4
+                    && index != null && index >= 0 && sourceFiles != null && index < sourceFiles.size()
+                    && raster.computeIfAbsent(index, i -> isRaster(sourceFiles.get(i)))) {
+                byte[] png = cropToPng(sourceFiles.get(index), region);
+                if (png != null && png.length <= MAX_PREVIEW_BYTES && total + png.length <= MAX_PREVIEW_TOTAL_BYTES) {
+                    total += png.length;
+                    dataUrl = "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(png);
+                }
+            }
+            crops.add(dataUrl);
+        }
+        return crops;
+    }
+
+    private Mono<QuestionImage> saveEntity(RegionCandidate candidate, StoredObject stored, int orderIndex) {
         QuestionImage entity = new QuestionImage();
         entity.setQuestionId(candidate.question().getId());
         entity.setImageUrl(stored.publicUrl());
         entity.setStorageKey(stored.key());
         entity.setCaption(candidate.description());
-        entity.setOrderIndex(0);
+        entity.setOrderIndex(orderIndex);
 
         return repository.save(entity)
                 .onErrorResume(error -> storage.delete(stored.key()).then(Mono.error(error)));

@@ -25,6 +25,7 @@ import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.identity.service.JwtService;
+import ao.creativemode.kixi.ocr.service.OcrImageAssociationService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
@@ -93,6 +94,9 @@ class AuthorizationIntegrationTest {
 
     @MockBean
     private OcrPersistenceService ocrPersistenceService;
+
+    @MockBean
+    private OcrImageAssociationService ocrImageAssociationService;
 
     @MockBean
     private ao.creativemode.kixi.exams.service.StatementService statementService;

@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch, MagicMock
 from PIL import Image
 import io
 
+from tests.conftest import to_predict
 from app.ocr.engine import (
     OCREngine,
     OCRResult,
@@ -78,7 +79,7 @@ def mock_paddle_ocr():
         mock_cls.return_value = mock_instance
 
         # Mock OCR result format
-        mock_instance.ocr.return_value = [
+        mock_instance.predict.return_value = to_predict([
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("1. Calcule o valor de x:", 0.95)],
                 [[[10, 50], [300, 50], [300, 80], [10, 80]], ("A) 5", 0.92)],
@@ -86,7 +87,7 @@ def mock_paddle_ocr():
                 [[[10, 130], [300, 130], [300, 160], [10, 160]], ("C) 15", 0.93)],
                 [[[10, 170], [300, 170], [300, 200], [10, 200]], ("D) 20", 0.90)],
             ]
-        ]
+        ])
 
         yield mock_cls
 
@@ -416,11 +417,11 @@ class TestOCREngine:
         # Setup mock
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.return_value = [
+        mock_instance.predict.return_value = to_predict([
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Test text", 0.95)],
             ]
-        ]
+        ])
 
         engine = OCREngine()
         result = engine.process_image(sample_image)
@@ -434,7 +435,7 @@ class TestOCREngine:
         """Test error handling during processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.side_effect = Exception("OCR failed")
+        mock_instance.predict.side_effect = Exception("OCR failed")
 
         engine = OCREngine()
         result = engine.process_image(sample_image)
@@ -447,7 +448,7 @@ class TestOCREngine:
         """Test processing image from bytes."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.return_value = [[]]
+        mock_instance.predict.return_value = to_predict([[]])
 
         engine = OCREngine()
         result = engine.process_bytes(sample_image_bytes)
@@ -467,11 +468,11 @@ class TestOCREngine:
         """Test processing multiple images."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.return_value = [
+        mock_instance.predict.return_value = to_predict([
             [
                 [[[10, 10], [200, 10], [200, 40], [10, 40]], ("Page content", 0.9)],
             ]
-        ]
+        ])
 
         engine = OCREngine()
         images = [sample_image, sample_image]
@@ -596,6 +597,112 @@ class TestModuleFunctions:
 
 
 # =============================================================================
+# PaddleOCR 3.x: construction, result format, layout
+# =============================================================================
+
+class TestPaddleOcr3:
+    """The engine speaks PaddleOCR 3.x: named models, oneDNN on, ``predict`` results and a layout step."""
+
+    @patch("app.ocr.engine.PaddleOCR")
+    def test_initialize_names_the_models_and_turns_onednn_on(self, mock_paddle):
+        from app.config import settings
+
+        OCREngine().initialize()
+
+        options = mock_paddle.call_args.kwargs
+        # PP-OCRv4 has no Portuguese model in PaddleOCR 3.x: asking for it by lang/ocr_version is a 500 per request
+        assert "ocr_version" not in options and "lang" not in options
+        assert options["text_detection_model_name"] == settings.ocr_det_model_name
+        assert options["text_recognition_model_name"].startswith("latin_")
+        assert options["enable_mkldnn"] is True
+        assert options["device"] == "cpu"
+
+    def test_parse_reads_the_predict_dicts_into_text_lines_with_boxes(self):
+        import numpy as np
+
+        raw = [{
+            "rec_texts": ["1. Calcule x", "", "A) 5"],
+            "rec_scores": [0.97, 0.9, 0.88],
+            "rec_polys": [
+                np.array([[10, 10], [200, 10], [200, 40], [10, 40]]),
+                np.array([[0, 0], [1, 0], [1, 1], [0, 1]]),
+                np.array([[30, 50], [100, 52], [101, 80], [29, 78]]),
+            ],
+        }]
+        blocks = OCREngine()._parse_ocr_results(raw, page_index=2)
+
+        assert [(b.text, b.bbox, b.page_index) for b in blocks] == [
+            ("1. Calcule x", (10, 10, 200, 40), 2),
+            ("A) 5", (29, 50, 101, 80), 2),
+        ]
+        assert blocks[0].confidence == pytest.approx(0.97)
+
+    def test_a_layout_failure_costs_the_figures_and_not_the_text(self, monkeypatch):
+        import numpy as np
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "ocr_layout_enabled", True)
+        engine = OCREngine()
+        engine._layout.detect = MagicMock(side_effect=RuntimeError("model missing"))
+
+        assert engine._detect_layout(np.zeros((10, 10, 3), dtype="uint8"), "req-1") is None
+
+    @patch("app.ocr.engine.PaddleOCR")
+    def test_a_figure_under_a_question_comes_out_tied_to_it(self, mock_paddle, monkeypatch):
+        import numpy as np
+        from app.config import settings
+        from app.ocr.layout import LayoutRegion
+
+        def row(text, y):
+            return [[[60, y], [480, y], [480, y + 22], [60, y + 22]], (text, 0.95)]
+
+        mock_paddle.return_value.predict.return_value = to_predict([[
+            row("REPÚBLICA DE ANGOLA", 40), row("PROVA DO EXAME DE FÍSICA", 100), row("Série: A", 140),
+            row("1. Sobre a teoria dos semicondutores, responda:", 330),
+            row("2. Encontre as correntes representadas no circuito da figura abaixo.", 560),
+            row("3. Apresente a polarização dos transístores no modo saturação (2V)", 900),
+        ]])
+        monkeypatch.setattr(settings, "ocr_layout_enabled", True)
+        engine = OCREngine()
+        engine._layout.detect = MagicMock(return_value=[LayoutRegion("figure", "image", 0.9, (239, 590, 540, 780))])
+
+        result = engine.process_image(np.full((1280, 720, 3), 255, dtype="uint8"))
+
+        figures = [i for i in result.images_to_upload if i.region.startswith("questao_")]
+        assert [(f.region, f.kind) for f in figures] == [("questao_2", "figure")]
+        assert result.to_dict()["imagesToUpload"][-1]["kind"] == "figure" or any(
+            img.get("kind") == "figure" for img in result.to_dict()["imagesToUpload"]
+        )
+
+
+class TestVlPipeline:
+    """The opt-in PaddleOCR-VL pipeline's reading of a parsed page (the model itself needs a GPU)."""
+
+    def test_the_parsed_blocks_become_text_lines_and_figure_regions(self):
+        import numpy as np
+        from types import SimpleNamespace as Block
+
+        engine = OCREngine()
+        engine._initialized = True
+        engine._vl = MagicMock()
+        engine._vl.predict.return_value = [{"parsing_res_list": [
+            Block(label="header", content="REPÚBLICA DE ANGOLA", bbox=[0, 0, 700, 30]),
+            Block(label="text", content="1. Sobre os semicondutores\na) Quantos electrões?", bbox=[40, 100, 600, 160]),
+            Block(label="image", content="", bbox=[200, 200, 500, 400]),
+            Block(label="table", content="<table/>", bbox=[50, 420, 600, 520]),
+            Block(label="display_formula", content="B=B_{max}e^{-2t}", bbox=[100, 540, 400, 580]),
+        ]}]
+
+        blocks, regions = engine._run_vl(np.zeros((700, 700, 3), dtype="uint8"), page_index=1)
+
+        assert [b.text for b in blocks] == ["1. Sobre os semicondutores", "a) Quantos electrões?"]
+        assert all(b.page_index == 1 for b in blocks) and blocks[0].bbox[1] < blocks[1].bbox[1]
+        assert [(r.kind, r.bbox) for r in regions] == [
+            ("figure", (200, 200, 500, 400)), ("table", (50, 420, 600, 520)), ("formula", (100, 540, 400, 580)),
+        ]
+
+
+# =============================================================================
 # Integration Tests (marked for optional execution)
 # =============================================================================
 
@@ -631,7 +738,7 @@ class TestAsyncOCR:
         """Test async image processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.return_value = [[]]
+        mock_instance.predict.return_value = to_predict([[]])
 
         engine = OCREngine()
         result = await engine.process_image_async(sample_image)
@@ -643,7 +750,7 @@ class TestAsyncOCR:
         """Test async bytes processing."""
         mock_instance = MagicMock()
         mock_paddle.return_value = mock_instance
-        mock_instance.ocr.return_value = [[]]
+        mock_instance.predict.return_value = to_predict([[]])
 
         engine = OCREngine()
         result = await engine.process_bytes_async(sample_image_bytes)

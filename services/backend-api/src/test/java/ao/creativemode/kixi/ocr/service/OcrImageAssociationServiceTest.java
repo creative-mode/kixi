@@ -87,6 +87,50 @@ class OcrImageAssociationServiceTest {
         verify(storage).put(anyString(), any(), any(byte[].class));
     }
 
+    @Test
+    void severalFiguresOfOneQuestionKeepThePageOrder() {
+        Question question = new Question();
+        question.setId(9L);
+        question.setNumber(2);
+        List<OcrResponse.ImageToUpload> regions = List.of(
+            new OcrResponse.ImageToUpload("a.png", "Figura 1", "questao_2", 0, List.of(0, 0, 5, 5), 10, 10, 1, 0, "figure", 0.9),
+            new OcrResponse.ImageToUpload("b.png", "Tabela", "questao_2", 0, List.of(5, 5, 10, 10), 10, 10, 1, 0, "table", 0.8));
+        OcrUploadedFile source = new OcrUploadedFile("exam.png", MediaType.IMAGE_PNG, pngBytes(10, 10));
+        java.util.List<QuestionImage> saved = new java.util.ArrayList<>();
+        when(storage.put(anyString(), any(), any())).thenAnswer(invocation ->
+            Mono.just(new StoredObject(invocation.getArgument(0), "/uploads/" + invocation.getArgument(0))));
+        when(repository.save(any(QuestionImage.class))).thenAnswer(invocation -> {
+            QuestionImage image = invocation.getArgument(0);
+            saved.add(image);
+            return Mono.just(image);
+        });
+
+        StepVerifier.create(service.persistQuestionImages(List.of(question), regions, List.of(source)))
+            .assertNext(images -> assertThat(images).hasSize(2))
+            .verifyComplete();
+
+        assertThat(saved).extracting(QuestionImage::getOrderIndex).containsExactly(0, 1);
+        assertThat(saved).extracting(QuestionImage::getCaption).containsExactly("Figura 1", "Tabela");
+    }
+
+    @Test
+    void previewCropsGiveTheBuilderAPngDataUrlPerQuestionRegionAndNothingForTheHeader() {
+        List<OcrResponse.ImageToUpload> regions = List.of(
+            new OcrResponse.ImageToUpload("h.png", "Cabeçalho", "cabecalho", 0, List.of(0, 0, 10, 4), 10, 10, 1, 0),
+            new OcrResponse.ImageToUpload("q.png", "Figura", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 0, "figure", 0.9),
+            new OcrResponse.ImageToUpload("p.png", "Figura de um PDF", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 1, "figure", 0.9));
+        List<OcrUploadedFile> files = List.of(
+            new OcrUploadedFile("exam.png", MediaType.IMAGE_PNG, pngBytes(10, 10)),
+            new OcrUploadedFile("exam.pdf", MediaType.APPLICATION_PDF, "%PDF-1.4".getBytes()));
+
+        List<String> crops = service.previewCrops(regions, files);
+
+        assertThat(crops).hasSize(3);
+        assertThat(crops.get(0)).isNull();
+        assertThat(crops.get(1)).startsWith("data:image/png;base64,");
+        assertThat(crops.get(2)).isNull();
+    }
+
     private byte[] pngBytes(int width, int height) {
         try {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
