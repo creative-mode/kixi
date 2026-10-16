@@ -87,7 +87,7 @@ def test_without_a_layout_the_old_crop_of_the_question_text_is_kept():
     assert [i.region for i in images if i.region.startswith("questao_")] == [f"questao_{n}" for n in flagged]
 
 
-def test_a_formula_standing_alone_is_a_picture_but_one_inside_a_sentence_is_not():
+def test_a_formula_is_a_picture_whether_it_stands_alone_or_sits_in_a_sentence():
     blocks = exam_blocks() + [line("B = Bmax e", 620, x=60, i=20)]
     standalone = LayoutRegion(kind="formula", label="formula", score=0.9, bbox=(150, 700, 560, 740))
     inline = LayoutRegion(kind="formula", label="formula", score=0.9, bbox=(300, 620, 500, 642))
@@ -95,7 +95,8 @@ def test_a_formula_standing_alone_is_a_picture_but_one_inside_a_sentence_is_not(
         blocks, page_dimensions={0: (W, H)}, layout_regions={0: [standalone, inline]}, formula_images=True,
     )
     kinds = [(i.region, i.kind) for i in images if i.region.startswith("questao_")]
-    assert kinds == [("questao_2", "formula")]
+    # the text engine cannot read maths, so each formula travels as a picture, in page order
+    assert kinds == [("questao_2", "formula"), ("questao_2", "formula")]
 
 
 def test_formulas_are_not_cropped_unless_asked_for():
