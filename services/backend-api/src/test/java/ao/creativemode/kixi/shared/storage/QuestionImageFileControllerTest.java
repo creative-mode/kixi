@@ -39,6 +39,15 @@ class QuestionImageFileControllerTest {
     }
 
     @Test
+    void aPhotoOrLogoChosenFromTheDeviceIsServedToo() throws Exception {
+        Files.createDirectories(root.resolve("images/avatar"));
+        Files.write(root.resolve("images/avatar/9f.png"), new byte[] {(byte) 0x89, 'P', 'N', 'G'});
+        client.get().uri("/uploads/images/avatar/9f.png").exchange().expectStatus().isOk().expectHeader().contentType("image/png");
+        client.get().uri("/uploads/images/outra/9f.png").exchange().expectStatus().isNotFound();
+        client.get().uri("/uploads/images/avatar/..%2F..%2Fdonations%2F3%2Fsecret.png").exchange().expectStatus().isNotFound();
+    }
+
+    @Test
     void aMissingFigureIsA404() {
         client.get().uri("/uploads/questions/7/nao-existe.png").exchange().expectStatus().isNotFound();
     }

@@ -40,9 +40,9 @@
 		}
 	}
 
-	# 1b. As figuras das questões (armazenamento local). O <img> do aluno e do professor pede
-	#     /uploads/questions/{questão}/{ficheiro}, e é o backend que as serve (só essa pasta, só imagens).
-	handle /uploads/questions/* {
+	# 1b. As imagens do armazenamento local: as figuras das questões e as fotos e logótipos escolhidos do
+	#     dispositivo. O <img> pede /uploads/..., e é o backend que as serve (só questions/ e images/, só imagens).
+	handle /uploads/* {
 		reverse_proxy backend-api:8080
 	}
 
