@@ -28,6 +28,8 @@ class LayoutRegion:
     label: str
     score: float
     bbox: Tuple[int, int, int, int]  # x1, y1, x2, y2
+    # In ink that is not print (a student's blue pen): kept out of the exam, not cropped as a figure.
+    handwritten: bool = False
 
     @property
     def area(self) -> int:

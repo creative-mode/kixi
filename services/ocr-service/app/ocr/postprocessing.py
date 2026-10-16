@@ -46,6 +46,9 @@ class TextBlock:
     bbox: Tuple[int, int, int, int]  # x1, y1, x2, y2
     page_index: int = 0
     line_index: int = 0
+    # In blue pen: a student's working or a teacher's note, never part of the printed exam (set by the engine,
+    # which is the one that sees the colours).
+    handwritten: bool = False
 
 
 @dataclass
@@ -530,8 +533,15 @@ class OCRPostprocessor:
         # Repair the OCR text (accents, one-letter slips, glued words), then move handwriting out of the way.
         sorted_blocks = self._repair_blocks(sorted_blocks)
         noise: List[Tuple[TextBlock, str]] = []
+        page_limits: Dict[int, int] = {}
         if self.filter_noise:
             sorted_blocks, noise = self._split_noise(sorted_blocks)
+            # Nothing the exam says comes after its cotação line: below it there are signatures, stamps, logos and
+            # whatever a student scribbled in the free space.
+            sorted_blocks, after, page_limits = self._cut_after_cotacao(sorted_blocks, page_dimensions or {})
+            noise.extend(after)
+        # Maths the text engine cannot read is garbage in the text: the layout knows where the printed formulas are.
+        sorted_blocks = self._mask_formulas(sorted_blocks, layout_regions, page_limits)
 
         # Combine all text for pattern matching
         full_text = " ".join(b.text for b in sorted_blocks)
@@ -572,6 +582,7 @@ class OCRPostprocessor:
             source_file_indices or {},
             layout_regions,
             formula_images,
+            page_limits,
         )
 
         # Collect unmapped content
@@ -1090,6 +1101,9 @@ class OCRPostprocessor:
             solid = [b for b in page_blocks if b.confidence >= 0.95 and len(b.text.strip()) >= 5]
             width = max((b.bbox[2] for b in page_blocks), default=0)
             for b in page_blocks:
+                if b.handwritten:
+                    reasons[id(b)] = "Manuscrito (tinta que não é de impressão)"
+                    continue
                 if self._words3(b.text) > 1:
                     continue
                 # A bare number is "structural" (it looks like a cotação), but one far out in the right margin, on a
@@ -1114,6 +1128,112 @@ class OCRPostprocessor:
         kept = [b for b in blocks if id(b) not in reasons]
         noise = [(b, reasons[id(b)]) for b in blocks if id(b) in reasons]
         return kept, noise
+
+    # "2) 4 valores 3) 4valores 4) 5valores": the rest of a cotação line that the engine cut in two.
+    _COTACAO_CONTINUATION = re.compile(
+        r"^\s*(?:\d{1,2}\s*[-.)]\s*(?:[a-z]\s*[-–)]\s*)?\d+(?:[.,]\d+)?\s*(?:valores?|v)\b[\s,;/]*)+$",
+        re.IGNORECASE,
+    )
+    _COTACAO_LINE = re.compile(r"^\s*cota[cç][aã]o\b", re.IGNORECASE)
+    _LABEL_PREFIX = re.compile(r"^\(?[A-Za-z]\)\s*|^\d{1,2}\s*[-.)]\s*")
+
+    def _cut_after_cotacao(
+        self,
+        blocks: List[TextBlock],
+        page_dimensions: Dict[int, Tuple[int, int]],
+    ) -> Tuple[List[TextBlock], List[Tuple[TextBlock, str]], Dict[int, int]]:
+        """Drop everything below the «Cotação…» line of the page, in the lower half of the page.
+
+        Also returns, per page, the y below which nothing belongs to the exam (figures and formulas included)."""
+        cut: Dict[int, int] = {}
+        region_limit: Dict[int, int] = {}
+        for block in blocks:
+            if not self._COTACAO_LINE.match(block.text) or block.page_index in cut:
+                continue
+            height = page_dimensions.get(block.page_index, (0, 0))[1]
+            if height and block.bbox[1] < 0.5 * height:
+                continue  # a cotação near the top is part of the header, not the end of the exam
+            row_bottom = max(
+                (b.bbox[3] for b in blocks
+                 if b.page_index == block.page_index
+                 and min(b.bbox[3], block.bbox[3]) - max(b.bbox[1], block.bbox[1]) >= 0.4 * (block.bbox[3] - block.bbox[1])),
+                default=block.bbox[3],
+            )
+            row_top = min(
+                (b.bbox[1] for b in blocks
+                 if b.page_index == block.page_index
+                 and min(b.bbox[3], block.bbox[3]) - max(b.bbox[1], block.bbox[1]) >= 0.4 * (block.bbox[3] - block.bbox[1])),
+                default=block.bbox[1],
+            )
+            cut[block.page_index] = row_bottom + 6
+            region_limit[block.page_index] = row_top - 4
+        if not cut:
+            return blocks, [], {}
+        kept: List[TextBlock] = []
+        dropped: List[Tuple[TextBlock, str]] = []
+        for block in blocks:
+            limit = cut.get(block.page_index)
+            if limit is not None and block.bbox[1] > limit:
+                dropped.append((block, "Depois da linha de cotação: fora da prova"))
+            else:
+                kept.append(block)
+        return kept, dropped, region_limit
+
+    def _printed_formulas(
+        self,
+        regions: Optional[Dict[int, List[LayoutRegion]]],
+        page_limits: Optional[Dict[int, int]] = None,
+    ) -> Dict[int, List[LayoutRegion]]:
+        """The formulas of the layout that are print, above the cotação line of their page."""
+        limits = page_limits or {}
+        return {
+            page: [
+                r for r in found
+                if r.kind == "formula" and not r.handwritten and r.score >= 0.5
+                and (page not in limits or r.bbox[1] < limits[page])
+            ]
+            for page, found in (regions or {}).items()
+        }
+
+    def _mask_formulas(
+        self,
+        blocks: List[TextBlock],
+        layout_regions: Optional[Dict[int, List[LayoutRegion]]],
+        page_limits: Optional[Dict[int, int]] = None,
+    ) -> List[TextBlock]:
+        """Replace the text a printed formula was misread as by «[fórmula]», keeping the label before it («c)»).
+
+        A block is a formula when most of its area lies inside a printed formula region of the layout. One marker
+        stands for one formula region, however many lines the engine cut it into. The formula itself is cropped as
+        a picture and travels with the question.
+        """
+        formulas = self._printed_formulas(layout_regions, page_limits)
+        if not any(formulas.values()):
+            return blocks
+        out: List[TextBlock] = []
+        marked: set = set()
+        for block in blocks:
+            if self._COTACAO_LINE.match(block.text) or self._COTACAO_CONTINUATION.match(block.text):
+                out.append(block)  # the scoring line is read by its text; a formula box over it is a mistake
+                continue
+            x1, y1, x2, y2 = block.bbox
+            area = max(1, (x2 - x1) * (y2 - y1))
+            home = next(
+                (i for i, r in enumerate(formulas.get(block.page_index, []))
+                 if self._overlap(block.bbox, r.bbox) >= 0.6 * area),
+                None,
+            )
+            if home is None:
+                out.append(block)
+                continue
+            key = (block.page_index, home)
+            if key in marked:
+                continue
+            marked.add(key)
+            prefix = self._LABEL_PREFIX.match(block.text.strip())
+            lead = prefix.group(0).strip() + " " if prefix else ""
+            out.append(replace(block, text=f"{lead}[fórmula]"))
+        return out
 
     @staticmethod
     def _far_right_of(block: TextBlock, lines: List[TextBlock], page_width: int) -> bool:
@@ -1182,7 +1302,7 @@ class OCRPostprocessor:
             text = block.text.strip()
             if not text:
                 continue
-            if re.match(r"^\s*cotaç[aã]o\s", text, re.IGNORECASE):
+            if re.match(r"^\s*cotaç[aã]o\s", text, re.IGNORECASE) or self._COTACAO_CONTINUATION.match(text):
                 continue
             if self._is_coordination_block(text):
                 continue
@@ -1423,10 +1543,11 @@ class OCRPostprocessor:
             if letter.lower() in (expected, chr(ord(expected) + 1)) and not question.options:
                 return letter.lower(), info[1]
             return None
-        if letter.lower() != "a":
+        if letter.lower() not in ("a", "b", "c", "d"):
             return None
+        # The first alínea of a question is not always "a": a photo can lose it, and a paper may start at "c)".
         if self._is_subitem_context(stripped, question, cotacao_map, draft.stem_parts, []):
-            return "a", info[1]
+            return letter.lower(), info[1]
         return None
 
     def _detect_question_number(self, text: str, expected: Optional[int] = None) -> Optional[Tuple[int, str]]:
@@ -1937,6 +2058,7 @@ class OCRPostprocessor:
         source_file_indices: Dict[int, int],
         layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
         formula_images: bool = False,
+        page_limits: Optional[Dict[int, int]] = None,
     ) -> List[ImageToUpload]:
         """Detect regions that should be uploaded as images.
 
@@ -2005,6 +2127,7 @@ class OCRPostprocessor:
         if layout_regions is not None:
             images.extend(self._question_figures(
                 questions, blocks, layout_regions, dimensions, source_file_index, base_name, formula_images,
+                page_limits or {},
             ))
         else:
             for question in questions:
@@ -2098,6 +2221,7 @@ class OCRPostprocessor:
         source_file_index,
         base_name: str,
         formula_images: bool = False,
+        page_limits: Optional[Dict[int, int]] = None,
     ) -> List[ImageToUpload]:
         """Tie each figure, table and standalone formula of the layout to the question it sits under."""
         if not questions:
@@ -2120,11 +2244,13 @@ class OCRPostprocessor:
                     continue
                 if coordination is not None and y1 >= coordination - 30:
                     continue  # the signature and the logos of the footer
+                if (page_limits or {}).get(page_index) is not None and y1 >= page_limits[page_index]:
+                    continue  # below the cotação line: the stamp, the signature, scribbles in the free space
                 inside = sum(self._overlap(b.bbox, region.bbox) for b in page_blocks)
                 if region.kind == "figure" and area and inside > 0.5 * area:
                     continue  # mostly text: the layout model took a paragraph for a picture
-                if region.kind == "formula" and not (formula_images and self._standalone_formula(region, page_blocks, width)):
-                    continue  # formulas are cropped only on request: the layout model also takes the cotação line and handwriting for one
+                if region.kind == "formula" and (not formula_images or region.handwritten or region.score < 0.5):
+                    continue  # formulas are cropped on request, and never the ones in a student's pen
                 if any(
                     self._overlap(region.bbox, other.bbox) > 0.5 * min(area, other.area)
                     for other in kept

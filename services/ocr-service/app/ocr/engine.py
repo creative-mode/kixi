@@ -8,7 +8,7 @@ formulas) that the postprocessor ties to the questions. PaddleOCR-VL is availabl
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, List, Dict, Any, Tuple
 import hashlib
 import uuid
@@ -23,6 +23,7 @@ from app.ocr.preprocessing import (
     load_image_from_bytes,
     load_image_from_pil,
 )
+from app.ocr.ink import is_handwriting
 from app.ocr.layout import LayoutDetector, LayoutRegion
 from app.ocr.postprocessing import (
     OCRPostprocessor,
@@ -365,6 +366,30 @@ class OCREngine:
         return blocks, regions
 
     @staticmethod
+    def _mark_handwriting(
+        colour: np.ndarray,
+        frame: np.ndarray,
+        blocks: List[TextBlock],
+        layout: Optional[List[LayoutRegion]],
+    ) -> Tuple[List[TextBlock], Optional[List[LayoutRegion]]]:
+        """Flag the text lines and formula regions written in pen: they are not part of the printed exam.
+
+        ``colour`` is the photo as it came (preprocessing turns it grey, and the pen is told apart by colour);
+        ``frame`` is the image the boxes are in. When deskew grew the canvas the two differ by a centred offset.
+        """
+        dx = max(0, (frame.shape[1] - colour.shape[1]) // 2)
+        dy = max(0, (frame.shape[0] - colour.shape[0]) // 2)
+
+        def pen(box) -> bool:
+            return is_handwriting(colour, (box[0] - dx, box[1] - dy, box[2] - dx, box[3] - dy))
+
+        marked = [replace(b, handwritten=True) if pen(b.bbox) else b for b in blocks]
+        regions = None if layout is None else [
+            replace(r, handwritten=True) if r.kind in ("formula", "figure") and pen(r.bbox) else r for r in layout
+        ]
+        return marked, regions
+
+    @staticmethod
     def _numbering_has_gaps(questions: List[ExtractedQuestion]) -> bool:
         """Questions numbered 1, 4, 5 are missing two: the lines that carried the numbers were not read."""
         numbers = [int(q.number) for q in questions if str(q.number).isdigit()]
@@ -483,6 +508,7 @@ class OCREngine:
                 raw_results = self._run_ocr(processed_image)
                 text_blocks = self._parse_ocr_results(raw_results, page_index)
                 layout = self._detect_layout(processed_image, request_id)
+            text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
 
             logger.debug(
                 "OCR complete",
@@ -524,6 +550,7 @@ class OCREngine:
                 logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
                 retry_blocks = self._parse_ocr_results(self._run_ocr(image, fallback=True), page_index)
                 retry_layout = self._detect_layout(image, request_id)
+                retry_blocks, retry_layout = self._mark_handwriting(image, image, retry_blocks, retry_layout)
                 retry = interpret(retry_blocks, image, retry_layout)
                 if len(retry[1]) > len(questions) or (
                     len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
