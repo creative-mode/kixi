@@ -1,4 +1,4 @@
-package ao.creativemode.kixi.donations.service;
+package ao.creativemode.kixi.shared.storage;
 
 import static ao.creativemode.kixi.donations.service.DonationFixtures.executable;
 import static ao.creativemode.kixi.donations.service.DonationFixtures.jpeg;
