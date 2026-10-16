@@ -176,7 +176,11 @@ services:
       # OCR Configuration
       OCR_LANG: ${OCR_LANG:-pt}
       OCR_USE_GPU: ${OCR_USE_GPU:-false}
-      OCR_USE_ANGLE_CLS: ${OCR_USE_ANGLE_CLS:-true}
+      OCR_USE_ANGLE_CLS: ${OCR_USE_ANGLE_CLS:-false}
+      # PaddleOCR 3.x: the models are baked into the image (no volume); see services/ocr-service/README.md
+      OCR_PIPELINE: ${OCR_PIPELINE:-ppocr}
+      OCR_LAYOUT_ENABLED: ${OCR_LAYOUT_ENABLED:-true}
+      OCR_FALLBACK_DET_MODEL_NAME: ${OCR_FALLBACK_DET_MODEL_NAME-PP-OCRv5_server_det}
       OCR_SHOW_LOG: ${OCR_SHOW_LOG:-false}
       # Processing Configuration
       MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB:-20.0}
@@ -197,9 +201,6 @@ services:
       ENABLE_METRICS: ${ENABLE_METRICS:-true}
     ports:
       - "${OCR_BIND_ADDRESS:-127.0.0.1}:${OCR_PORT:-8000}:8000"
-    volumes:
-      # Persist PaddleOCR models between container restarts
-      - ocr_models:/home/ocr/.paddleocr
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -366,7 +367,6 @@ volumes:
     name: kixi-postgres-data
 
   # PaddleOCR models cache (CPU version)
-  ocr_models:
     name: kixi-ocr-models
 
   # PaddleOCR models cache (GPU version)

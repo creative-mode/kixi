@@ -1,6 +1,6 @@
 # Kixi OCR Service
 
-A high-performance OCR (Optical Character Recognition) microservice built with FastAPI and PaddleOCR-VL for extracting structured text from exam images and PDFs.
+A high-performance OCR (Optical Character Recognition) microservice built with FastAPI and PaddleOCR 3.x for extracting structured text from exam images and PDFs.
 
 ## Overview
 
@@ -19,8 +19,8 @@ This service is part of the Kixi platform and is responsible for:
 │                      OCR Service                            │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   FastAPI   │──│  OCR Engine │──│  PaddleOCR-VL       │ │
-│  │   Routes    │  │  (engine.py)│  │  (PP-OCRv4 models)  │ │
+│  │   FastAPI   │──│  OCR Engine │──│  PaddleOCR 3.x      │ │
+│  │   Routes    │  │  (engine.py)│  │  PP-OCRv5 + layout  │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 │         │                │                                  │
 │         │         ┌──────┴──────┐                          │
@@ -39,7 +39,9 @@ This service is part of the Kixi platform and is responsible for:
 
 ## Features
 
-- **PaddleOCR-VL Integration**: Uses PP-OCRv4 models for high accuracy
+- **PaddleOCR 3.x on CPU**: PP-OCRv5 text lines (`latin_PP-OCRv5_mobile_rec` reads Portuguese) with oneDNN, 4 to 16 s per photo, models baked into the image
+- **Figures tied to questions**: PP-DocLayout finds the figures, circuits and tables; each is assigned to the question it sits under (`imagesToUpload`: `region` `questao_<n>`, `kind`, `bbox`)
+- **PaddleOCR-VL (opt-in)**: `OCR_PIPELINE=vl` parses the page with the 0.9B document model; it needs a GPU (it did not finish one page in 10 minutes on CPU and ran out of 6 GB)
 - **Multi-language Support**: Optimized for Portuguese, with support for 80+ languages
 - **PDF Processing**: Extract text from multi-page PDF documents
 - **Image Preprocessing**: Automatic deskewing, noise reduction, and contrast enhancement
@@ -384,3 +386,22 @@ See the main project's [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 ## License
 
 This service is part of the Kixi platform and is licensed under Apache License 2.0 with Commons Clause. See [LICENSE](../../LICENSE) for details.
+
+
+## Pipeline, models and what to know
+
+| Setting | Default | Why |
+|---|---|---|
+| `OCR_PIPELINE` | `ppocr` | `vl` = PaddleOCR-VL, GPU only |
+| `OCR_DET_MODEL_NAME` / `OCR_REC_MODEL_NAME` | `PP-OCRv5_mobile_det` / `latin_PP-OCRv5_mobile_rec` | PP-OCRv4 has no `pt` model in PaddleOCR 3.x (it answered every request with 500) |
+| `OCR_FALLBACK_DET_MODEL_NAME` | `PP-OCRv5_server_det` | pages that give fewer than `OCR_MIN_QUESTIONS` (2) questions are read again with the thorough detector (25 to 40 s) |
+| `OCR_ENABLE_MKLDNN` | `true` | needs `paddlepaddle==3.2.2`; 3.3.1 dies with `ConvertPirAttribute2RuntimeAttribute not support` and the read goes from ~10 s to 30 to 140 s |
+| `OCR_LAYOUT_*` | on, `PP-DocLayout_plus-L` | figure/table regions; a layout failure only costs the figures, never the text |
+| `OCR_FORMULA_IMAGES` | `false` | the layout model takes the cotação line and handwriting for a formula |
+
+The models are downloaded **when the image is built** (`tools/prefetch_models.py`), so a recreated container does
+not depend on the internet and needs no model volume.
+
+Limits found on the real exams: a photo whose lines the mobile detector cannot see (a faded block, a red circle over
+a number) loses those questions even after the second read; the numbering repair (`_repair_lost_labels`) gives back
+a label the photo turned into a dot or a digit, but a whole missing line stays missing.

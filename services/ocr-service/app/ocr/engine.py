@@ -1,8 +1,8 @@
 """
 OCR Engine Module
 
-Core OCR processing using PaddleOCR-VL.
-Provides the main engine for text extraction from images.
+Core OCR processing with PaddleOCR 3.x: PP-OCRv5 text lines plus PP-DocLayout regions (figures, tables,
+formulas) that the postprocessor ties to the questions. PaddleOCR-VL is available as an opt-in pipeline.
 """
 
 import asyncio
@@ -23,6 +23,7 @@ from app.ocr.preprocessing import (
     load_image_from_bytes,
     load_image_from_pil,
 )
+from app.ocr.layout import LayoutDetector, LayoutRegion
 from app.ocr.postprocessing import (
     OCRPostprocessor,
     TextBlock,
@@ -101,6 +102,8 @@ class OCRResult:
                     "sourceHeight": img.source_height,
                     "contractVersion": img.contract_version,
                     "sourceFileIndex": img.source_file_index,
+                    **({"kind": img.kind} if img.kind else {}),
+                    **({"score": img.score} if img.score is not None else {}),
                 }
                 for img in self.images_to_upload
             ],
@@ -122,11 +125,13 @@ class OCREngine:
         self,
         lang: str = "pt",
         use_gpu: bool = False,
-        use_angle_cls: bool = True,
+        use_angle_cls: bool = False,
         det_model_dir: Optional[str] = None,
         rec_model_dir: Optional[str] = None,
         cls_model_dir: Optional[str] = None,
         show_log: bool = False,
+        det_model_name: Optional[str] = None,
+        rec_model_name: Optional[str] = None,
     ):
         """
         Initialize the OCR engine.
@@ -147,8 +152,13 @@ class OCREngine:
         self.rec_model_dir = rec_model_dir
         self.cls_model_dir = cls_model_dir
         self.show_log = show_log
+        self.det_model_name = det_model_name or settings.ocr_det_model_name
+        self.rec_model_name = rec_model_name or settings.ocr_rec_model_name
 
         self._ocr = None
+        self._fallback_ocr = None
+        self._vl = None
+        self._layout = LayoutDetector(use_gpu=use_gpu, enable_mkldnn=settings.ocr_enable_mkldnn)
         self._initialized = False
         self._executor = ThreadPoolExecutor(max_workers=settings.workers)
 
@@ -175,32 +185,34 @@ class OCREngine:
 
         logger.info(
             "Initializing PaddleOCR engine",
+            pipeline=settings.ocr_pipeline,
             lang=self.lang,
             use_gpu=self.use_gpu,
-            use_angle_cls=self.use_angle_cls,
+            det_model=self.det_model_name,
+            rec_model=self.rec_model_name,
         )
 
         try:
-            # Initialize PaddleOCR with configured options
-            self._ocr = _get_paddle_ocr()(
-                lang=self.lang,
-                use_gpu=self.use_gpu,
-                use_angle_cls=self.use_angle_cls,
-                det_model_dir=self.det_model_dir,
-                rec_model_dir=self.rec_model_dir,
-                cls_model_dir=self.cls_model_dir,
-                show_log=self.show_log,
-                # Use PP-OCRv4 models for better accuracy
-                ocr_version="PP-OCRv4",
-                # Enable structure detection for better layout analysis
-                structure_version="PP-StructureV2",
-            )
+            if settings.ocr_pipeline == "vl":
+                from paddleocr import PaddleOCRVL
+
+                self._vl = PaddleOCRVL(device="gpu:0" if self.use_gpu else "cpu")
+            else:
+                ocr_options = self._ocr_options(self.det_model_name)
+                if self.det_model_dir:
+                    ocr_options["text_detection_model_dir"] = self.det_model_dir
+                self._ocr = _get_paddle_ocr()(**ocr_options)
 
             self._initialized = True
             logger.info("PaddleOCR engine initialized successfully")
 
         except Exception as e:
-            logger.error("Failed to initialize PaddleOCR engine", error_type=type(e).__name__, error=str(e))
+            logger.error(
+                "Failed to initialize PaddleOCR engine",
+                error_type=type(e).__name__,
+                error=str(e),
+                exc_info=True,
+            )
             raise RuntimeError(f"Failed to initialize OCR engine: {e}")
 
     def _ensure_initialized(self) -> None:
@@ -208,23 +220,54 @@ class OCREngine:
         if not self._initialized:
             self.initialize()
 
-    def _run_ocr(self, image: np.ndarray) -> List[Any]:
+    def _ocr_options(self, det_model_name: str) -> Dict[str, Any]:
+        """The PaddleOCR 3.x constructor options, for a given detector."""
+        options: Dict[str, Any] = {
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": self.use_angle_cls,
+            "device": "gpu:0" if self.use_gpu else "cpu",
+            # The pair is named, not chosen by lang/ocr_version: in PaddleOCR 3.x the PP-OCRv4 family only
+            # ships ch and en, so ocr_version="PP-OCRv4" with lang="pt" has no model at all (every request
+            # answered 500). latin_PP-OCRv5_mobile_rec reads Portuguese accents.
+            "text_detection_model_name": det_model_name,
+            "text_recognition_model_name": self.rec_model_name,
+            # oneDNN works with paddlepaddle 3.2.x (pinned in requirements.txt); with 3.3.1 it dies on the
+            # first real page.
+            "enable_mkldnn": settings.ocr_enable_mkldnn,
+        }
+        if settings.ocr_det_thresh is not None:
+            options["text_det_thresh"] = settings.ocr_det_thresh
+        if settings.ocr_det_box_thresh is not None:
+            options["text_det_box_thresh"] = settings.ocr_det_box_thresh
+        if self.rec_model_dir:
+            options["text_recognition_model_dir"] = self.rec_model_dir
+        if self.cls_model_dir:
+            options["textline_orientation_model_dir"] = self.cls_model_dir
+        return options
+
+    def _run_ocr(self, image: np.ndarray, fallback: bool = False) -> List[Any]:
         """
         Run PaddleOCR on an image.
 
         Args:
             image: Image as numpy array (BGR format)
+            fallback: Use the slower detector that sees the faint lines the fast one misses
 
         Returns:
-            Raw OCR results from PaddleOCR
+            PaddleOCR 3.x results: one dict-like per image with rec_texts, rec_scores and rec_polys
         """
         self._ensure_initialized()
+
+        if fallback:
+            if self._fallback_ocr is None:
+                self._fallback_ocr = _get_paddle_ocr()(**self._ocr_options(settings.ocr_fallback_det_model_name))
+            return list(self._fallback_ocr.predict(image))
 
         if self._ocr is None:
             raise RuntimeError("OCR engine not initialized")
 
-        result = self._ocr.ocr(image, cls=self.use_angle_cls)
-        return result
+        return list(self._ocr.predict(image))
 
     def _parse_ocr_results(
         self,
@@ -232,85 +275,125 @@ class OCREngine:
         page_index: int = 0,
     ) -> List[TextBlock]:
         """
-        Parse raw PaddleOCR results into TextBlock objects.
+        Parse PaddleOCR 3.x results into TextBlock objects (one per text line).
 
         Args:
-            raw_results: Raw results from PaddleOCR
+            raw_results: Result of ``PaddleOCR.predict``
             page_index: Index of the page being processed
-
-        Returns:
-            List of TextBlock objects
         """
-        text_blocks = []
-
-        if not raw_results or not raw_results[0]:
+        text_blocks: List[TextBlock] = []
+        if not raw_results:
             return text_blocks
 
-        for idx, line in enumerate(raw_results[0]):
-            if not line:
-                continue
-
-            # PaddleOCR returns [[box], (text, confidence)]
-            box = line[0]
-            text_info = line[1]
-
-            if len(text_info) >= 2:
-                text = text_info[0]
-                confidence = float(text_info[1])
-            else:
-                text = str(text_info)
-                confidence = 0.5
-
-            # Extract bounding box
-            # box is [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
-            if len(box) >= 4:
-                x1 = int(min(p[0] for p in box))
-                y1 = int(min(p[1] for p in box))
-                x2 = int(max(p[0] for p in box))
-                y2 = int(max(p[1] for p in box))
-            else:
-                x1, y1, x2, y2 = 0, 0, 0, 0
-
-            text_blocks.append(TextBlock(
-                text=text,
-                confidence=confidence,
-                bbox=(x1, y1, x2, y2),
-                page_index=page_index,
-                line_index=idx,
-            ))
+        index = 0
+        for result in raw_results:
+            texts = result.get("rec_texts") or []
+            scores = result.get("rec_scores")
+            scores = [0.5] * len(texts) if scores is None else scores
+            polys = result.get("rec_polys")
+            polys = result.get("dt_polys") if polys is None or len(polys) == 0 else polys
+            polys = [] if polys is None else polys
+            for position, text in enumerate(texts):
+                if not str(text).strip():
+                    continue
+                confidence = float(scores[position]) if position < len(scores) else 0.5
+                if position < len(polys):
+                    poly = np.asarray(polys[position]).reshape(-1, 2)
+                    x1, y1 = int(poly[:, 0].min()), int(poly[:, 1].min())
+                    x2, y2 = int(poly[:, 0].max()), int(poly[:, 1].max())
+                else:
+                    x1, y1, x2, y2 = 0, 0, 0, 0
+                text_blocks.append(TextBlock(
+                    text=str(text),
+                    confidence=confidence,
+                    bbox=(x1, y1, x2, y2),
+                    page_index=page_index,
+                    line_index=index,
+                ))
+                index += 1
 
         return text_blocks
 
-    def _detect_tables(self, raw_results: List[Any]) -> bool:
-        """
-        Detect if the document contains tables.
+    # Blocks of the PaddleOCR-VL parse that are pictures of the page, and the kind each becomes.
+    _VL_REGION_KINDS = {
+        "image": "figure", "chart": "figure", "figure": "figure",
+        "table": "table",
+        "formula": "formula", "display_formula": "formula",
+    }
+    # Blocks whose text is not part of the exam (page furniture and captions of the logos).
+    _VL_SKIPPED = {"header", "footer", "number", "aside_text", "seal", "formula_number", "reference"}
 
-        Simple heuristic based on text alignment patterns.
+    def _run_vl(self, image: np.ndarray, page_index: int) -> Tuple[List[TextBlock], Optional[List[LayoutRegion]]]:
         """
-        if not raw_results or not raw_results[0]:
+        Read the page with PaddleOCR-VL (``OCR_PIPELINE=vl``): text lines and figure/table/formula regions in one
+        pass, from the document parser instead of the line detector plus the layout model.
+
+        Written against the PaddleOCR-VL result in paddlex (``parsing_res_list`` blocks with ``label``,
+        ``content`` and ``bbox``). It needs a GPU to be usable: on CPU the 0.9B model did not finish one page in
+        ten minutes and ran out of 6 GB of memory, so the default pipeline is ``ppocr``.
+        """
+        self._ensure_initialized()
+        if self._vl is None:
+            raise RuntimeError("PaddleOCR-VL not initialized")
+
+        blocks: List[TextBlock] = []
+        regions: List[LayoutRegion] = []
+        for result in self._vl.predict(image):
+            for parsed in result["parsing_res_list"]:
+                label = str(getattr(parsed, "label", ""))
+                x1, y1, x2, y2 = (int(round(float(v))) for v in getattr(parsed, "bbox", (0, 0, 0, 0))[:4])
+                kind = self._VL_REGION_KINDS.get(label)
+                if kind is not None:
+                    regions.append(LayoutRegion(kind=kind, label=label, score=1.0, bbox=(x1, y1, x2, y2)))
+                    continue
+                if label in self._VL_SKIPPED:
+                    continue
+                lines = [line.strip() for line in str(getattr(parsed, "content", "") or "").splitlines() if line.strip()]
+                if not lines:
+                    continue
+                step = max(1, (y2 - y1) // len(lines))
+                for position, line in enumerate(lines):
+                    top = y1 + position * step
+                    blocks.append(TextBlock(
+                        text=line,
+                        confidence=0.9,
+                        bbox=(x1, top, x2, min(y2, top + step) if position < len(lines) - 1 else y2),
+                        page_index=page_index,
+                        line_index=len(blocks),
+                    ))
+        regions.sort(key=lambda r: (r.bbox[1], r.bbox[0]))
+        return blocks, regions
+
+    def _detect_layout(self, image: np.ndarray, request_id: str) -> Optional[List[LayoutRegion]]:
+        """Figures, tables and formulas of the page; None when the layout was not run (disabled or failed).
+
+        A failure here must not cost the text, so it only logs.
+        """
+        if not settings.ocr_layout_enabled:
+            return None
+        try:
+            return self._layout.detect(image)
+        except Exception as e:
+            logger.error(
+                "Layout detection failed",
+                request_id=request_id,
+                error_type=type(e).__name__,
+                error=str(e),
+            )
+            return None
+
+    def _detect_tables(self, text_blocks: List[TextBlock], layout: Optional[List[LayoutRegion]] = None) -> bool:
+        """Whether the page has a table: a table region from the layout, else rows of aligned text."""
+        if layout and any(region.kind == "table" for region in layout):
+            return True
+        if len(text_blocks) < 3:
             return False
 
-        # Check for aligned text blocks (potential table rows)
-        y_positions = []
-        for line in raw_results[0]:
-            if line and len(line) >= 2:
-                box = line[0]
-                if len(box) >= 4:
-                    y_center = (box[0][1] + box[2][1]) / 2
-                    y_positions.append(y_center)
-
-        if len(y_positions) < 3:
-            return False
-
-        # Check for repeated Y positions (table rows)
-        y_positions.sort()
-        similar_count = 0
-        tolerance = 20  # pixels
-
-        for i in range(1, len(y_positions)):
-            if abs(y_positions[i] - y_positions[i-1]) < tolerance:
-                similar_count += 1
-
+        y_positions = sorted((b.bbox[1] + b.bbox[3]) / 2 for b in text_blocks)
+        tolerance = 20
+        similar_count = sum(
+            1 for i in range(1, len(y_positions)) if abs(y_positions[i] - y_positions[i - 1]) < tolerance
+        )
         return similar_count >= 3
 
     def _calculate_overall_confidence(
@@ -387,11 +470,13 @@ class OCREngine:
                 rotation_angle=preprocessing_result.rotation_angle,
             )
 
-            # Run OCR
-            raw_results = self._run_ocr(processed_image)
-
-            # Parse results into text blocks
-            text_blocks = self._parse_ocr_results(raw_results, page_index)
+            # Run OCR: text lines, and the layout that says where the figures are
+            if settings.ocr_pipeline == "vl":
+                text_blocks, layout = self._run_vl(processed_image, page_index)
+            else:
+                raw_results = self._run_ocr(processed_image)
+                text_blocks = self._parse_ocr_results(raw_results, page_index)
+                layout = self._detect_layout(processed_image, request_id)
 
             logger.debug(
                 "OCR complete",
@@ -400,19 +485,38 @@ class OCREngine:
             )
 
             # Detect tables
-            has_tables = self._detect_tables(raw_results)
+            has_tables = self._detect_tables(text_blocks, layout)
 
             # Detect language
             full_text = " ".join(b.text for b in text_blocks)
             main_language = detect_language(full_text) if full_text else self.lang
 
-            # Postprocess to extract structured data
-            metadata, questions, images_to_upload, unmapped, warnings = self.postprocessor.process(
-                text_blocks,
-                page_count=1,
-                page_dimensions={page_index: (int(image.shape[1]), int(image.shape[0]))},
-                source_file_indices={page_index: source_file_index},
-            )
+            # Postprocess to extract structured data. The boxes are in the preprocessed image's frame (deskew
+            # can grow the canvas by a few pixels), so that is the size the crops are scaled from.
+            def interpret(blocks: List[TextBlock]):
+                return self.postprocessor.process(
+                    blocks,
+                    page_count=1,
+                    page_dimensions={page_index: (int(processed_image.shape[1]), int(processed_image.shape[0]))},
+                    source_file_indices={page_index: source_file_index},
+                    layout_regions=None if layout is None else {page_index: layout},
+                    formula_images=settings.ocr_formula_images,
+                )
+
+            metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
+
+            # A page the fast detector could not make questions of is read again with the thorough one
+            if (
+                settings.ocr_pipeline != "vl"
+                and settings.ocr_fallback_det_model_name
+                and len(questions) < settings.ocr_min_questions
+            ):
+                logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
+                retry_blocks = self._parse_ocr_results(self._run_ocr(processed_image, fallback=True), page_index)
+                retry = interpret(retry_blocks)
+                if len(retry[1]) > len(questions):
+                    text_blocks = retry_blocks
+                    metadata, questions, images_to_upload, unmapped, warnings = retry
 
             # Calculate confidence
             overall_confidence = self._calculate_overall_confidence(

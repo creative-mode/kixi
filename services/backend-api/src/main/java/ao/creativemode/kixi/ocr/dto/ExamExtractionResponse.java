@@ -51,6 +51,13 @@ public record ExamExtractionResponse(
      * Create from OcrResponse.
      */
     public static ExamExtractionResponse fromOcrResponse(OcrResponse response) {
+        return fromOcrResponse(response, null);
+    }
+
+    /**
+     * Create from an OCR response, with the crop (a data URL) of each region in {@code crops}, by position.
+     */
+    public static ExamExtractionResponse fromOcrResponse(OcrResponse response, List<String> crops) {
         if (response == null) {
             return null;
         }
@@ -80,8 +87,10 @@ public record ExamExtractionResponse(
                     .toList()
                 : List.of(),
             response.imagesToUpload() != null
-                ? response.imagesToUpload().stream()
-                    .map(ImageToUploadData::fromImageToUpload)
+                ? java.util.stream.IntStream.range(0, response.imagesToUpload().size())
+                    .mapToObj(i -> ImageToUploadData.fromImageToUpload(
+                        response.imagesToUpload().get(i),
+                        crops != null && i < crops.size() ? crops.get(i) : null))
                     .toList()
                 : List.of(),
             response.requestId(),
@@ -228,12 +237,25 @@ public record ExamExtractionResponse(
 
         @JsonProperty("source_file_index") Integer sourceFileIndex,
 
-        @JsonProperty("contract_version") Integer contractVersion
+        @JsonProperty("contract_version") Integer contractVersion,
+
+        /** figure, table or formula; null for the header and signature crops. */
+        String kind,
+
+        /** The crop as a {@code data:image/png;base64,...} URL, so the builder can show it with its question. */
+        @JsonProperty("data_url") String dataUrl
     ) {
         /**
          * Create from ImageToUpload.
          */
         public static ImageToUploadData fromImageToUpload(OcrResponse.ImageToUpload img) {
+            return fromImageToUpload(img, null);
+        }
+
+        /**
+         * Create from ImageToUpload, with its crop when there is one.
+         */
+        public static ImageToUploadData fromImageToUpload(OcrResponse.ImageToUpload img, String dataUrl) {
             if (img == null) return null;
 
             return new ImageToUploadData(
@@ -245,7 +267,9 @@ public record ExamExtractionResponse(
                 img.sourceWidth(),
                 img.sourceHeight(),
                 img.sourceFileIndex(),
-                img.contractVersion()
+                img.contractVersion(),
+                img.kind(),
+                dataUrl
             );
         }
 

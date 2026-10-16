@@ -87,4 +87,23 @@ class ExamExtractionResponseTest {
             .isEqualTo("Uma empresa utiliza o Lote Económico...\na) Demonstre a expressão.\nb) Calcule o custo anual e mensal.");
         assertThat(ocr.questions().get(0).textWithSubitems()).isEqualTo("O que consiste o aprovisionamento?");
     }
+
+    @Test
+    void aFigureReachesTheBuilderWithItsKindAndItsCropNextToItsQuestion() throws Exception {
+        OcrResponse ocr = mapper.readValue("""
+            {"status":"success","requestId":"req-2","questions":[],
+             "imagesToUpload":[
+               {"suggestedFilename":"c.png","description":"Cabeçalho","region":"cabecalho","pageIndex":0,"bbox":[0,0,9,9],"contractVersion":1,"sourceFileIndex":0},
+               {"suggestedFilename":"q.png","description":"Figura da questão 2","region":"questao_2","pageIndex":0,"bbox":[1,1,5,5],"contractVersion":1,"sourceFileIndex":0,"kind":"figure","score":0.9}]}
+            """, OcrResponse.class);
+
+        ExamExtractionResponse exam = ExamExtractionResponse.fromOcrResponse(
+            ocr, java.util.Arrays.asList(null, "data:image/png;base64,AAAA"));
+
+        assertThat(exam.imagesToUpload()).extracting(ExamExtractionResponse.ImageToUploadData::kind)
+            .containsExactly(null, "figure");
+        assertThat(exam.imagesToUpload()).extracting(ExamExtractionResponse.ImageToUploadData::dataUrl)
+            .containsExactly(null, "data:image/png;base64,AAAA");
+        assertThat(exam.imagesToUpload().get(1).region()).isEqualTo("questao_2");
+    }
 }
