@@ -44,6 +44,10 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
+                        // As figuras das questões que o armazenamento local guarda: o aluno e o professor vêem-nas no
+                        // browser por um <img>, que não leva o token. Só `questions/`, com nomes não adivinháveis
+                        // (UUID); nada de donations/ nem do resto do disco.
+                        .pathMatchers(HttpMethod.GET, "/uploads/questions/*/*").permitAll()
                         // #252: the donation form is public, and only the submission: everything else
                         // under /donations (list, files, review, extract, link) is ADMIN below. The
                         // method and the exact path are named so no other route opens by accident.
