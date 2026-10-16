@@ -2,6 +2,7 @@ package ao.creativemode.kixi.feed.service;
 
 import ao.creativemode.kixi.feed.dto.post.PostRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.enums.PostReactionType;
@@ -15,6 +16,9 @@ import ao.creativemode.kixi.feed.repository.PostReportRepository;
 import ao.creativemode.kixi.feed.repository.PostRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
+import ao.creativemode.kixi.feed.model.PostComment;
+import ao.creativemode.kixi.shared.service.DisplayNameReader;
 import ao.creativemode.kixi.shared.service.InstitutionNameReader;
 import ao.creativemode.kixi.shared.service.SimulationShowcaseReader;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.ClassScope;
@@ -33,6 +37,9 @@ import reactor.test.StepVerifier;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
+
 import java.util.List;
 import java.util.Set;
 
@@ -57,6 +64,7 @@ import static org.mockito.Mockito.*;
 class PostServiceTest {
 
     private static final Long ACCOUNT_ID = 1L;
+    private static final Long OTHER_ACCOUNT_ID = 2L;
     private static final Long OTHER_SCHOOL_CLASS_ID = 99L;
     private static final Long MY_CLASS_ID = 10L;
     private static final Long MY_COURSE_ID = 100L;
@@ -69,6 +77,7 @@ class PostServiceTest {
     @Mock private PostFeedRepository feedRepository;
     @Mock private PostReactionRepository reactionRepository;
     @Mock private PostCommentRepository commentRepository;
+    @Mock private DisplayNameReader displayNames;
     @Mock private PostReportRepository reportRepository;
     @Mock private FeedScopeAuthorizer scopeAuthorizer;
     @Mock private FeedRateLimiter rateLimiter;
@@ -83,9 +92,29 @@ class PostServiceTest {
     @BeforeEach
     void setUp() {
         postService = new PostService(postRepository, feedRepository, reactionRepository,
-                commentRepository, reportRepository, scopeAuthorizer, rateLimiter,
-                showcaseReader, institutionNames, clock);
+                commentRepository, displayNames, reportRepository, scopeAuthorizer,
+                rateLimiter, showcaseReader, institutionNames, clock);
+        lenient().when(displayNames.maskedNameOf(anyLong()))
+                .thenAnswer(call -> Mono.just(maskedNameOf((Long) call.getArgument(0))));
         lenient().when(rateLimiter.check(anyLong())).thenReturn(Mono.empty());
+    }
+
+    /** The masked name the door hands back for whoever asked. */
+    private String maskedNameOf(Long accountId) {
+        return accountId.equals(ACCOUNT_ID) ? "Ana N." : "Bruno S.";
+    }
+
+    /** A comment as the repository would hand it back. */
+    private PostComment comment(Long id, Long authorAccountId, String content, int minute) {
+        PostComment comment = new PostComment();
+        comment.setId(id);
+        comment.setPostId(POST_ID);
+        comment.setAuthorAccountId(authorAccountId);
+        comment.setContent(content);
+        comment.setIsHidden(false);
+        comment.setCreatedAt(LocalDateTime.now(clock).withSecond(0).withNano(0).plusMinutes(minute));
+        comment.setUpdatedAt(comment.getCreatedAt());
+        return comment;
     }
 
     private FeedScope myScope() {
@@ -364,6 +393,147 @@ class PostServiceTest {
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
         verifyNoInteractions(commentRepository);
+    }
+
+    // === reading the conversation ===========================================
+
+    /**
+     * The conversation, oldest first, with a name on each row.
+     *
+     * <p>Chronological because the issue is a student answering what came before: a page of
+     * the newest comments would show the end of a conversation without its beginning.</p>
+     */
+    @Test
+    void readingTheConversationReturnsItOldestFirstWithNames() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(
+                        comment(1L, OTHER_ACCOUNT_ID, "Primeiro", 0),
+                        comment(2L, ACCOUNT_ID, "Segundo", 1)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::content)
+                .containsExactly("Primeiro", "Segundo");
+        assertThat(comments).extracting(PostCommentResponse::displayName)
+                .containsExactly("Bruno S.", "Ana N.");
+    }
+
+    /** The author's own row is marked, so the client does not compare ids itself. */
+    @Test
+    void theReadersOwnCommentIsMarked() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(
+                        comment(1L, OTHER_ACCOUNT_ID, "Do colega", 0),
+                        comment(2L, ACCOUNT_ID, "Meu", 1)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::mine)
+                .containsExactly(false, true);
+    }
+
+    /**
+     * A comment whose author has no profile still comes back, without a name.
+     *
+     * <p>The door returns an empty Mono for a missing profile. Mapping straight over it
+     * would drop the row, and a comment is not lost because we cannot name it.</p>
+     */
+    @Test
+    void aCommentWithNoProfileStillComesBack() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(displayNames.maskedNameOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.empty());
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(comment(1L, OTHER_ACCOUNT_ID, "Sem perfil", 0)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::content).containsExactly("Sem perfil");
+        assertThat(comments.get(0).displayName()).isNull();
+    }
+
+    /**
+     * Another school's post is 404, not an empty list.
+     *
+     * <p>The id arrives in the URL and a student who guesses one must not read what was
+     * written under it. An empty list would say "there is nothing here" and 403 would say
+     * "there is something and it is not yours".</p>
+     */
+    @Test
+    void readingAnotherSchoolsConversationIs404() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(otherSchoolPost()));
+
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 1, 20))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verifyNoInteractions(commentRepository);
+    }
+
+    /** A read is not a write; the limiter that stops comment spam stays off it. */
+    @Test
+    void readingTheConversationIsNotRateLimited() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.empty());
+
+        postService.listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        verify(rateLimiter, never()).check(anyLong());
+    }
+
+    @Test
+    void aConversationPageIsBounded() {
+        // Validated before the scope is resolved, so an unusable page never costs a query.
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 0, 20))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 1, 5000))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+    }
+
+    /** The page asked for is the page asked for, offset included. */
+    @Test
+    void theSecondPageIsTheSecondPage() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.empty());
+
+        postService.listComments(POST_ID, ACCOUNT_ID, 3, 10).collectList().block();
+
+        verify(commentRepository)
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), eq(PageRequest.of(2, 10)));
     }
 
     @Test

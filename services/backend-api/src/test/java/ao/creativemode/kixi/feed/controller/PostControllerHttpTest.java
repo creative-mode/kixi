@@ -93,13 +93,50 @@ class PostControllerHttpTest {
         verify(service).getFeedTotalCount(42L, 2026L, 20L, 10L);
     }
 
+    /**
+     * Reading the conversation, over HTTP.
+     *
+     * <p>The account comes from the token and never from the query string: an id in the
+     * URL is a post, and whose post it is is the caller's business alone.</p>
+     */
+    @Test
+    void readsTheConversationOfAPost() {
+        when(service.listComments(9L, 42L, 1, 20)).thenReturn(Flux.just(
+                new PostCommentResponse(3L, 9L, 42L, "A comment", false,
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.")));
+
+        client.mutateWith(studentJwt()).get()
+                .uri("http://localhost/api/v1/feed/posts/9/comments")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].content").isEqualTo("A comment")
+                .jsonPath("$[0].mine").isEqualTo(true)
+                .jsonPath("$[0].displayName").isEqualTo("Ana N.");
+
+        verify(service).listComments(9L, 42L, 1, 20);
+    }
+
+    /** A page is the caller's to ask for, and it reaches the service. */
+    @Test
+    void passesTheRequestedPageAndLimitThrough() {
+        when(service.listComments(9L, 42L, 3, 5)).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt()).get()
+                .uri("http://localhost/api/v1/feed/posts/9/comments?page=3&limit=5")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(service).listComments(9L, 42L, 3, 5);
+    }
+
     @Test
     void createsPostAndCoversCommentsReactionsAndReports() {
         PostRequest postRequest = new PostRequest(PostType.TOPIC, 10L, "Title", "A useful topic", null);
         when(service.createPost(42L, postRequest)).thenReturn(Mono.just(post(9L)));
         when(service.addComment(9L, 42L, new PostCommentRequest("A comment")))
                 .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false,
-                        LocalDateTime.now(), LocalDateTime.now())));
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.")));
         when(service.toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE)))
                 .thenReturn(Mono.just(new PostReactionToggleResponse(true)));
         when(service.reportPost(9L, 42L, new PostReportRequest("Not useful")))
