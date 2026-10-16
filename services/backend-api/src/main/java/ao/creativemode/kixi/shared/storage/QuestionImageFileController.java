@@ -50,11 +50,27 @@ public class QuestionImageFileController {
 
     @GetMapping("/uploads/questions/{questionId}/{file}")
     public Mono<ResponseEntity<byte[]>> serve(@PathVariable String questionId, @PathVariable String file) {
-        if (!questionId.matches("\\d{1,18}") || !FILE.matcher(file).matches() || file.contains("..")) {
+        if (!questionId.matches("\\d{1,18}")) {
             return Mono.just(ResponseEntity.notFound().build());
         }
-        Path target = root.resolve("questions").resolve(questionId).resolve(file).normalize();
-        if (!target.startsWith(root.resolve("questions"))) {
+        return read("questions", questionId, file);
+    }
+
+    /** The photos and logos chosen from the device: {@code /uploads/images/{avatar|logo}/{file}}. */
+    @GetMapping("/uploads/images/{kind}/{file}")
+    public Mono<ResponseEntity<byte[]>> serveImage(@PathVariable String kind, @PathVariable String file) {
+        if (!kind.equals("avatar") && !kind.equals("logo")) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        return read("images", kind, file);
+    }
+
+    private Mono<ResponseEntity<byte[]>> read(String area, String folder, String file) {
+        if (!FILE.matcher(file).matches() || file.contains("..")) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        Path target = root.resolve(area).resolve(folder).resolve(file).normalize();
+        if (!target.startsWith(root.resolve(area))) {
             return Mono.just(ResponseEntity.notFound().build());
         }
         String extension = file.substring(file.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
