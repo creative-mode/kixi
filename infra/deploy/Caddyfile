@@ -40,6 +40,12 @@
 		}
 	}
 
+	# 1b. As figuras das questões (armazenamento local). O <img> do aluno e do professor pede
+	#     /uploads/questions/{questão}/{ficheiro}, e é o backend que as serve (só essa pasta, só imagens).
+	handle /uploads/questions/* {
+		reverse_proxy backend-api:8080
+	}
+
 	# 2. O gestor. Aqui `handle_path` é o certo e é o oposto do caso de cima: o Next
 	#    tem basePath /manager e espera recebê-lo já removido. Os assets em
 	#    /_next/static são servidos a partir daqui, com cache de um ano.
