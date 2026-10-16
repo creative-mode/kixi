@@ -1007,10 +1007,24 @@ class OCRPostprocessor:
         """
         ordered: List[TextBlock] = []
         for page in sorted({b.page_index for b in blocks}):
+            page_blocks = [b for b in blocks if b.page_index == page]
+            heights = sorted(max(1, b.bbox[3] - b.bbox[1]) for b in page_blocks)
+            typical = heights[len(heights) // 2] if heights else 1
             rows: List[List[TextBlock]] = []
             spans: List[Tuple[int, int]] = []
-            for block in sorted((b for b in blocks if b.page_index == page), key=lambda b: (b.bbox[1], b.bbox[0])):
+            for block in sorted(page_blocks, key=lambda b: (b.bbox[1], b.bbox[0])):
                 top, bottom = block.bbox[1], block.bbox[3]
+                if bottom - top > 1.4 * typical:
+                    # A tall box (a handwritten note, a stamp) must not stretch a row until it swallows the next
+                    # one, which scrambles two lines of options: it joins the row at its vertical centre.
+                    centre = (top + bottom) / 2
+                    home = next((i for i in range(len(rows) - 1, max(-1, len(rows) - 4), -1) if spans[i][0] <= centre <= spans[i][1]), None)
+                    if home is not None:
+                        rows[home].append(block)
+                    else:
+                        rows.append([block])
+                        spans.append((int(centre - typical / 2), int(centre + typical / 2)))
+                    continue
                 if rows:
                     row_top, row_bottom = spans[-1]
                     overlap = min(bottom, row_bottom) - max(top, row_top)
@@ -1071,13 +1085,28 @@ class OCRPostprocessor:
             if len(prose) < 4:
                 continue
             first_y = min(b.bbox[1] for b in prose)
+            # A line of values ("192.168.1.100") is not prose, but a scribble to its right is as much a note as
+            # one beside a sentence: the near-certain lines of print count as the line it sits beside.
+            solid = [b for b in page_blocks if b.confidence >= 0.95 and len(b.text.strip()) >= 5]
+            width = max((b.bbox[2] for b in page_blocks), default=0)
             for b in page_blocks:
-                if self._words3(b.text) > 1 or self._is_structural(b.text):
+                if self._words3(b.text) > 1:
+                    continue
+                # A bare number is "structural" (it looks like a cotação), but one far out in the right margin, on a
+                # line of print, is a value the teacher wrote ("0.0.3.255" beside the option it corrects).
+                scribbled_number = (
+                    re.fullmatch(r"[\d.,\s]+", b.text.strip()) is not None
+                    and b.confidence < 0.97
+                    and self._far_right_of(b, solid, width)
+                )
+                if self._is_structural(b.text) and not scribbled_number:
                     continue
                 letters = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", b.text))
                 if b.bbox[3] < first_y - 5:
                     reasons[id(b)] = "Marca ou manuscrito acima do texto impresso"
-                elif b.confidence < 0.92 and self._beside_prose(b, prose):
+                elif (b.confidence < 0.92 and self._beside_prose(b, prose)) or (
+                    b.confidence < 0.97 and self._far_right_of(b, solid, width)
+                ):
                     reasons[id(b)] = "Marca ou manuscrito ao lado de uma linha impressa"
                 elif b.confidence < 0.6 and letters <= 6:
                     reasons[id(b)] = "Leitura de confiança muito baixa"
@@ -1085,6 +1114,21 @@ class OCRPostprocessor:
         kept = [b for b in blocks if id(b) not in reasons]
         noise = [(b, reasons[id(b)]) for b in blocks if id(b) in reasons]
         return kept, noise
+
+    @staticmethod
+    def _far_right_of(block: TextBlock, lines: List[TextBlock], page_width: int) -> bool:
+        """A scribble in the right part of the page, on the row of a line of print and clear of it."""
+        x1, y1, x2, y2 = block.bbox
+        if x1 < 0.55 * page_width:
+            return False
+        for line in lines:
+            if line is block:
+                continue
+            lx1, ly1, lx2, ly2 = line.bbox
+            overlap = min(y2, ly2) - max(y1, ly1)
+            if overlap >= 0.5 * min(y2 - y1, ly2 - ly1) and x1 > lx2 + 30:
+                return True
+        return False
 
     @staticmethod
     def _beside_prose(block: TextBlock, prose: List[TextBlock]) -> bool:
@@ -1470,6 +1514,21 @@ class OCRPostprocessor:
         subs = [self._finish_subitem(a) for a in draft.alineas]
         raw_stem = " ".join(stem_parts)
 
+        # "a) 10.1.0.1  b) 192.168.1.100  c) …" under a question: the alíneas are the answers to choose from
+        if not options and self._choice_alineas(raw_stem, subs):
+            options = [
+                ExtractedOption(
+                    option_label=chr(ord("A") + i),
+                    # a lone "X" after an option is the mark of the answer the teacher ticked, not part of it
+                    option_text=re.sub(r"\s+[xX×]$", "", sub.text).strip(),
+                    confidence=question.text_confidence,
+                )
+                for i, sub in enumerate(subs)
+            ]
+            question.options = options
+            draft.alineas = []
+            subs = []
+
         if len(subs) >= 2 and not options:
             stem_cotacao = self._extract_inline_cotacao(raw_stem)
             if stem_cotacao is not None:
@@ -1509,6 +1568,30 @@ class OCRPostprocessor:
         question.subitems_content = subs
         self._finalize_question(question, cotacao_map)
         return question
+
+    _IMPERATIVE_START = re.compile(
+        r"^(?:calcul|demonstr|determin|explic|diga|dig|apresent|represent|encontr|indiqu|justific|escrev|defin|resolv|analis|descrev|identific|esquematiz|compar|classific|enumer|cite|prov|mostr|obtenh|esboc|trac)",
+        re.IGNORECASE,
+    )
+
+    def _choice_alineas(self, stem: str, subs: List[SubitemContent]) -> bool:
+        """Whether the alíneas of a question are the options of a choice question rather than sub-questions.
+
+        Options answer a question asked in the stem ("…qual seria o ID?"), are short statements or values, carry
+        no score of their own and do not start with an instruction ("Calcule…", "Demonstre…") or ask something
+        themselves. A true/false stem or ticks to fill ("( )") keep them as true/false alíneas.
+        """
+        if not 2 <= len(subs) <= 8 or "?" not in stem:
+            return False
+        if self._TRUE_FALSE_STEM.search(stem) or sum(1 for sub in subs if self._TRUE_FALSE_TAIL.search(sub.text)) >= 2:
+            return False
+        for sub in subs:
+            text = sub.text.strip()
+            if not text or sub.cotacao is not None or text.endswith("?") or len(text.split()) > 12:
+                return False
+            if self._IMPERATIVE_START.match(text):
+                return False
+        return True
 
     @staticmethod
     def _valid_options(options: List[ExtractedOption]) -> bool:
@@ -1705,6 +1788,7 @@ class OCRPostprocessor:
 
         # Fallback patterns
         fallback_patterns = [
+            r"(?<=[?.:])\s*(\d+(?:[.,]\d+)?)\s*[Vv](?![\w.])",  # "…Branch1? 5V": the cotação after the sentence
             r"\((\d+(?:[.,]\d+)?)\s*[Vv]\)",
             r"\((\d+(?:[.,]\d+)?)\s*valores?\)",
             r"\((\d+(?:[.,]\d+)?)\s*pontos?\)",
@@ -1732,6 +1816,7 @@ class OCRPostprocessor:
             r"\s*\(\d+(?:[.,]\d+)?\s*pontos?\)",
             r"\s*\[\d+(?:[.,]\d+)?\s*[Vv]\]",
             r";\s*\d+(?:[.,]\d+)?\s*[Vv]\)",  # Pattern like ";2V)"
+            r"(?<=[?.:])\s*\d+(?:[.,]\d+)?\s*[Vv](?![\w.])",  # "…Branch1? 5V"
         ]
         for pattern in patterns:
             text = re.sub(pattern, "", text, flags=re.IGNORECASE)
@@ -1746,6 +1831,7 @@ class OCRPostprocessor:
         # Remove common footer patterns
         garbage_patterns = [
             r"A?\s*COORDENA[CÇ][AÃ]O.*$",
+            r"BAIRRO\s+DOS\s+CTT.*$",
             r"minttics\.gov\.ao.*$",
             r"LUANDA[\s-]*ANGOLA.*$",
             r"gov\.ao.*$",

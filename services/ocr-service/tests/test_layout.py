@@ -101,3 +101,18 @@ def test_a_formula_standing_alone_is_a_picture_but_one_inside_a_sentence_is_not(
 def test_formulas_are_not_cropped_unless_asked_for():
     _, images = run([region("formula", (150, 700, 560, 740))])
     assert images == []
+
+
+def test_a_tall_handwritten_box_does_not_scramble_two_rows_of_options():
+    """The note [938,829,1089,873] spans the rows of "b)" and "c)"; the rows must still read b) value, c) value."""
+    from app.ocr.postprocessing import OCRPostprocessor
+
+    def box(text, x1, y1, x2, y2, i):
+        return TextBlock(text=text, confidence=0.95, bbox=(x1, y1, x2, y2), page_index=0, line_index=i)
+
+    blocks = [
+        box("b)", 164, 827, 195, 851, 0), box("192.168.1.100", 195, 824, 335, 850, 1),
+        box("m ached)", 938, 829, 1089, 873, 2),
+        box("c)", 165, 864, 188, 886, 3), box("209.165.201.1", 194, 858, 333, 885, 4),
+    ]
+    assert [b.text for b in OCRPostprocessor._reading_order(blocks)] == ["b)", "192.168.1.100", "m ached)", "c)", "209.165.201.1"]
