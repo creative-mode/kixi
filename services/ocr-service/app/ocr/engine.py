@@ -364,6 +364,12 @@ class OCREngine:
         regions.sort(key=lambda r: (r.bbox[1], r.bbox[0]))
         return blocks, regions
 
+    @staticmethod
+    def _numbering_has_gaps(questions: List[ExtractedQuestion]) -> bool:
+        """Questions numbered 1, 4, 5 are missing two: the lines that carried the numbers were not read."""
+        numbers = [int(q.number) for q in questions if str(q.number).isdigit()]
+        return bool(numbers) and numbers != list(range(1, len(numbers) + 1))
+
     def _detect_layout(self, image: np.ndarray, request_id: str) -> Optional[List[LayoutRegion]]:
         """Figures, tables and formulas of the page; None when the layout was not run (disabled or failed).
 
@@ -493,28 +499,35 @@ class OCREngine:
 
             # Postprocess to extract structured data. The boxes are in the preprocessed image's frame (deskew
             # can grow the canvas by a few pixels), so that is the size the crops are scaled from.
-            def interpret(blocks: List[TextBlock]):
+            def interpret(blocks: List[TextBlock], frame: np.ndarray = processed_image, regions=layout):
                 return self.postprocessor.process(
                     blocks,
                     page_count=1,
-                    page_dimensions={page_index: (int(processed_image.shape[1]), int(processed_image.shape[0]))},
+                    page_dimensions={page_index: (int(frame.shape[1]), int(frame.shape[0]))},
                     source_file_indices={page_index: source_file_index},
-                    layout_regions=None if layout is None else {page_index: layout},
+                    layout_regions=None if regions is None else {page_index: regions},
                     formula_images=settings.ocr_formula_images,
                 )
 
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
 
-            # A page the fast detector could not make questions of is read again with the thorough one
+            # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
+            # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
+            # fast detector hide faint lines from the thorough one (the parcelar exam gave 3 of its 5 questions on
+            # the preprocessed image, and finds the lines of the other two on the raw one). Its layout is taken
+            # on the same image, so text, figures and the crop frame all share one set of coordinates.
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
-                and len(questions) < settings.ocr_min_questions
+                and (len(questions) < settings.ocr_min_questions or self._numbering_has_gaps(questions))
             ):
                 logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
-                retry_blocks = self._parse_ocr_results(self._run_ocr(processed_image, fallback=True), page_index)
-                retry = interpret(retry_blocks)
-                if len(retry[1]) > len(questions):
+                retry_blocks = self._parse_ocr_results(self._run_ocr(image, fallback=True), page_index)
+                retry_layout = self._detect_layout(image, request_id)
+                retry = interpret(retry_blocks, image, retry_layout)
+                if len(retry[1]) > len(questions) or (
+                    len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
+                ):
                     text_blocks = retry_blocks
                     metadata, questions, images_to_upload, unmapped, warnings = retry
 
