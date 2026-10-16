@@ -550,6 +550,14 @@ class AuthorizationIntegrationTest {
     // ── Teaching assignments: administered by ADMIN, read by the teacher ────
 
     @Test
+    void letsAnAnonymousBrowserLoadAQuestionFigureButNothingElseUnderUploads() {
+        // The figure route is not in this slice, so an allowed request ends in 404; what matters is that it is not a 401.
+        client.get().uri("/uploads/questions/7/figura.png").exchange().expectStatus().isNotFound();
+        client.get().uri("/uploads/donations/3/enunciado.png").exchange().expectStatus().isUnauthorized();
+        client.post().uri("/uploads/questions/7/figura.png").exchange().expectStatus().isUnauthorized();
+    }
+
+    @Test
     void rejectsAnonymousTeachingAssignmentReads() {
         client.get()
                 .uri("/api/v1/teaching-assignments")
