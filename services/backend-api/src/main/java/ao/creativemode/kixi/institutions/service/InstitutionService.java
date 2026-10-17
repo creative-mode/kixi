@@ -157,7 +157,9 @@ public class InstitutionService {
             entity.getLogo(),
             entity.getCreatedAt(),
             entity.getUpdatedAt(),
-            entity.getDeletedAt()
+            entity.getDeletedAt(),
+            entity.isVerified(),
+            entity.getVerifiedAt()
         );
     }
 }
