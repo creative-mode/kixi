@@ -135,12 +135,23 @@ public record ExamExtractionResponse(
         Double confidence,
 
         /** The alíneas, each with its own type; empty when the question has none. */
-        @JsonProperty("subitems_content") List<SubitemData> subitemsContent
+        @JsonProperty("subitems_content") List<SubitemData> subitemsContent,
+
+        /** Formulas recognized in the statement, alíneas or options (#262); empty when none. */
+        List<FormulaData> formulas
     ) {
         /** The shape before the alíneas were exposed. */
         public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
                 List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence) {
-            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence, List.of());
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence, List.of(), List.of());
+        }
+
+        /** The shape before formula recognition (#262) was exposed. */
+        public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
+                List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
+                List<SubitemData> subitemsContent) {
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
+                subitemsContent, List.of());
         }
 
         /**
@@ -165,6 +176,9 @@ public record ExamExtractionResponse(
                 q.confidence(),
                 q.subitemsContent() != null
                     ? q.subitemsContent().stream().map(SubitemData::from).toList()
+                    : List.of(),
+                q.formulas() != null
+                    ? q.formulas().stream().map(FormulaData::fromFormulaSegment).toList()
                     : List.of()
             );
         }
@@ -193,6 +207,15 @@ public record ExamExtractionResponse(
         public static SubitemData from(OcrResponse.SubitemContent item) {
             if (item == null) return null;
             return new SubitemData(item.label(), item.text(), item.cotacao(), item.type());
+        }
+    }
+
+    /** One formula recognized in a question's text (#262). {@code kind} is "formula" when there is LaTeX
+     * of enough confidence, or "unrecognized" when the span looked like maths but none was produced. */
+    public record FormulaData(String raw, String latex, Double confidence, String kind) {
+        public static FormulaData fromFormulaSegment(OcrResponse.FormulaSegment f) {
+            if (f == null) return null;
+            return new FormulaData(f.raw(), f.latex(), f.confidence(), f.kind());
         }
     }
 

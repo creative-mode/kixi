@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 
+from .formulas import FORMULA, FormulaSegment, extract_inline_formulas, recognize_region
 from .layout import LayoutRegion
 from .ptlex import Lexicon, load_lexicon, repair_text
 
@@ -117,6 +118,11 @@ class ExtractedQuestion:
     page_index: int = 0
     start_y: int = 0
     end_y: int = 0
+    # Fórmulas reconhecidas no enunciado, nas alíneas ou nas opções (#262); vazio quando
+    # nada no texto da questão pareceu matemática. "text" já traz os trechos reconhecidos
+    # entre $...$ - esta lista é o mesmo resultado, estruturado, com o texto em bruto e a
+    # confiança de cada um.
+    formulas: List[FormulaSegment] = field(default_factory=list)
 
     @property
     def confidence(self) -> float:
@@ -142,6 +148,7 @@ class ExtractedQuestion:
             "pageIndex": self.page_index,
             "startY": self.start_y,
             "endY": self.end_y,
+            "formulas": [f.to_dict() for f in self.formulas],
         }
 
         if self.image_description:
@@ -512,6 +519,7 @@ class OCRPostprocessor:
         source_file_indices: Optional[Dict[int, int]] = None,
         layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
         formula_images: bool = False,
+        recognize_formulas: bool = True,
     ) -> Tuple[ExtractedMetadata, List[ExtractedQuestion], List[ImageToUpload], List[UnmappedContent], List[Warning]]:
         """
         Process OCR text blocks into structured data.
@@ -541,7 +549,7 @@ class OCRPostprocessor:
             sorted_blocks, after, page_limits = self._cut_after_cotacao(sorted_blocks, page_dimensions or {})
             noise.extend(after)
         # Maths the text engine cannot read is garbage in the text: the layout knows where the printed formulas are.
-        sorted_blocks = self._mask_formulas(sorted_blocks, layout_regions, page_limits)
+        sorted_blocks = self._mask_formulas(sorted_blocks, layout_regions, page_limits, recognize=recognize_formulas)
 
         # Combine all text for pattern matching
         full_text = " ".join(b.text for b in sorted_blocks)
@@ -561,6 +569,12 @@ class OCRPostprocessor:
         questions = self._extract_questions(sorted_blocks, cotacao_map)
         warnings.extend(self._generate_question_warnings(questions))
         warnings.extend(self._generate_cotacao_warnings(metadata, questions))
+
+        # Recognize formulas inline in the already-extracted question text (#262): done last, on the
+        # finished questions, so it never risks the numbering/cotação/option parsing above, which depends
+        # on the exact (unmodified) text the OCR and _mask_formulas produced.
+        if recognize_formulas:
+            questions = [self._recognize_question_formulas(q) for q in questions]
 
         # Calculate total max score from questions or cotação map
         total_score = sum(q.cotacao for q in questions if q.cotacao is not None)
@@ -1179,6 +1193,41 @@ class OCRPostprocessor:
                 kept.append(block)
         return kept, dropped, region_limit
 
+    @staticmethod
+    def _recognize_question_formulas(question: ExtractedQuestion) -> ExtractedQuestion:
+        """Looks for formulas inside a question's own text, alíneas and options (#262).
+
+        Runs after the question is fully assembled, so it only ever touches `.text` content - never the
+        numbering, cotação or option labels the rest of the postprocessor already relied on to get here. A
+        question with nothing that looks like maths comes back unchanged (same object, no `formulas`).
+        """
+        segments: List[FormulaSegment] = []
+
+        new_text, found = extract_inline_formulas(question.text)
+        segments.extend(found)
+
+        new_subitems = question.subitems_content
+        if question.subitems_content:
+            updated = []
+            for item in question.subitems_content:
+                item_text, item_found = extract_inline_formulas(item.text)
+                segments.extend(item_found)
+                updated.append(replace(item, text=item_text) if item_found else item)
+            new_subitems = updated
+
+        new_options = question.options
+        if question.options:
+            updated_opts = []
+            for opt in question.options:
+                opt_text, opt_found = extract_inline_formulas(opt.option_text)
+                segments.extend(opt_found)
+                updated_opts.append(replace(opt, option_text=opt_text) if opt_found else opt)
+            new_options = updated_opts
+
+        if not segments:
+            return question
+        return replace(question, text=new_text, subitems_content=new_subitems, options=new_options, formulas=segments)
+
     def _printed_formulas(
         self,
         regions: Optional[Dict[int, List[LayoutRegion]]],
@@ -1200,39 +1249,58 @@ class OCRPostprocessor:
         blocks: List[TextBlock],
         layout_regions: Optional[Dict[int, List[LayoutRegion]]],
         page_limits: Optional[Dict[int, int]] = None,
+        recognize: bool = True,
     ) -> List[TextBlock]:
-        """Replace the text a printed formula was misread as by «[fórmula]», keeping the label before it («c)»).
+        """Replace a printed formula's text with its recognized LaTeX (#262), delimited («$...$»), or with the
+        «[fórmula]» marker when nothing could be read from it with confidence - keeping the label before it («c)»).
 
-        A block is a formula when most of its area lies inside a printed formula region of the layout. One marker
-        stands for one formula region, however many lines the engine cut it into. The formula itself is cropped as
-        a picture and travels with the question.
+        A block is a formula when most of its area lies inside a printed formula region of the layout. One output
+        stands for one formula region, however many lines the engine cut it into: every line is joined (in the
+        order they were read) before being handed to the recognizer, so it sees the whole formula, not just its
+        first line. The formula itself is still cropped as a picture (when ``ocr_formula_images`` is on) and
+        travels with the question either way - the picture is the audit trail; the LaTeX is for showing and
+        searching the formula as text.
         """
         formulas = self._printed_formulas(layout_regions, page_limits)
         if not any(formulas.values()):
             return blocks
-        out: List[TextBlock] = []
-        marked: set = set()
-        for block in blocks:
+
+        def home_of(block: TextBlock) -> Optional[Tuple[int, int]]:
             if self._COTACAO_LINE.match(block.text) or self._COTACAO_CONTINUATION.match(block.text):
-                out.append(block)  # the scoring line is read by its text; a formula box over it is a mistake
-                continue
+                return None  # the scoring line is read by its text; a formula box over it is a mistake
             x1, y1, x2, y2 = block.bbox
             area = max(1, (x2 - x1) * (y2 - y1))
-            home = next(
+            idx = next(
                 (i for i, r in enumerate(formulas.get(block.page_index, []))
                  if self._overlap(block.bbox, r.bbox) >= 0.6 * area),
                 None,
             )
-            if home is None:
+            return None if idx is None else (block.page_index, idx)
+
+        homes = [home_of(b) for b in blocks]
+        group_text: Dict[Tuple[int, int], str] = {}
+        for block, key in zip(blocks, homes):
+            if key is None:
+                continue
+            group_text[key] = f"{group_text[key]} {block.text}".strip() if key in group_text else block.text
+
+        out: List[TextBlock] = []
+        seen: set = set()
+        for block, key in zip(blocks, homes):
+            if key is None:
                 out.append(block)
                 continue
-            key = (block.page_index, home)
-            if key in marked:
-                continue
-            marked.add(key)
+            if key in seen:
+                continue  # the rest of this formula's lines contributed to group_text already; drop the line
+            seen.add(key)
             prefix = self._LABEL_PREFIX.match(block.text.strip())
             lead = prefix.group(0).strip() + " " if prefix else ""
-            out.append(replace(block, text=f"{lead}[fórmula]"))
+            recognized = recognize_region(group_text[key]) if recognize else None
+            if recognized is not None and recognized.kind == FORMULA and recognized.latex:
+                text = f"{lead}${recognized.latex}$"
+            else:
+                text = f"{lead}[fórmula]"
+            out.append(replace(block, text=text))
         return out
 
     @staticmethod

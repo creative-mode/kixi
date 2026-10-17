@@ -10,5 +10,7 @@ public record InstitutionResponse(
         String logo,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        LocalDateTime deletedAt
+        LocalDateTime deletedAt,
+        boolean verified,
+        LocalDateTime verifiedAt
 ) { }

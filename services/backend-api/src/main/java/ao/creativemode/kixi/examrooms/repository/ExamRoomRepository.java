@@ -10,6 +10,11 @@ import reactor.core.publisher.Mono;
 
 public interface ExamRoomRepository extends ReactiveCrudRepository<ExamRoom, Long> {
     Flux<ExamRoom> findByTeacherAccountIdOrderByCreatedAtDesc(Long teacherAccountId);
+    /** The teacher's rooms in the classes of one school, newest first. */
+    @Query("SELECT r.* FROM exam_rooms r JOIN classes cl ON cl.id = r.class_id "
+            + "WHERE r.teacher_account_id = :teacherAccountId AND cl.institution_id = :institutionId "
+            + "ORDER BY r.created_at DESC")
+    Flux<ExamRoom> findByTeacherAccountIdAndInstitutionId(Long teacherAccountId, Long institutionId);
     Mono<ExamRoom> findByIdAndTeacherAccountId(Long id, Long teacherAccountId);
     @Query("SELECT EXISTS (SELECT 1 FROM exam_rooms WHERE statement_id = :statementId "
             + "AND status IN ('OPEN', 'RUNNING'))")
