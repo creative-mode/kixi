@@ -7,9 +7,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import ao.creativemode.kixi.gamification.dto.UserBadgeResponse;
-import ao.creativemode.kixi.gamification.dto.UserStatsResponse;
-import ao.creativemode.kixi.gamification.service.GamificationService;
 import ao.creativemode.kixi.identity.model.User;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
@@ -20,7 +17,8 @@ import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.ProfileSettingRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
-import java.time.LocalDateTime;
+import ao.creativemode.kixi.shared.service.PublicStatsReader;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
@@ -43,7 +41,7 @@ class PersonProfileServiceTest {
     private InstitutionTeacherRepository teacherLinks;
     private InstitutionRepository institutions;
     private ProfileSettingRepository settings;
-    private GamificationService gamification;
+    private PublicStatsReader stats;
     private PersonProfileService service;
 
     @BeforeEach
@@ -54,8 +52,8 @@ class PersonProfileServiceTest {
         teacherLinks = mock(InstitutionTeacherRepository.class);
         institutions = mock(InstitutionRepository.class);
         settings = mock(ProfileSettingRepository.class);
-        gamification = mock(GamificationService.class);
-        service = new PersonProfileService(users, teachers, studentLinks, teacherLinks, institutions, settings, gamification);
+        stats = mock(PublicStatsReader.class);
+        service = new PersonProfileService(users, teachers, studentLinks, teacherLinks, institutions, settings, stats);
 
         User target = user(TARGET_USER, TARGET_ACCOUNT, "Maria", "Santos");
         User viewer = user(VIEWER_USER, VIEWER_ACCOUNT, "João", "Pedro");
@@ -71,10 +69,8 @@ class PersonProfileServiceTest {
         school.setName("ITEL");
         school.setVerified(true);
         when(institutions.findAllById(ArgumentMatchers.<Iterable<Long>>any())).thenReturn(Flux.just(school));
-        when(gamification.getStats(TARGET_ACCOUNT)).thenReturn(Mono.just(
-            new UserStatsResponse(TARGET_ACCOUNT, 450L, 4, 3, 5, 0, null)));
-        when(gamification.getBadges(TARGET_ACCOUNT)).thenReturn(Flux.just(
-            new UserBadgeResponse("FIRST", "Primeira prova", "d", null, LocalDateTime.now())));
+        when(stats.read(TARGET_ACCOUNT)).thenReturn(Mono.just(
+            new PublicStatsReader.PublicStats(4, 450L, List.of("Primeira prova"))));
     }
 
     private static User user(long id, long accountId, String first, String last) {

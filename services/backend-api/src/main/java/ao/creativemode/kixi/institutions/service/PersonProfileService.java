@@ -1,7 +1,5 @@
 package ao.creativemode.kixi.institutions.service;
 
-import ao.creativemode.kixi.gamification.dto.UserBadgeResponse;
-import ao.creativemode.kixi.gamification.service.GamificationService;
 import ao.creativemode.kixi.identity.model.User;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
@@ -15,6 +13,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.ProfileSettingRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.PublicStatsReader;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -30,15 +29,13 @@ import reactor.core.publisher.Mono;
 @Service
 public class PersonProfileService {
 
-    static final int MAX_BADGES = 12;
-
     private final UserRepository users;
     private final TeacherRepository teachers;
     private final InstitutionStudentRepository studentLinks;
     private final InstitutionTeacherRepository teacherLinks;
     private final InstitutionRepository institutions;
     private final ProfileSettingRepository settings;
-    private final GamificationService gamification;
+    private final PublicStatsReader stats;
 
     public PersonProfileService(
         UserRepository users,
@@ -47,7 +44,7 @@ public class PersonProfileService {
         InstitutionTeacherRepository teacherLinks,
         InstitutionRepository institutions,
         ProfileSettingRepository settings,
-        GamificationService gamification
+        PublicStatsReader stats
     ) {
         this.users = users;
         this.teachers = teachers;
@@ -55,7 +52,7 @@ public class PersonProfileService {
         this.teacherLinks = teacherLinks;
         this.institutions = institutions;
         this.settings = settings;
-        this.gamification = gamification;
+        this.stats = stats;
     }
 
     public Mono<PersonProfile> person(Long viewerAccountId, boolean viewerIsAdmin, Long userId) {
@@ -117,17 +114,9 @@ public class PersonProfileService {
             .filter(i -> i.getDeletedAt() == null)
             .map(ProfileService::toCard)
             .collectList();
-        Mono<List<String>> badges = gamification
-            .getBadges(user.getAccountId())
-            .map(UserBadgeResponse::name)
-            .take(MAX_BADGES)
-            .collectList();
-        Mono<long[]> stats = gamification
-            .getStats(user.getAccountId())
-            .map(s -> new long[] {s.level() == null ? 1 : s.level(), s.xp() == null ? 0 : s.xp()})
-            .defaultIfEmpty(new long[] {1, 0});
+        Mono<PublicStatsReader.PublicStats> progress = stats.read(user.getAccountId());
 
-        return Mono.zip(schools, badges, stats).map(parts -> new PersonProfile(
+        return Mono.zip(schools, progress).map(parts -> new PersonProfile(
             user.getId(),
             displayName(user),
             user.getPhoto(),
@@ -136,9 +125,9 @@ public class PersonProfileService {
             false,
             visibility,
             parts.getT1(),
-            (int) parts.getT3()[0],
-            parts.getT3()[1],
-            parts.getT2()));
+            parts.getT2().level(),
+            parts.getT2().xp(),
+            parts.getT2().badges()));
     }
 
     private PersonProfile restricted(User user, String visibility, boolean teacher) {
