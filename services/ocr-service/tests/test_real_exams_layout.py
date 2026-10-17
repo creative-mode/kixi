@@ -36,6 +36,11 @@ def texts(questions):
     return " ".join(q.text + " " + " ".join(s.text for s in q.subitems_content) for q in questions)
 
 
+@pytest.fixture
+def fisica_12a_data():
+    return json.loads((FIXTURES / "fisica_12a.json").read_text(encoding="utf-8"))
+
+
 def test_electrotecnia_has_its_two_circuits_on_the_questions_that_ask_for_them():
     metadata, questions, figures, _ = interpret("electrotecnia_11a.json")
 
@@ -153,6 +158,48 @@ def test_maths_the_engine_cannot_read_becomes_a_marker_and_a_picture_of_the_form
     assert {kind for _, kind in figures} == {"formula"}  # the stamp round «A COORDENAÇÃO» is not a figure
     assert {region for region, _ in figures} <= {f"questao_{n}" for n in range(1, 6)}
     assert len([f for f in figures if f[0] == "questao_3"]) >= 2
+
+
+def test_formulas_inline_in_the_physics_exam_come_out_as_latex_not_images(fisica_12a_data):
+    """#262: the formulas the issue names as examples ("8π", "5 × 10⁻³ T", "B = Bmax e⁻²ᵗ")
+    are not layout formula regions in this exam - they are plain words inside the questions'
+    own sentences, and the postprocessor's final pass is what has to catch them."""
+    blocks = [
+        TextBlock(text=b["text"], confidence=b["conf"], bbox=tuple(b["bbox"]), page_index=0, line_index=b["i"])
+        for b in fisica_12a_data["blocks"]
+    ]
+    layout = [
+        LayoutRegion(r["kind"], r["label"], r["score"], tuple(r["bbox"]), r.get("hw", False))
+        for r in fisica_12a_data["layout"]
+    ]
+    _, questions, *_ = OCRPostprocessor().process(
+        blocks,
+        page_dimensions={0: (fisica_12a_data["width"], fisica_12a_data["height"])},
+        layout_regions={0: layout},
+    )
+
+    every_formula = [f for q in questions for f in q.formulas]
+    assert every_formula, "at least one formula must be recognized across the exam's questions"
+    assert any(f.latex == r"8\pi" for f in every_formula)
+    assert any(f.latex == r"5 \times 10^{-3}" for f in every_formula)
+
+    # The question text itself carries the formula delimited, not the raw garbled OCR.
+    q2 = next(q for q in questions if "espira circular" in q.text)
+    assert r"$8\pi$" in q2.text
+    assert q2.to_dict()["formulas"], "the JSON contract must expose the recognized formulas too"
+
+
+def test_formula_recognition_can_be_turned_off(fisica_12a_data):
+    blocks = [
+        TextBlock(text=b["text"], confidence=b["conf"], bbox=tuple(b["bbox"]), page_index=0, line_index=b["i"])
+        for b in fisica_12a_data["blocks"]
+    ]
+    _, questions, *_ = OCRPostprocessor().process(
+        blocks, page_dimensions={0: (fisica_12a_data["width"], fisica_12a_data["height"])},
+        recognize_formulas=False,
+    )
+    assert all(q.formulas == [] for q in questions)
+    assert all("$" not in q.text for q in questions)
 
 
 def test_no_formula_picture_is_taken_from_a_pen_region():

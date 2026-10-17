@@ -39,6 +39,7 @@ jobs:
         run: |
           node --test .github/scripts/bots.test.js
           node --test .github/scripts/text-hygiene.test.js
+          node --test .github/scripts/release-notes.test.js
 
   backend:
     name: Backend tests
@@ -79,7 +80,18 @@ jobs:
           KIXI_POSTGRES_DATABASE: kixi_exam_room_it
           KIXI_POSTGRES_USER: kixi
           KIXI_POSTGRES_PASSWORD: kixi_secret
-        run: ./mvnw -B test
+        shell: bash
+        run: ./mvnw -B test 2>&1 | tee "$RUNNER_TEMP/mvn.log"
+
+      # O registo completo do job não é descarregável por quem usa só a API; as linhas de erro
+      # do Maven passam a anotações, que se leem na página da verificação.
+      - name: Erros do Maven em anotações
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "^\[ERROR\]" "$RUNNER_TEMP/mvn.log" | head -40 | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done
 
   ocr:
     name: OCR tests

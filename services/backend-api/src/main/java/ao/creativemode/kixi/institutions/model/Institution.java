@@ -34,6 +34,16 @@ public class Institution {
     @Column("logo")
     private String logo;
 
+    /** Set only by an administrator after reviewing a verification request (issue #332). */
+    @Column("verified")
+    private boolean verified;
+
+    @Column("verified_at")
+    private LocalDateTime verifiedAt;
+
+    @Column("verified_by_account_id")
+    private Long verifiedByAccountId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
