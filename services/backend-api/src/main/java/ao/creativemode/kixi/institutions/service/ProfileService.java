@@ -86,7 +86,7 @@ public class ProfileService {
             .filter(part -> !part.isBlank())
             .reduce((a, b) -> a + " " + b)
             .orElse("Professor");
-        return new TeacherCard(teacher.getId(), name, teacher.getPhoto(), teacher.getSpecialty(), verified);
+        return new TeacherCard(teacher.getId(), teacher.getAccountId(), name, teacher.getPhoto(), teacher.getSpecialty(), verified);
     }
 
     private static String nullToEmpty(String value) {
