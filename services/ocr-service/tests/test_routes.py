@@ -6,6 +6,7 @@ Tests for the FastAPI endpoints of the OCR service.
 
 import pytest
 from dataclasses import replace
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 import io
@@ -14,7 +15,7 @@ from PIL import Image
 
 from app.main import app
 from app.config import settings
-from app.api.routes import get_ocr_engine as route_get_ocr_engine
+from app.api.routes import get_ocr_engine as route_get_ocr_engine, resolve_file_type
 from app.ocr.engine import OCRResult, DocumentInfo
 from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType
 
@@ -434,6 +435,72 @@ class TestFileValidation:
                 files=[("images", (filename, content, content_type))]
             )
             assert response.status_code == 400
+
+    def test_a_photo_without_an_extension_is_accepted_by_its_content(
+        self, client, engine_override, sample_jpeg_bytes
+    ):
+        """A phone photo called IMG_20250116 is still a JPEG; the name must not refuse it (#291)."""
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
+            status="success",
+            to_dict=lambda: {"status": "success", "requestId": "test"}
+        ))
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("IMG_20250116", sample_jpeg_bytes, "application/octet-stream"))]
+        )
+
+        assert response.status_code == 200
+        mock_engine.process_image_async.assert_awaited()
+
+    def test_the_content_decides_when_the_name_lies(
+        self, client, engine_override, sample_jpeg_bytes
+    ):
+        """A JPEG called prova.pdf is read as an image, not refused nor opened as a PDF."""
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
+            status="success",
+            to_dict=lambda: {"status": "success", "requestId": "test"}
+        ))
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("prova.pdf", sample_jpeg_bytes, "application/pdf"))]
+        )
+
+        assert response.status_code == 200
+        mock_engine.process_image_async.assert_awaited()
+
+    def test_an_unnamed_file_that_is_not_an_image_is_still_refused(self, client):
+        """The content is the only source: no name, no image, no entry."""
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("IMG_20250116", b"not an image at all", "application/octet-stream"))]
+        )
+
+        assert response.status_code == 400
+        assert "Unsupported file type" in response.json()["detail"]
+
+
+class TestResolveFileType:
+    """The content decides; the name is only a fallback (#291)."""
+
+    def test_content_wins_over_the_name(self, sample_image_bytes, sample_jpeg_bytes):
+        assert resolve_file_type("IMG_20250116", sample_jpeg_bytes) == "jpeg"
+        assert resolve_file_type("prova.pdf", sample_jpeg_bytes) == "jpeg"
+        assert resolve_file_type("prova.png", sample_jpeg_bytes) == "jpeg"
+        assert resolve_file_type("sem_nome", sample_image_bytes) == "png"
+
+    def test_the_name_is_used_when_the_content_cannot_be_named(self):
+        assert resolve_file_type("scan.tiff", b"not a readable image") == "tiff"
+
+    def test_neither_content_nor_name_is_refused(self):
+        with pytest.raises(HTTPException) as raised:
+            resolve_file_type("notes.txt", b"plain text")
+        assert raised.value.status_code == 400
 
 
 # =============================================================================
