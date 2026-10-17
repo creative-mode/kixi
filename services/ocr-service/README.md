@@ -75,6 +75,14 @@ curl -X POST http://localhost:8000/ocr/v1/extract \
   -F 'context={"languageHint": "pt"}'
 ```
 
+### Ficheiros aceites
+
+JPEG, PNG, WebP, TIFF, BMP e PDF. O que decide o tipo é **o conteúdo**, não o nome: a extensão serve
+de pista quando o conteúdo não é reconhecido por nenhum destes formatos. Assim uma fotografia de
+telemóvel chamada `IMG_20250116`, sem extensão nenhuma, é aceite como o JPEG que os bytes dizem que
+é; e um ficheiro cujo conteúdo não é nenhuma destas imagens nem um PDF continua a ser recusado com
+`400 Unsupported file type`.
+
 ### Response Format
 
 ```json

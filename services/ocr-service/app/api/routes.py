@@ -5,11 +5,13 @@ FastAPI endpoints for OCR text extraction from images.
 Provides the main API for document processing.
 """
 
+import io
 import time
 from typing import Optional, List
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -83,30 +85,74 @@ def get_ocr_engine() -> OCREngine:
 
 
 # Validation helpers
-def validate_file_type(filename: str) -> str:
-    """Validate file type and return the type."""
+# What a filename extension claims a file is. A hint only, never the decision (#291).
+EXTENSION_FILE_TYPES = {
+    '.jpg': 'jpeg',
+    '.jpeg': 'jpeg',
+    '.png': 'png',
+    '.pdf': 'pdf',
+    '.webp': 'webp',
+    '.tif': 'tiff',
+    '.tiff': 'tiff',
+    '.bmp': 'bmp',
+}
+
+# What Pillow reads inside the bytes, normalised to the names above.
+PILLOW_FILE_TYPES = {
+    'JPEG': 'jpeg',
+    'PNG': 'png',
+    'WEBP': 'webp',
+    'TIFF': 'tiff',
+    'BMP': 'bmp',
+}
+
+UNSUPPORTED_FILE_TYPE = (
+    "Unsupported file type. Supported: jpg, jpeg, png, pdf, webp, tiff, bmp"
+)
+
+
+def file_type_from_name(filename: Optional[str]) -> Optional[str]:
+    """The type the name claims, or None when the extension is missing or unknown."""
     if not filename:
-        raise HTTPException(status_code=400, detail="Filename is required")
+        return None
 
     filename_lower = filename.lower()
+    for extension, file_type in EXTENSION_FILE_TYPES.items():
+        if filename_lower.endswith(extension):
+            return file_type
+    return None
 
-    if filename_lower.endswith(('.jpg', '.jpeg')):
-        return 'jpeg'
-    elif filename_lower.endswith('.png'):
-        return 'png'
-    elif filename_lower.endswith('.pdf'):
+
+def file_type_from_content(content: bytes) -> Optional[str]:
+    """The type the bytes really are: PDF by magic bytes, images as Pillow reads them."""
+    if is_pdf(content):
         return 'pdf'
-    elif filename_lower.endswith('.webp'):
-        return 'webp'
-    elif filename_lower.endswith(('.tif', '.tiff')):
-        return 'tiff'
-    elif filename_lower.endswith('.bmp'):
-        return 'bmp'
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Supported: jpg, jpeg, png, pdf, webp, tiff, bmp"
-        )
+
+    try:
+        with Image.open(io.BytesIO(content)) as probe:
+            return PILLOW_FILE_TYPES.get((probe.format or '').upper())
+    except Exception:
+        return None
+
+
+def resolve_file_type(filename: Optional[str], content: bytes) -> str:
+    """Decide the type from the content, with the name as a fallback (#291).
+
+    A phone photo called ``IMG_20250116`` has no extension at all; the bytes are
+    still a JPEG, and that is what decides. The name is only used when Pillow
+    cannot name the content, so a valid image is never refused over its name and
+    an unsupported file is still refused.
+    """
+    detected = file_type_from_content(content)
+    if detected:
+        return detected
+
+    declared = file_type_from_name(filename)
+    if declared:
+        return declared
+
+    raise HTTPException(status_code=400, detail=UNSUPPORTED_FILE_TYPE)
+
 
 
 def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
@@ -233,13 +279,12 @@ async def extract_text(
 
     for source_file_index, upload_file in enumerate(images):
         try:
-            # Validate file type
-            file_type = validate_file_type(upload_file.filename)
-
-            # Read file content
+            # Read the bytes first: the content decides the type, not the name (#291).
             remaining_request_bytes = settings.max_upload_size_bytes - total_upload_bytes
             content = await read_bounded_upload(upload_file, remaining_request_bytes)
             total_upload_bytes += len(content)
+
+            file_type = resolve_file_type(upload_file.filename, content)
 
             logger.debug(
                 "Processing file",
@@ -249,7 +294,7 @@ async def extract_text(
             )
 
             # Handle PDF files
-            if file_type == 'pdf' or is_pdf(content):
+            if file_type == 'pdf':
                 validate_pdf(content, max_pages=settings.max_pdf_pages)
                 pdf_images = extract_images_from_pdf(content)
                 if len(all_images) + len(pdf_images) > settings.max_ocr_pages_per_request:
@@ -357,18 +402,16 @@ async def extract_text_simple(
         request_id=request_id,
     )
 
-    # Validate file type
-    file_type = validate_file_type(image.filename)
-
-    if file_type == 'pdf':
-        raise HTTPException(
-            status_code=400,
-            detail="PDF files are not supported in simple mode. Use /v1/extract instead."
-        )
-
+    # Read and validate
     try:
-        # Read and validate
         content = await read_bounded_upload(image)
+        file_type = resolve_file_type(image.filename, content)
+
+        if file_type == 'pdf':
+            raise HTTPException(
+                status_code=400,
+                detail="PDF files are not supported in simple mode. Use /v1/extract instead."
+            )
 
         # Load image
         img = load_image_from_bytes(content)
