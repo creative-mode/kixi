@@ -23,6 +23,7 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.springframework.http.HttpStatus;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -69,7 +70,7 @@ class PersonProfileServiceTest {
         school.setId(SCHOOL);
         school.setName("ITEL");
         school.setVerified(true);
-        when(institutions.findAllById(any(Iterable.class))).thenReturn(Flux.just(school));
+        when(institutions.findAllById(ArgumentMatchers.<Iterable<Long>>any())).thenReturn(Flux.just(school));
         when(gamification.getStats(TARGET_ACCOUNT)).thenReturn(Mono.just(
             new UserStatsResponse(TARGET_ACCOUNT, 450L, 4, 3, 5, 0, null)));
         when(gamification.getBadges(TARGET_ACCOUNT)).thenReturn(Flux.just(
