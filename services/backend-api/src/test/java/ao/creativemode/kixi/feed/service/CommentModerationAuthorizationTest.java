@@ -16,6 +16,7 @@ import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.TeachingAssignmentRepository;
 import ao.creativemode.kixi.institutions.service.InstitutionFeedScopeAuthorizer;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.DisplayNameReader;
 import ao.creativemode.kixi.shared.service.InstitutionNameReader;
 import ao.creativemode.kixi.shared.service.SimulationShowcaseReader;
 
@@ -92,7 +93,8 @@ class CommentModerationAuthorizationTest {
     @BeforeEach
     void setUp() {
         postService = new PostService(postRepository, mock(PostFeedRepository.class),
-                mock(PostReactionRepository.class), commentRepository, mock(PostReportRepository.class),
+                mock(PostReactionRepository.class), commentRepository, mock(DisplayNameReader.class),
+                mock(PostReportRepository.class),
                 new InstitutionFeedScopeAuthorizer(mock(EnrollmentRepository.class), teachingAssignmentRepository,
                         teacherRepository, mock(ClassRepository.class)),
                 mock(FeedRateLimiter.class), mock(SimulationShowcaseReader.class),

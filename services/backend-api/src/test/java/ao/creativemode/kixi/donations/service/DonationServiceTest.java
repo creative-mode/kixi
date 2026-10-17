@@ -3,6 +3,7 @@ package ao.creativemode.kixi.donations.service;
 import static ao.creativemode.kixi.donations.service.DonationFixtures.executable;
 import static ao.creativemode.kixi.donations.service.DonationFixtures.pdf;
 import static ao.creativemode.kixi.donations.service.DonationFixtures.png;
+import static ao.creativemode.kixi.donations.service.DonationFixtures.jpeg;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -30,6 +31,7 @@ import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
+import ao.creativemode.kixi.shared.storage.UploadSniffer;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -280,6 +282,39 @@ class DonationServiceTest {
         assertThat(saved.getValue().getOriginalName()).doesNotContain("..").doesNotContain("\\").doesNotContain("<");
         assertThat(saved.getValue().getContentType()).as("what the bytes are").isEqualTo("image/png");
         assertThat(saved.getValue().getSha256()).hasSize(64);
+    }
+
+    @Test
+    void aPhotoWithoutAnExtensionIsStoredWithTheOneItsBytesDecide() {
+        StepVerifier.create(service.submit(
+                submission(List.of(upload("IMG_20250116", jpeg(24, 24, 5)))), "hash"))
+                .expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<DonationFile> saved = ArgumentCaptor.forClass(DonationFile.class);
+        verify(files).save(saved.capture());
+        assertThat(saved.getValue().getOriginalName()).isEqualTo("IMG_20250116.jpg");
+        assertThat(saved.getValue().getContentType()).isEqualTo("image/jpeg");
+    }
+
+    @Test
+    void aNameWithTheWrongExtensionIsRewrittenToTheRealOne() {
+        StepVerifier.create(service.submit(
+                submission(List.of(upload("prova.png", jpeg(24, 24, 5)))), "hash"))
+                .expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<DonationFile> saved = ArgumentCaptor.forClass(DonationFile.class);
+        verify(files).save(saved.capture());
+        assertThat(saved.getValue().getOriginalName()).isEqualTo("prova.jpg");
+    }
+
+    @Test
+    void safeNameKeepsTheRightExtensionReplacesTheWrongAndAddsTheMissing() {
+        assertThat(DonationService.safeName("IMG_20250116", UploadSniffer.Kind.JPEG)).isEqualTo("IMG_20250116.jpg");
+        assertThat(DonationService.safeName("prova.png", UploadSniffer.Kind.JPEG)).isEqualTo("prova.jpg");
+        assertThat(DonationService.safeName("prova.PNG", UploadSniffer.Kind.PNG)).isEqualTo("prova.PNG");
+        assertThat(DonationService.safeName("scan.jpeg", UploadSniffer.Kind.JPEG)).isEqualTo("scan.jpeg");
+        assertThat(DonationService.safeName("notes.v1", UploadSniffer.Kind.JPEG)).isEqualTo("notes.v1.jpg");
+        assertThat(DonationService.safeName("", UploadSniffer.Kind.PDF)).isEqualTo("ficheiro.pdf");
     }
 
     @Test

@@ -85,6 +85,22 @@ public class PostController {
                 .flatMap(accountId -> postService.addComment(postId, accountId, request));
     }
 
+    /**
+     * The conversation on a post, oldest first.
+     *
+     * <p>A post from outside the caller's school is 404 here exactly as it is on the post
+     * itself: the id comes from the URL, and answering 403 would confirm it exists.</p>
+     */
+    @GetMapping("/{postId}/comments")
+    public Flux<PostCommentResponse> listComments(
+            @PathVariable Long postId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int limit
+    ) {
+        return current.requiredAccountId()
+                .flatMapMany(accountId -> postService.listComments(postId, accountId, page, limit));
+    }
+
     @PostMapping("/{postId}/reports")
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<PostReportResponse> reportPost(

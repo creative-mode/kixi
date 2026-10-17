@@ -2362,6 +2362,22 @@ class OCRPostprocessor:
         for block, reason in (noise or []):
             unmapped.append(UnmappedContent(block.page_index, block.text.strip(), block.confidence, reason))
 
+        if not questions:
+            # Nothing was structured. Keep what the OCR read in the response so the caller still
+            # has the text (a table of values, an unusual layout) instead of losing it behind an
+            # error status. Noise left `blocks` before this call, so a block is not listed twice;
+            # skipping any already collected keeps that true even if a caller ever passes both.
+            already = {id(block) for block, _ in (noise or [])}
+            for block in blocks:
+                if id(block) in already:
+                    continue
+                if block.text and block.text.strip():
+                    unmapped.append(UnmappedContent(
+                        block.page_index, block.text.strip(), block.confidence,
+                        "Texto lido sem perguntas reconhecidas",
+                    ))
+            return unmapped
+
         instruction_end = metadata.instruction_end
         if instruction_end is not None and questions:
             first = min(questions, key=lambda q: (q.page_index, q.start_y))

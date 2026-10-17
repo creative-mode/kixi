@@ -54,6 +54,8 @@ class ExamRoomControllerHttpTest {
     private ExamRoomService service;
     @MockBean
     private ExamRoomMonitoringService monitoring;
+    @MockBean
+    private ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction;
 
     @Test
     void protectsEveryRoomOperationFromAnonymousUsers() {

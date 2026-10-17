@@ -33,7 +33,10 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 class FeedPostgresIntegrationTest {
     private static final long STUDENT = 122401L;
     private static final long OTHER_STUDENT = 122402L;
-    private static final long ADMIN = 122403L;
+    private static final long CLASSMATE = 122403L;
+    /** The moderator of issue #313. 122404 on purpose: 122403 is already the classmate above,
+     *  and two accounts on one id is a fixture that lies rather than one that fails. */
+    private static final long ADMIN = 122404L;
     private static final long INSTITUTION = 122401L;
     private static final long OTHER_INSTITUTION = 122402L;
     private static final long YEAR = 122401L;
@@ -52,6 +55,7 @@ class FeedPostgresIntegrationTest {
     private WebTestClient client;
     private String studentToken;
     private String otherStudentToken;
+    private String classmateToken;
     private String adminToken;
 
     @DynamicPropertySource
@@ -74,16 +78,21 @@ class FeedPostgresIntegrationTest {
         client = WebTestClient.bindToApplicationContext(context).apply(springSecurity())
                 .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
         sql("DELETE FROM post_reports WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "))");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
         sql("DELETE FROM post_comments WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "))");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
         sql("DELETE FROM post_reactions WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "))");
-        sql("DELETE FROM posts WHERE author_account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
-        sql("DELETE FROM feed_rate_limits WHERE rate_key IN ('account:" + STUDENT + "','account:" + OTHER_STUDENT + "')");
-        sql("DELETE FROM enrollments WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
-        sql("DELETE FROM account_roles WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + ADMIN + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + STUDENT + "," + OTHER_STUDENT + "," + ADMIN + ")");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
+        sql("DELETE FROM posts WHERE author_account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM feed_rate_limits WHERE rate_key IN ('account:" + STUDENT + "','account:" + OTHER_STUDENT
+                + "','account:" + CLASSMATE + "','account:" + ADMIN + "')");
+        sql("DELETE FROM enrollments WHERE account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM users WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
         sql("DELETE FROM classes WHERE id IN (" + CLASS + "," + OTHER_CLASS + ")");
         sql("DELETE FROM courses WHERE id IN (" + COURSE + "," + OTHER_COURSE + ")");
         sql("DELETE FROM institutions WHERE id IN (" + INSTITUTION + "," + OTHER_INSTITUTION + ")");
@@ -103,13 +112,21 @@ class FeedPostgresIntegrationTest {
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active) VALUES ("
                 + STUDENT + ", 'feed-122-a', 'feed-122-a@kixi.test', 'x', true, true), ("
                 + OTHER_STUDENT + ", 'feed-122-b', 'feed-122-b@kixi.test', 'x', true, true), ("
+                + CLASSMATE + ", 'feed-122-c', 'feed-122-c@kixi.test', 'x', true, true), ("
                 + ADMIN + ", 'feed-122-admin', 'feed-122-admin@kixi.test', 'x', true, true)");
+        // The moderator deliberately has no row here: an account with no profile is not a
+        // person, and moderation never needs to name it.
+        sql("INSERT INTO users (account_id, first_name, last_name) VALUES ("
+                + STUDENT + ", 'Ana', 'Neto'), (" + OTHER_STUDENT + ", 'Carla', 'Dias'), ("
+                + CLASSMATE + ", 'Bruno', 'Silva')");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id, status, created_at, updated_at) VALUES ("
                 + STUDENT + ", " + CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
-                + OTHER_STUDENT + ", " + OTHER_CLASS + ", " + YEAR + ", 'ACTIVE', now(), now())");
+                + OTHER_STUDENT + ", " + OTHER_CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
+                + CLASSMATE + ", " + CLASS + ", " + YEAR + ", 'ACTIVE', now(), now())");
         studentToken = jwtService.generateToken(STUDENT, List.of("STUDENT"));
         otherStudentToken = jwtService.generateToken(OTHER_STUDENT, List.of("STUDENT"));
+        classmateToken = jwtService.generateToken(CLASSMATE, List.of("STUDENT"));
         adminToken = jwtService.generateToken(ADMIN, List.of("ADMIN"));
     }
 
@@ -147,6 +164,81 @@ class FeedPostgresIntegrationTest {
                 .exchange().expectStatus().isNotFound();
     }
 
+    /**
+     * The conversation, read back over HTTP with PostgreSQL behind the derived query.
+     *
+     * <p>Chronological, masked names, and the reader's own row marked — the three things
+     * the frontend needs and cannot work out for itself.</p>
+     */
+    @Test
+    void realConversationComesBackOldestFirstWithMaskedNames() {
+        long id = createPost(studentToken, "Conversa");
+        comment(classmateToken, id, "Primeiro");
+        comment(studentToken, id, "Segundo");
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].content").isEqualTo("Primeiro")
+                .jsonPath("$[0].displayName").isEqualTo("Bruno S.")
+                .jsonPath("$[0].mine").isEqualTo(false)
+                .jsonPath("$[1].content").isEqualTo("Segundo")
+                .jsonPath("$[1].displayName").isEqualTo("Ana N.")
+                .jsonPath("$[1].mine").isEqualTo(true);
+
+        // The classmate reads the same conversation with the mirror image of "mine".
+        bearer(classmateToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].mine").isEqualTo(true)
+                .jsonPath("$[1].mine").isEqualTo(false);
+    }
+
+    /** Paging is chronological paging: the second page continues, it does not restart. */
+    @Test
+    void theSecondPageContinuesTheConversation() {
+        long id = createPost(studentToken, "Longa");
+        comment(studentToken, id, "Um");
+        comment(studentToken, id, "Dois");
+        comment(studentToken, id, "Tres");
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments?page=2&limit=2")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].content").isEqualTo("Tres");
+    }
+
+    /** A page the server will not serve is refused before any query runs. */
+    @Test
+    void anUnusablePageIsRefused() {
+        long id = createPost(studentToken, "Pagina");
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments?limit=5000")
+                .exchange().expectStatus().isBadRequest();
+    }
+
+    /** Another school's conversation is 404, not an empty list. */
+    @Test
+    void anotherSchoolsConversationIs404() {
+        long id = createPost(studentToken, "Privada");
+        comment(studentToken, id, "Nao deves ler isto");
+
+        bearer(otherStudentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isNotFound();
+    }
+
+    private long createPost(String token, String content) {
+        AtomicLong postId = new AtomicLong();
+        bearer(token).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"TOPIC\",\"classId\":" + CLASS + ",\"content\":\"" + content + "\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> postId.set(((Number) value).longValue()));
+        return postId.get();
+    }
+
+    private void comment(String token, long postId, String content) {
+        bearer(token).post().uri("/api/v1/feed/posts/" + postId + "/comments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"" + content + "\"}")
+                .exchange().expectStatus().isCreated();
+    }
+
     @Test
     void realFeedPathRejectsForgedScopeAndInvalidPagination() {
         bearer(studentToken).get().uri("/api/v1/feed/posts?classId=" + OTHER_CLASS)
@@ -162,10 +254,11 @@ class FeedPostgresIntegrationTest {
     /**
      * A comment taken down by a moderator leaves the feed (issue #313).
      *
-     * <p>Three things only a real database can answer: that the PATCH really writes
-     * {@code is_hidden}, that the count the feed shows stops counting it, and that
-     * unhiding puts both back. The last one matters most - a moderation action that
-     * cannot be undone would let a mistake become permanent.</p>
+     * <p>Four things only a real database can answer: that the PATCH really writes
+     * {@code is_hidden}, that the count the feed shows stops counting it, that the
+     * conversation itself stops serving it, and that unhiding puts all of it back.
+     * The last one matters most - a moderation action that cannot be undone would
+     * let a mistake become permanent.</p>
      */
     @Test
     void aHiddenCommentStopsCountingAndUnhidingBringsItBack() {
@@ -193,6 +286,10 @@ class FeedPostgresIntegrationTest {
         bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$[0].commentCount").isEqualTo(0);
+        // The other half of the criterion: it is not only that the count drops, the
+        // conversation stops serving the comment too (#312 made it readable).
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody().json("[]");
 
         // Hiding again is the same as having hidden once: still 204, still nothing counted.
         bearer(adminToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/hide")
@@ -203,6 +300,10 @@ class FeedPostgresIntegrationTest {
         bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$[0].commentCount").isEqualTo(1);
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].id").isEqualTo((int) comment);
     }
 
     /**

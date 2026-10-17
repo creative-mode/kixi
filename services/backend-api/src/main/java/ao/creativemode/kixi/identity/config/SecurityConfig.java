@@ -48,6 +48,9 @@ public class SecurityConfig {
                         // browser por um <img>, que não leva o token. Só `questions/`, com nomes não adivinháveis
                         // (UUID); nada de donations/ nem do resto do disco.
                         .pathMatchers(HttpMethod.GET, "/uploads/questions/*/*").permitAll()
+                        // Fotos de perfil e logótipos: quem tem sessão envia (a rota valida os bytes), e o <img> lê sem token.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/images").authenticated()
+                        .pathMatchers(HttpMethod.GET, "/uploads/images/*/*").permitAll()
                         // #252: the donation form is public, and only the submission: everything else
                         // under /donations (list, files, review, extract, link) is ADMIN below. The
                         // method and the exact path are named so no other route opens by accident.
