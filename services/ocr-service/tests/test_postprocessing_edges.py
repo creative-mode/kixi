@@ -244,3 +244,61 @@ def test_process_keeps_recognized_text_in_unmapped_when_no_questions_are_parsed(
     assert questions == []
     assert "Tabela de valores trimestrais" in joined
     assert "Janeiro 120 Fevereiro 150" in joined
+
+
+def test_a_noise_block_is_not_repeated_in_unmapped_when_there_are_no_questions():
+    """A block moved out as noise is not added again by the no-questions branch (#292).
+
+    The noise never belongs to ``blocks`` by the time ``_collect_unmapped`` runs — ``_split_noise``
+    and ``_cut_after_cotacao`` take it out first — so its text must appear once, not twice with two
+    different reasons.
+    """
+    processor = OCRPostprocessor()
+    scribble = TextBlock(
+        text="nota à margem",
+        confidence=0.9,
+        bbox=(10, 200, 500, 220),
+        page_index=0,
+        line_index=200,
+        handwritten=True,
+    )
+    blocks = [
+        block("Tabela de valores trimestrais", 10),
+        block("Janeiro cento e vinte", 40),
+        block("Fevereiro cento e cinquenta", 70),
+        block("Março cento e oitenta", 100),
+        scribble,
+    ]
+
+    _, questions, _, unmapped, _ = processor.process(blocks)
+
+    assert questions == []
+    texts = [item.text for item in unmapped]
+    assert texts.count("nota à margem") == 1, texts
+
+
+def test_collect_unmapped_skips_a_block_already_collected_as_noise():
+    """The no-questions branch never lists a block that the noise pass already collected (#292).
+
+    Called directly with the same block in both lists — a caller contract the guard keeps even if
+    the flow ever changes — the text is collected once, with the noise reason it was given.
+    """
+    processor = OCRPostprocessor()
+    scribble = block("nota à margem", 200, confidence=0.9)
+    text = block("Tabela de valores trimestrais", 10)
+
+    unmapped = processor._collect_unmapped(
+        [scribble, text],
+        ExtractedMetadata(),
+        [],
+        [(scribble, "Manuscrito (tinta que não é de impressão)")],
+    )
+
+    assert [item.text for item in unmapped] == [
+        "nota à margem",
+        "Tabela de valores trimestrais",
+    ]
+    assert [item.reason for item in unmapped] == [
+        "Manuscrito (tinta que não é de impressão)",
+        "Texto lido sem perguntas reconhecidas",
+    ]
