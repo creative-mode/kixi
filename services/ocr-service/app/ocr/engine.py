@@ -533,6 +533,7 @@ class OCREngine:
                     source_file_indices={page_index: source_file_index},
                     layout_regions=None if regions is None else {page_index: regions},
                     formula_images=settings.ocr_formula_images,
+                    recognize_formulas=settings.ocr_formula_latex,
                 )
 
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)

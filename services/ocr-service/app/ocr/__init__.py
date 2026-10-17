@@ -39,6 +39,7 @@ from .postprocessing import (
     normalize_text,
     detect_language,
 )
+from .formulas import FormulaSegment, extract_inline_formulas, recognize_region
 
 __all__ = [
     # Engine
@@ -68,4 +69,8 @@ __all__ = [
     "MetadataField",
     "normalize_text",
     "detect_language",
+    # Formulas (#262)
+    "FormulaSegment",
+    "extract_inline_formulas",
+    "recognize_region",
 ]

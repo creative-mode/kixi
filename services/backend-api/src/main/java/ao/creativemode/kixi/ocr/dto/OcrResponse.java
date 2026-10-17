@@ -207,8 +207,22 @@ public record OcrResponse(
 
         @JsonProperty("startY") Integer startY,
 
-        @JsonProperty("endY") Integer endY
+        @JsonProperty("endY") Integer endY,
+
+        /** Formulas recognized in the statement, alíneas or options (#262); empty when nothing in the
+         * question's text looked like maths. {@code text} already carries the recognized spans delimited
+         * ({@code $...$}) - this is the same result, structured, with the raw OCR text and a confidence. */
+        List<FormulaSegment> formulas
     ) {
+        /** The shape before formula recognition (#262) was added. */
+        public ExtractedQuestion(String number, Double confidence, List<String> subitems,
+                List<SubitemContent> subitemsContent, ConfidenceField<String> text, String type, Double cotacao,
+                List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
+                Integer startY, Integer endY) {
+            this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
+                imageDescription, pageIndex, startY, endY, List.of());
+        }
+
         /**
          * Check if this is a multiple choice question.
          */
@@ -292,6 +306,24 @@ public record OcrResponse(
         @JsonProperty("optionText") String optionText,
         Double confidence
     ) {}
+
+    /**
+     * A span of a question's text the OCR service recognized as a formula (#262).
+     *
+     * {@code kind} is {@code "formula"} when there is LaTeX of enough confidence, or
+     * {@code "unrecognized"} when the span looked like maths but no known pattern matched it -
+     * {@code latex} is null in that case, never a guess.
+     */
+    public record FormulaSegment(
+        String raw,
+        String latex,
+        Double confidence,
+        String kind
+    ) {
+        public boolean isRecognized() {
+            return "formula".equals(kind) && latex != null;
+        }
+    }
 
     /**
      * Image region to be uploaded.
