@@ -16,7 +16,7 @@ from app.main import app
 from app.config import settings
 from app.api.routes import get_ocr_engine as route_get_ocr_engine
 from app.ocr.engine import OCRResult, DocumentInfo
-from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType
+from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType, UnmappedContent
 
 
 # =============================================================================
@@ -212,6 +212,34 @@ class TestExtractEndpoint:
 
         assert response.status_code == 500
         assert response.json()["status"] == "error"
+
+    def test_extract_text_without_questions_is_partial_not_server_error(
+        self, client, engine_override, sample_image_bytes, mock_ocr_result
+    ):
+        """The OCR read text but parsed no questions: 207 with the text, never a 500 (#292)."""
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock(
+            return_value=replace(
+                mock_ocr_result,
+                status="partial",
+                questions=[],
+                unmapped_content=[
+                    UnmappedContent(0, "Tabela de valores", 0.9, "Texto lido sem perguntas reconhecidas")
+                ],
+            )
+        )
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("test.png", sample_image_bytes, "image/png"))],
+        )
+
+        assert response.status_code == 207
+        data = response.json()
+        assert data["status"] == "partial"
+        assert data["questions"] == []
+        assert [item["text"] for item in data["unmappedContent"]] == ["Tabela de valores"]
 
     def test_extract_no_files(self, client):
         """Test that extraction fails without files."""

@@ -161,7 +161,8 @@ O exemplo acima é resumido; o formato real de cada questão em `questions[]` é
   `{ "code": "NO_COTACAO", "field": "questions", "message": "6 questões sem cotação: …" }`. O serviço não inventa notas.
 - `unmappedContent[]` traz o que não coube na estrutura, cada item com um `reason`: manuscrito e marcas nas margens
   (acima do texto, ao lado de uma linha impressa, leitura de confiança muito baixa) e o texto introdutório entre as
-  instruções e a questão 1.
+  instruções e a questão 1. Quando o *parser* não reconhece nenhuma pergunta, todo o texto lido vem aqui
+  (`reason` `Texto lido sem perguntas reconhecidas`) e o estado é `partial` (HTTP 207), não `error`.
 - `metadata.courseName` vale `"TODOS"` quando a prova diz `CURSO: TODOS`; a sigla da disciplina (`OGI`) mantém-se.
 
 ### Reparação do texto

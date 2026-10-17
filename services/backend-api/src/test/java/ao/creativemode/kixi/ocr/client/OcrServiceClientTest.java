@@ -150,6 +150,64 @@ class OcrServiceClientTest {
     }
 
     @Test
+    void doesNotRetryAContentErrorThatArrivesAsFiveHundred() {
+        server.enqueue(
+            new MockResponse()
+                .setResponseCode(500)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                    {
+                      "status": "error",
+                      "requestId": "req-no-text",
+                      "questions": [],
+                      "imagesToUpload": [],
+                      "unmappedContent": [],
+                      "warnings": []
+                    }
+                    """)
+        );
+
+        OcrServiceClient client = client(2);
+
+        StepVerifier.create(client.extractTextFromBytes(new byte[] {1}, "exam.png"))
+            .expectErrorSatisfies(error -> {
+                assertThat(error).isInstanceOf(OcrServiceClient.OcrServerException.class);
+                assertThat(((OcrServiceClient.OcrServerException) error).isContentError()).isTrue();
+            })
+            .verify();
+
+        assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void retriesAFiveHundredWithoutTheContentStatus() {
+        server.enqueue(
+            new MockResponse()
+                .setResponseCode(500)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"detail\":\"OCR processing failed\"}")
+        );
+        server.enqueue(jsonResponse("""
+            {
+              "status": "success",
+              "requestId": "req-after-retry",
+              "questions": [],
+              "imagesToUpload": [],
+              "unmappedContent": [],
+              "warnings": []
+            }
+            """));
+
+        OcrServiceClient client = client(1);
+
+        StepVerifier.create(client.extractTextFromBytes(new byte[] {1}, "exam.png"))
+            .assertNext(response -> assertThat(response.requestId()).isEqualTo("req-after-retry"))
+            .verifyComplete();
+
+        assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
     void healthCheckReturnsFalseForUnavailableService() {
         OcrServiceClient client = client(0);
 
