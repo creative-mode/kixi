@@ -16,5 +16,6 @@ public record InstitutionProfile(
         LocalDateTime verifiedAt,
         long teacherCount,
         long studentCount,
-        long statementCount
+        long statementCount,
+        long roomCount
 ) { }

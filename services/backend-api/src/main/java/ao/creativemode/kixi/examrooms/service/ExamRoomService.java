@@ -172,6 +172,15 @@ public class ExamRoomService implements ExamRoomAccess {
         return rooms.findByTeacherAccountIdOrderByCreatedAtDesc(teacherAccountId).map(ExamRoomService::toResponse);
     }
 
+    /** The same list narrowed to one school; without a school it is the whole list. */
+    public Flux<ExamRoomResponse> findMine(Long teacherAccountId, Long institutionId) {
+        if (institutionId == null) {
+            return findMine(teacherAccountId);
+        }
+        return rooms.findByTeacherAccountIdAndInstitutionId(teacherAccountId, institutionId)
+                .map(ExamRoomService::toResponse);
+    }
+
     /**
      * The student's invitations, newest first, with the room's state and window and
      * the server time, so the student page can show "abre em", "a decorrer" or

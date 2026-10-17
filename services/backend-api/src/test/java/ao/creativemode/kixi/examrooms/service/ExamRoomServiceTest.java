@@ -642,4 +642,22 @@ class ExamRoomServiceTest {
         simulation.setExamRoomDurationMinutes(90);
         return simulation;
     }
+
+    @Test
+    void ownedRoomsNarrowToOneSchoolOnlyWhenAskedTo() {
+        ExamRoom inSchool = new ExamRoom();
+        inSchool.setId(21L);
+        ExamRoom any = new ExamRoom();
+        any.setId(22L);
+        when(rooms.findByTeacherAccountIdAndInstitutionId(7L, 3L)).thenReturn(Flux.just(inSchool));
+        when(rooms.findByTeacherAccountIdOrderByCreatedAtDesc(7L)).thenReturn(Flux.just(inSchool, any));
+
+        StepVerifier.create(service.findMine(7L, 3L).map(room -> room.id()))
+                .expectNext(21L)
+                .verifyComplete();
+        StepVerifier.create(service.findMine(7L, null).map(room -> room.id()))
+                .expectNext(21L, 22L)
+                .verifyComplete();
+        verify(rooms, never()).findByTeacherAccountIdAndInstitutionId(7L, null);
+    }
 }
