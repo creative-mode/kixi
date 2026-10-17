@@ -75,6 +75,12 @@ public class SecurityConfig {
                                 "/api/v1/teachers", "/api/v1/teachers/**",
                                 "/api/v1/sessions", "/api/v1/sessions/**")
                         .hasRole("ADMIN")
+                        // Asking for the school badge (issue #332): an admin or a teacher of the school.
+                        // The service checks the affiliation; deciding and revoking stay ADMIN below.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/institutions/*/verification-requests")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/verification-requests", "/api/v1/verification-requests/**")
+                        .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/mine")
                         .authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/trash")
