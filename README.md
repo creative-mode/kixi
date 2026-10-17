@@ -77,6 +77,27 @@ Swagger UI: <http://localhost:8080/swagger-ui.html>
 
 ---
 
+## Frontend
+
+The `frontend/` folder is a Git submodule that points to the web applications repository,
+[creative-mode/kixi-frontend](https://github.com/creative-mode/kixi-frontend) (student app, manager
+and public landing page). It is pinned to a commit of its `PRD` branch.
+
+```bash
+git clone --recurse-submodules https://github.com/creative-mode/kixi.git
+# in an existing clone:
+git submodule update --init frontend
+# to move the pin to the latest production frontend:
+git submodule update --remote frontend
+```
+
+## Release notes
+
+On every promotion to `prod` the release notes agent (`.github/workflows/release-notes.yml`) collects
+the pull requests that shipped in this repository and in the frontend since the last release, groups
+them as features, fixes and internal improvements, and publishes a GitHub release with the Kixi logo.
+Run it by hand with "Simular" to preview the notes without publishing.
+
 ## Contribution
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for guidelines on contributing, code style, tests, and legal compliance.

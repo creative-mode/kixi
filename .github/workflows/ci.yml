@@ -39,6 +39,7 @@ jobs:
         run: |
           node --test .github/scripts/bots.test.js
           node --test .github/scripts/text-hygiene.test.js
+          node --test .github/scripts/release-notes.test.js
 
   backend:
     name: Backend tests

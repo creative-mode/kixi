@@ -1,0 +1,4 @@
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/creative-mode/kixi-frontend.git
+	branch = PRD
