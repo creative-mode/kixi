@@ -49,6 +49,16 @@ public class PostComment {
         this.isHidden = true;
     }
 
+    /**
+     * The counterpart of {@code hide}, so a moderator who took a comment down can
+     * put it back. Unlike {@link Post#unhide()} there is nothing to clear here:
+     * {@code post_comments} carries no {@code hidden_by_account_id} nor
+     * {@code hidden_at} to wipe, only the flag itself.
+     */
+    public void unhide() {
+        this.isHidden = false;
+    }
+
     public void markAsDeleted() {
         this.deletedAt = LocalDateTime.now();
     }

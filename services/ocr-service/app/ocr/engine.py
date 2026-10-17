@@ -692,13 +692,13 @@ class OCREngine:
                 error_message="No images provided",
             )
 
-        all_text_blocks = []
         all_questions = []
         all_images_to_upload = []
         all_unmapped = []
         all_warnings = []
         has_tables = False
         languages = []
+        read_any_text = False
 
         for idx, image in enumerate(images):
             result = self.process_image(
@@ -709,6 +709,11 @@ class OCREngine:
                                    if source_file_indices and idx < len(source_file_indices)
                                    else 0),
             )
+
+            # ``process_image`` only marks ``error`` when it saw no text blocks at all, so a
+            # page that is not an error did read text, even if it became no question.
+            if result.status != "error":
+                read_any_text = True
 
             # Merge results
             all_questions.extend(result.questions)
@@ -735,10 +740,12 @@ class OCREngine:
 
         processing_time_ms = int((time.time() - start_time) * 1000)
 
-        # Determine status
-        if not all_questions:
+        # Determine status. Text the parser could not turn into questions is still a reading:
+        # the caller gets it with ``partial`` (207) instead of a 500 it cannot tell apart from a
+        # service failure. Only a document with no text at all is an error.
+        if not all_questions and not read_any_text:
             status = "error"
-        elif overall_confidence < 0.5:
+        elif not all_questions or overall_confidence < 0.5:
             status = "partial"
         else:
             status = "success"

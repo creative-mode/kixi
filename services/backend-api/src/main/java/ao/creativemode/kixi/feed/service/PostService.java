@@ -19,6 +19,7 @@ import ao.creativemode.kixi.feed.repository.PostReactionRepository;
 import ao.creativemode.kixi.feed.repository.PostReportRepository;
 import ao.creativemode.kixi.feed.repository.PostRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.DisplayNameReader;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.ClassScope;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.FeedScope;
@@ -26,6 +27,7 @@ import ao.creativemode.kixi.shared.service.InstitutionNameReader;
 import ao.creativemode.kixi.shared.service.SimulationShowcaseReader;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -33,6 +35,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -57,6 +60,7 @@ public class PostService {
     private final PostFeedRepository feedRepository;
     private final PostReactionRepository reactionRepository;
     private final PostCommentRepository commentRepository;
+    private final DisplayNameReader displayNames;
     private final PostReportRepository reportRepository;
     private final FeedScopeAuthorizer scopeAuthorizer;
     private final FeedRateLimiter rateLimiter;
@@ -68,6 +72,7 @@ public class PostService {
                        PostFeedRepository feedRepository,
                        PostReactionRepository reactionRepository,
                        PostCommentRepository commentRepository,
+                       DisplayNameReader displayNames,
                        PostReportRepository reportRepository,
                        FeedScopeAuthorizer scopeAuthorizer,
                        FeedRateLimiter rateLimiter,
@@ -78,6 +83,7 @@ public class PostService {
         this.feedRepository = feedRepository;
         this.reactionRepository = reactionRepository;
         this.commentRepository = commentRepository;
+        this.displayNames = displayNames;
         this.reportRepository = reportRepository;
         this.scopeAuthorizer = scopeAuthorizer;
         this.rateLimiter = rateLimiter;
@@ -222,15 +228,61 @@ public class PostService {
                     comment.setUpdatedAt(now);
                     return commentRepository.save(comment);
                 })
-                .map(saved -> new PostCommentResponse(
-                        saved.getId(),
-                        saved.getPostId(),
-                        saved.getAuthorAccountId(),
-                        saved.getContent(),
-                        saved.getIsHidden(),
-                        saved.getCreatedAt(),
-                        saved.getUpdatedAt()
-                ));
+                .flatMap(saved -> toCommentResponse(saved, accountId));
+    }
+
+    /**
+     * The conversation on a post, oldest first.
+     *
+     * <p>The scope check is the whole point of this method: the id arrives in the URL and
+     * a student who guesses one from another school must not read what was written under
+     * it. {@link #requireVisible} answers 404 for that, the same way it does for the post
+     * itself — not 403, which would confirm that the post exists.</p>
+     *
+     * <p>No rate limiter here, unlike {@link #addComment}: that one stops a student from
+     * writing a hundred comments, and a read writes nothing.</p>
+     */
+    public Flux<PostCommentResponse> listComments(
+            Long postId, Long accountId, int page, int limit) {
+        return Flux.defer(() -> {
+            validatePagination(page, limit);
+            return scopeAuthorizer.scopeOf(accountId)
+                    .flatMap(scope -> requireVisible(postId, scope))
+                    .flatMapMany(visible -> commentRepository
+                            .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                                    postId, PageRequest.of(page - 1, limit))
+                            .flatMapSequential(comment -> toCommentResponse(comment, accountId)));
+        });
+    }
+
+    /**
+     * One comment, with a name the reader can use.
+     *
+     * <p>The label is masked the way the ranking masks it — first name and the initial of
+     * the last — because a class feed shows several people and "um colega da turma" for
+     * all of them answers nothing about who is talking. The account id stays on the row
+     * for the client to recognise its own comments; it is the same id the ranking already
+     * hands out and carries no more.</p>
+     *
+     * <p>A missing profile gives a null name and <em>still the comment</em>: the door
+     * returns an empty Mono when there is no person behind the id, and mapping straight
+     * over it would drop the row — a comment is not lost because we cannot name it.</p>
+     */
+    private Mono<PostCommentResponse> toCommentResponse(PostComment comment, Long readerAccountId) {
+        boolean mine = comment.getAuthorAccountId().equals(readerAccountId);
+        return displayNames.maskedNameOf(comment.getAuthorAccountId())
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                .map(name -> new PostCommentResponse(
+                        comment.getId(),
+                        comment.getPostId(),
+                        comment.getAuthorAccountId(),
+                        comment.getContent(),
+                        comment.getIsHidden(),
+                        comment.getCreatedAt(),
+                        comment.getUpdatedAt(),
+                        mine,
+                        name.orElse(null)));
     }
 
     /**
@@ -301,6 +353,42 @@ public class PostService {
                 .then();
     }
 
+    /**
+     * Hides a comment (issue #313). Moderation of a comment is moderation of the
+     * post it hangs from: the same rule decides who may act - a TEACHER only in
+     * a class they teach, an ADMIN anywhere - and it is asked the same way, of
+     * the post the URL names. A teacher who cannot reach the post therefore
+     * cannot reach the comment either, and both answer 404 rather than 403 so
+     * that guessing an id never confirms that it exists.
+     *
+     * <p>Hiding twice is the same as hiding once: the flag is written, not
+     * counted, so a second call costs one more update and changes nothing.</p>
+     */
+    @Transactional
+    public Mono<Void> hideComment(Long postId, Long commentId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> requireCommentTarget(postId, commentId))
+                .flatMap(comment -> {
+                    comment.hide();
+                    return commentRepository.save(comment);
+                })
+                .then();
+    }
+
+    /** The counterpart of {@link #hideComment}: a comment taken down can be put back. */
+    @Transactional
+    public Mono<Void> unhideComment(Long postId, Long commentId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> requireCommentTarget(postId, commentId))
+                .flatMap(comment -> {
+                    comment.unhide();
+                    return commentRepository.save(comment);
+                })
+                .then();
+    }
+
     /** The reported-post queue a moderator works from: their own classes for a TEACHER, every school for an ADMIN. */
     public Flux<ReportedPostResponse> listReported(Long moderatorAccountId, boolean admin) {
         Flux<PostFeedRepository.ReportedPost> reported = admin
@@ -320,6 +408,17 @@ public class PostService {
         return postRepository.findByIdAndDeletedAtIsNull(postId)
                 .filter(post -> admin || classIds.contains(post.getClassId()))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")));
+    }
+
+    /**
+     * The comment to act on, once the post it belongs to has already been
+     * cleared for this moderator. A comment that does not exist, one that is
+     * not this post's, and one that was deleted all answer the same 404 - the
+     * three are indistinguishable on purpose.
+     */
+    private Mono<PostComment> requireCommentTarget(Long postId, Long commentId) {
+        return commentRepository.findByIdAndPostIdAndDeletedAtIsNull(commentId, postId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Comment not found")));
     }
 
     /** Used only by the auto-hide path, which already knows the post is visible and in range. */

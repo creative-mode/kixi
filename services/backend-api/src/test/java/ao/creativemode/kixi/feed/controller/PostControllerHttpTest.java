@@ -72,6 +72,8 @@ class PostControllerHttpTest {
         client.post().uri("/api/v1/feed/posts/1/reactions").exchange().expectStatus().isUnauthorized();
         client.post().uri("/api/v1/feed/posts/1/reports").exchange().expectStatus().isUnauthorized();
         client.patch().uri("/api/v1/feed/posts/1/hide").exchange().expectStatus().isUnauthorized();
+        client.patch().uri("/api/v1/feed/posts/1/comments/2/hide").exchange().expectStatus().isUnauthorized();
+        client.patch().uri("/api/v1/feed/posts/1/comments/2/unhide").exchange().expectStatus().isUnauthorized();
         client.get().uri("/api/v1/feed/posts/reported").exchange().expectStatus().isUnauthorized();
     }
 
@@ -93,13 +95,50 @@ class PostControllerHttpTest {
         verify(service).getFeedTotalCount(42L, 2026L, 20L, 10L);
     }
 
+    /**
+     * Reading the conversation, over HTTP.
+     *
+     * <p>The account comes from the token and never from the query string: an id in the
+     * URL is a post, and whose post it is is the caller's business alone.</p>
+     */
+    @Test
+    void readsTheConversationOfAPost() {
+        when(service.listComments(9L, 42L, 1, 20)).thenReturn(Flux.just(
+                new PostCommentResponse(3L, 9L, 42L, "A comment", false,
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.")));
+
+        client.mutateWith(studentJwt()).get()
+                .uri("http://localhost/api/v1/feed/posts/9/comments")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].content").isEqualTo("A comment")
+                .jsonPath("$[0].mine").isEqualTo(true)
+                .jsonPath("$[0].displayName").isEqualTo("Ana N.");
+
+        verify(service).listComments(9L, 42L, 1, 20);
+    }
+
+    /** A page is the caller's to ask for, and it reaches the service. */
+    @Test
+    void passesTheRequestedPageAndLimitThrough() {
+        when(service.listComments(9L, 42L, 3, 5)).thenReturn(Flux.empty());
+
+        client.mutateWith(studentJwt()).get()
+                .uri("http://localhost/api/v1/feed/posts/9/comments?page=3&limit=5")
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(service).listComments(9L, 42L, 3, 5);
+    }
+
     @Test
     void createsPostAndCoversCommentsReactionsAndReports() {
         PostRequest postRequest = new PostRequest(PostType.TOPIC, 10L, "Title", "A useful topic", null);
         when(service.createPost(42L, postRequest)).thenReturn(Mono.just(post(9L)));
         when(service.addComment(9L, 42L, new PostCommentRequest("A comment")))
                 .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false,
-                        LocalDateTime.now(), LocalDateTime.now())));
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.")));
         when(service.toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE)))
                 .thenReturn(Mono.just(new PostReactionToggleResponse(true)));
         when(service.reportPost(9L, 42L, new PostReportRequest("Not useful")))
@@ -187,9 +226,48 @@ class PostControllerHttpTest {
         verify(service).listReported(7L, false);
     }
 
+    /**
+     * Moderating a comment reaches the service with the post, the comment, the account
+     * and the role, all of them from the URL and the token and none from the body.
+     */
+    @Test
+    void commentModerationPassesRoleAccountAndIdsToService() {
+        when(service.hideComment(9L, 3L, 7L, false)).thenReturn(Mono.empty());
+        when(service.unhideComment(9L, 3L, 1L, true)).thenReturn(Mono.empty());
+
+        client.mutateWith(teacherJwt()).patch().uri("/api/v1/feed/posts/9/comments/3/hide")
+                .exchange().expectStatus().isNoContent();
+        client.mutateWith(adminJwt()).patch().uri("/api/v1/feed/posts/9/comments/3/unhide")
+                .exchange().expectStatus().isNoContent();
+
+        verify(service).hideComment(9L, 3L, 7L, false);
+        verify(service).unhideComment(9L, 3L, 1L, true);
+    }
+
+    /**
+     * A comment the service refuses answers 404 over HTTP, not 403: the id comes from
+     * the URL, and 403 would confirm that it exists.
+     *
+     * <p>Who decides it is refused is {@code CommentModerationAuthorizationTest},
+     * against the real authorizer; here the service is a mock and only the error
+     * mapping is under test.</p>
+     */
+    @Test
+    void aCommentRefusedByTheServiceIs404OverHttp() {
+        when(service.hideComment(9L, 3L, 7L, false))
+                .thenReturn(Mono.error(ApiException.notFound("Comment not found")));
+
+        client.mutateWith(teacherJwt()).patch().uri("/api/v1/feed/posts/9/comments/3/hide")
+                .exchange().expectStatus().isNotFound();
+    }
+
     @Test
     void studentsCannotUseModeratorRoutes() {
         client.mutateWith(studentJwt()).patch().uri("/api/v1/feed/posts/9/hide")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(studentJwt()).patch().uri("/api/v1/feed/posts/9/comments/3/hide")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(studentJwt()).patch().uri("/api/v1/feed/posts/9/comments/3/unhide")
                 .exchange().expectStatus().isForbidden();
         client.mutateWith(studentJwt()).get().uri("/api/v1/feed/posts/reported")
                 .exchange().expectStatus().isForbidden();
