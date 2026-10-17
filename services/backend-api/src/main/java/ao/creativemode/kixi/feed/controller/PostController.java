@@ -126,6 +126,27 @@ public class PostController {
                 .flatMap(tuple -> postService.unhidePost(postId, tuple.getT1(), tuple.getT2()));
     }
 
+    /**
+     * Hides a comment on a post (issue #313). A TEACHER may only hide a comment
+     * under a post in a class they teach; an ADMIN, any. The post is named in
+     * the URL because who may moderate a comment is decided by the post it
+     * hangs from, and the service enforces it, not the route.
+     */
+    @PatchMapping("/{postId}/comments/{commentId}/hide")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> hideComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> postService.hideComment(postId, commentId, tuple.getT1(), tuple.getT2()));
+    }
+
+    /** The counterpart of {@link #hideComment}: a comment taken down can be shown again. */
+    @PatchMapping("/{postId}/comments/{commentId}/unhide")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> unhideComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> postService.unhideComment(postId, commentId, tuple.getT1(), tuple.getT2()));
+    }
+
     /** The reported-post queue: a TEACHER's own classes, or every school for an ADMIN. */
     @GetMapping("/reported")
     public Flux<ReportedPostResponse> listReported() {

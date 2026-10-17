@@ -353,6 +353,42 @@ public class PostService {
                 .then();
     }
 
+    /**
+     * Hides a comment (issue #313). Moderation of a comment is moderation of the
+     * post it hangs from: the same rule decides who may act - a TEACHER only in
+     * a class they teach, an ADMIN anywhere - and it is asked the same way, of
+     * the post the URL names. A teacher who cannot reach the post therefore
+     * cannot reach the comment either, and both answer 404 rather than 403 so
+     * that guessing an id never confirms that it exists.
+     *
+     * <p>Hiding twice is the same as hiding once: the flag is written, not
+     * counted, so a second call costs one more update and changes nothing.</p>
+     */
+    @Transactional
+    public Mono<Void> hideComment(Long postId, Long commentId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> requireCommentTarget(postId, commentId))
+                .flatMap(comment -> {
+                    comment.hide();
+                    return commentRepository.save(comment);
+                })
+                .then();
+    }
+
+    /** The counterpart of {@link #hideComment}: a comment taken down can be put back. */
+    @Transactional
+    public Mono<Void> unhideComment(Long postId, Long commentId, Long moderatorAccountId, boolean admin) {
+        return moderatorClassIds(moderatorAccountId, admin)
+                .flatMap(classIds -> requireModerationTarget(postId, classIds, admin))
+                .flatMap(post -> requireCommentTarget(postId, commentId))
+                .flatMap(comment -> {
+                    comment.unhide();
+                    return commentRepository.save(comment);
+                })
+                .then();
+    }
+
     /** The reported-post queue a moderator works from: their own classes for a TEACHER, every school for an ADMIN. */
     public Flux<ReportedPostResponse> listReported(Long moderatorAccountId, boolean admin) {
         Flux<PostFeedRepository.ReportedPost> reported = admin
@@ -372,6 +408,17 @@ public class PostService {
         return postRepository.findByIdAndDeletedAtIsNull(postId)
                 .filter(post -> admin || classIds.contains(post.getClassId()))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")));
+    }
+
+    /**
+     * The comment to act on, once the post it belongs to has already been
+     * cleared for this moderator. A comment that does not exist, one that is
+     * not this post's, and one that was deleted all answer the same 404 - the
+     * three are indistinguishable on purpose.
+     */
+    private Mono<PostComment> requireCommentTarget(Long postId, Long commentId) {
+        return commentRepository.findByIdAndPostIdAndDeletedAtIsNull(commentId, postId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Comment not found")));
     }
 
     /** Used only by the auto-hide path, which already knows the post is visible and in range. */

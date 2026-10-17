@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.issue122;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Duration;
@@ -33,6 +34,9 @@ class FeedPostgresIntegrationTest {
     private static final long STUDENT = 122401L;
     private static final long OTHER_STUDENT = 122402L;
     private static final long CLASSMATE = 122403L;
+    /** The moderator of issue #313. 122404 on purpose: 122403 is already the classmate above,
+     *  and two accounts on one id is a fixture that lies rather than one that fails. */
+    private static final long ADMIN = 122404L;
     private static final long INSTITUTION = 122401L;
     private static final long OTHER_INSTITUTION = 122402L;
     private static final long YEAR = 122401L;
@@ -52,6 +56,7 @@ class FeedPostgresIntegrationTest {
     private String studentToken;
     private String otherStudentToken;
     private String classmateToken;
+    private String adminToken;
 
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
@@ -73,17 +78,21 @@ class FeedPostgresIntegrationTest {
         client = WebTestClient.bindToApplicationContext(context).apply(springSecurity())
                 .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
         sql("DELETE FROM post_reports WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "))");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
         sql("DELETE FROM post_comments WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "))");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
         sql("DELETE FROM post_reactions WHERE post_id IN (SELECT id FROM posts WHERE author_account_id IN ("
-                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "))");
-        sql("DELETE FROM posts WHERE author_account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + ")");
-        sql("DELETE FROM feed_rate_limits WHERE rate_key IN ('account:" + STUDENT + "','account:" + OTHER_STUDENT + "','account:" + CLASSMATE + "')");
-        sql("DELETE FROM enrollments WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + ")");
-        sql("DELETE FROM account_roles WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + ")");
-        sql("DELETE FROM users WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + ")");
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
+        sql("DELETE FROM posts WHERE author_account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM feed_rate_limits WHERE rate_key IN ('account:" + STUDENT + "','account:" + OTHER_STUDENT
+                + "','account:" + CLASSMATE + "','account:" + ADMIN + "')");
+        sql("DELETE FROM enrollments WHERE account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN ("
+                + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM users WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
         sql("DELETE FROM classes WHERE id IN (" + CLASS + "," + OTHER_CLASS + ")");
         sql("DELETE FROM courses WHERE id IN (" + COURSE + "," + OTHER_COURSE + ")");
         sql("DELETE FROM institutions WHERE id IN (" + INSTITUTION + "," + OTHER_INSTITUTION + ")");
@@ -103,10 +112,14 @@ class FeedPostgresIntegrationTest {
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active) VALUES ("
                 + STUDENT + ", 'feed-122-a', 'feed-122-a@kixi.test', 'x', true, true), ("
                 + OTHER_STUDENT + ", 'feed-122-b', 'feed-122-b@kixi.test', 'x', true, true), ("
-                + CLASSMATE + ", 'feed-122-c', 'feed-122-c@kixi.test', 'x', true, true)");
+                + CLASSMATE + ", 'feed-122-c', 'feed-122-c@kixi.test', 'x', true, true), ("
+                + ADMIN + ", 'feed-122-admin', 'feed-122-admin@kixi.test', 'x', true, true)");
+        // The moderator deliberately has no row here: an account with no profile is not a
+        // person, and moderation never needs to name it.
         sql("INSERT INTO users (account_id, first_name, last_name) VALUES ("
                 + STUDENT + ", 'Ana', 'Neto'), (" + OTHER_STUDENT + ", 'Carla', 'Dias'), ("
                 + CLASSMATE + ", 'Bruno', 'Silva')");
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id, status, created_at, updated_at) VALUES ("
                 + STUDENT + ", " + CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
                 + OTHER_STUDENT + ", " + OTHER_CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
@@ -114,6 +127,7 @@ class FeedPostgresIntegrationTest {
         studentToken = jwtService.generateToken(STUDENT, List.of("STUDENT"));
         otherStudentToken = jwtService.generateToken(OTHER_STUDENT, List.of("STUDENT"));
         classmateToken = jwtService.generateToken(CLASSMATE, List.of("STUDENT"));
+        adminToken = jwtService.generateToken(ADMIN, List.of("ADMIN"));
     }
 
     @Test
@@ -235,6 +249,111 @@ class FeedPostgresIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"type\":\"TOPIC\",\"classId\":" + OTHER_CLASS + ",\"content\":\"forged\"}")
                 .exchange().expectStatus().isNotFound();
+    }
+
+    /**
+     * A comment taken down by a moderator leaves the feed (issue #313).
+     *
+     * <p>Four things only a real database can answer: that the PATCH really writes
+     * {@code is_hidden}, that the count the feed shows stops counting it, that the
+     * conversation itself stops serving it, and that unhiding puts all of it back.
+     * The last one matters most - a moderation action that cannot be undone would
+     * let a mistake become permanent.</p>
+     */
+    @Test
+    void aHiddenCommentStopsCountingAndUnhidingBringsItBack() {
+        AtomicLong postId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"TOPIC\",\"classId\":" + CLASS + ",\"content\":\"A post to moderate\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> postId.set(((Number) value).longValue()));
+        long id = postId.get();
+
+        AtomicLong commentId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts/" + id + "/comments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Offensive\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> commentId.set(((Number) value).longValue()));
+        long comment = commentId.get();
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].id").isEqualTo((int) id)
+                .jsonPath("$[0].commentCount").isEqualTo(1);
+
+        bearer(adminToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/hide")
+                .exchange().expectStatus().isNoContent();
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].commentCount").isEqualTo(0);
+        // The other half of the criterion: it is not only that the count drops, the
+        // conversation stops serving the comment too (#312 made it readable).
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody().json("[]");
+
+        // Hiding again is the same as having hidden once: still 204, still nothing counted.
+        bearer(adminToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/hide")
+                .exchange().expectStatus().isNoContent();
+
+        bearer(adminToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/unhide")
+                .exchange().expectStatus().isNoContent();
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].commentCount").isEqualTo(1);
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].id").isEqualTo((int) comment);
+    }
+
+    /**
+     * The role rule holds over HTTP, and a comment cannot be taken down through a
+     * post it does not hang from - even when both posts are the moderator's to act on.
+     */
+    @Test
+    void aStudentCannotModerateACommentAndACommentOfAnotherPostIsNotFound() {
+        AtomicLong postId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"TOPIC\",\"classId\":" + CLASS + ",\"content\":\"Moderated\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> postId.set(((Number) value).longValue()));
+        long id = postId.get();
+
+        AtomicLong otherPostId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"TOPIC\",\"classId\":" + CLASS + ",\"content\":\"Another post\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> otherPostId.set(((Number) value).longValue()));
+
+        AtomicLong commentId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts/" + id + "/comments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Offensive\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> commentId.set(((Number) value).longValue()));
+
+        bearer(studentToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + commentId.get() + "/hide")
+                .exchange().expectStatus().isForbidden();
+        // Right role, wrong post: the comment is not this thread's, so it stays visible.
+        bearer(adminToken).patch().uri("/api/v1/feed/posts/" + otherPostId.get() + "/comments/"
+                + commentId.get() + "/hide").exchange().expectStatus().isNotFound();
+        bearer(adminToken).patch().uri("/api/v1/feed/posts/" + (id + 100000) + "/comments/"
+                + commentId.get() + "/hide").exchange().expectStatus().isNotFound();
+
+        // What the two 404s did not do, read where it actually lives. The row is the
+        // claim: an earlier version of this assertion went through the feed with a
+        // JsonPath filter ("$[?(@.id == 3)][0].commentCount"), which asks the provider
+        // to match a post inside an array it does not index and fails on a response
+        // that is perfectly correct - the filter, not the code, was what broke.
+        assertThat(visibleComments(id)).isEqualTo(1L);
+        assertThat(visibleComments(otherPostId.get())).isZero();
+    }
+
+    /** The comments of a post the database still considers visible, hidden or not. */
+    private long visibleComments(long postId) {
+        Long count = database.sql("SELECT COUNT(*) FROM post_comments"
+                        + " WHERE post_id = " + postId + " AND is_hidden = FALSE")
+                .map((row, meta) -> row.get(0, Long.class)).one().block(Duration.ofSeconds(10));
+        return count == null ? 0L : count;
     }
 
     private WebTestClient bearer(String token) {
