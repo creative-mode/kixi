@@ -81,6 +81,9 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/verification-requests", "/api/v1/verification-requests/**")
                         .hasRole("ADMIN")
+                        // Public profiles (issue #331): any signed-in account, read only.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/profiles/**")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/mine")
                         .authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/trash")
