@@ -26,6 +26,7 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * WebClient-based client for the OCR microservice.
@@ -43,6 +44,9 @@ import java.util.List;
 public class OcrServiceClient {
 
     private static final Logger log = LoggerFactory.getLogger(OcrServiceClient.class);
+
+    /** The OCR service answers a degraded result with its own {@code "status": "error"} in the body. */
+    private static final Pattern CONTENT_ERROR = Pattern.compile("\"status\"\\s*:\\s*\"error\"");
 
     private final WebClient webClient;
     private final Duration timeout;
@@ -122,7 +126,8 @@ public class OcrServiceClient {
                         response.bodyToMono(String.class)
                                 .flatMap(body -> Mono.error(new OcrServerException(
                                         "OCR service error: " + body,
-                                        response.statusCode().value()))))
+                                        response.statusCode().value(),
+                                        isContentError(body)))))
                 .bodyToMono(OcrResponse.class)
                 .timeout(timeout)
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
@@ -174,7 +179,8 @@ public class OcrServiceClient {
                         response.bodyToMono(String.class)
                                 .flatMap(body -> Mono.error(new OcrServerException(
                                         "OCR service error: " + body,
-                                        response.statusCode().value()))))
+                                        response.statusCode().value(),
+                                        isContentError(body)))))
                 .bodyToMono(OcrResponse.class)
                 .timeout(timeout)
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
@@ -220,7 +226,8 @@ public class OcrServiceClient {
                         response.bodyToMono(String.class)
                                 .flatMap(body -> Mono.error(new OcrServerException(
                                         "OCR service error: " + body,
-                                        response.statusCode().value()))))
+                                        response.statusCode().value(),
+                                        isContentError(body)))))
                 .bodyToMono(OcrResponse.class)
                 .timeout(timeout)
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
@@ -275,13 +282,23 @@ public class OcrServiceClient {
         if (throwable instanceof WebClientRequestException) {
             return true;
         }
-        if (throwable instanceof OcrServerException) {
-            return true;
+        if (throwable instanceof OcrServerException serverError) {
+            // A 5xx that carries the service's own content error (it read nothing) does not
+            // change on a retry: repeating it only costs another full OCR pass.
+            return !serverError.isContentError();
         }
         if (throwable instanceof WebClientResponseException ex) {
             return ex.getStatusCode().is5xxServerError();
         }
         return false;
+    }
+
+    /**
+     * Whether a 5xx body is the OCR service's own degraded result ({@code "status": "error"},
+     * no text read) rather than an infrastructure failure.
+     */
+    private static boolean isContentError(String body) {
+        return body != null && CONTENT_ERROR.matcher(body).find();
     }
 
     /**
@@ -348,14 +365,25 @@ public class OcrServiceClient {
      */
     public static class OcrServerException extends RuntimeException {
         private final int statusCode;
+        private final boolean contentError;
 
         public OcrServerException(String message, int statusCode) {
+            this(message, statusCode, false);
+        }
+
+        public OcrServerException(String message, int statusCode, boolean contentError) {
             super(message);
             this.statusCode = statusCode;
+            this.contentError = contentError;
         }
 
         public int getStatusCode() {
             return statusCode;
+        }
+
+        /** True when the body is the OCR service's own result and repeating it would not help. */
+        public boolean isContentError() {
+            return contentError;
         }
     }
 }

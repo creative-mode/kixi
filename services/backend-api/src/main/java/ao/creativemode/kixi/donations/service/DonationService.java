@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -62,6 +63,10 @@ public class DonationService {
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@<>]+@[^\\s@<>]+\\.[^\\s@<>]{2,}$");
     private static final Pattern SCHOOL_YEAR = Pattern.compile("^\\d{4}(\\s*[/-]\\s*\\d{4})?$");
     private static final Pattern CONTROL = Pattern.compile("[\\p{Cntrl}&&[^\\n\\r\\t]]");
+
+    /** Extensions a donor's name may carry. A wrong one is rewritten, never stacked (#291). */
+    private static final Set<String> NAME_EXTENSIONS = Set.of(
+            "jpg", "jpeg", "png", "webp", "pdf", "tif", "tiff", "bmp");
 
     /** No 0/O, 1/I/L or U: a code read aloud or copied by hand does not get mistaken. */
     private static final String REFERENCE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -236,10 +241,41 @@ public class DonationService {
         String base = name == null ? "" : name.replace('\\', '/');
         base = base.substring(base.lastIndexOf('/') + 1);
         base = CONTROL.matcher(base).replaceAll("").replaceAll("[<>\"|?*:]", "_").trim();
+        base = withKindExtension(base, kind);
         if (base.isEmpty()) {
             base = "ficheiro." + kind.extension();
         }
         return base.length() > 200 ? base.substring(base.length() - 200) : base;
+    }
+
+    /**
+     * The donor's name carrying an extension that matches what the bytes really are (#291).
+     *
+     * <p>A phone photo arrives as {@code IMG_20250116}, with no extension at all, and the OCR
+     * reads the name back to double-check the type. The extension a name already has is kept when
+     * it agrees with {@code kind}; a wrong one is replaced, so a JPEG never travels as
+     * {@code .png}; a name with none gets one. Everything else in the name is left alone.</p>
+     */
+    private static String withKindExtension(String base, UploadSniffer.Kind kind) {
+        if (base.isEmpty()) {
+            return base;
+        }
+        int dot = base.lastIndexOf('.');
+        String extension = dot < 0 ? "" : base.substring(dot + 1);
+        if (agreesWithKind(extension, kind)) {
+            return base;
+        }
+        if (NAME_EXTENSIONS.contains(extension.toLowerCase(Locale.ROOT))) {
+            return base.substring(0, dot) + "." + kind.extension();
+        }
+        return base + "." + kind.extension();
+    }
+
+    private static boolean agreesWithKind(String extension, UploadSniffer.Kind kind) {
+        if (extension.equalsIgnoreCase(kind.extension())) {
+            return true;
+        }
+        return kind == UploadSniffer.Kind.JPEG && extension.equalsIgnoreCase("jpeg");
     }
 
     private Mono<List<String>> store(List<Prepared> prepared) {

@@ -2,11 +2,13 @@ package ao.creativemode.kixi.feed.service;
 
 import ao.creativemode.kixi.feed.dto.post.PostRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.enums.PostReactionType;
 import ao.creativemode.kixi.feed.enums.PostType;
 import ao.creativemode.kixi.feed.model.Post;
+import ao.creativemode.kixi.feed.model.PostComment;
 import ao.creativemode.kixi.feed.model.PostReport;
 import ao.creativemode.kixi.feed.repository.PostCommentRepository;
 import ao.creativemode.kixi.feed.repository.PostFeedRepository;
@@ -15,6 +17,9 @@ import ao.creativemode.kixi.feed.repository.PostReportRepository;
 import ao.creativemode.kixi.feed.repository.PostRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer;
+import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
+import ao.creativemode.kixi.feed.model.PostComment;
+import ao.creativemode.kixi.shared.service.DisplayNameReader;
 import ao.creativemode.kixi.shared.service.InstitutionNameReader;
 import ao.creativemode.kixi.shared.service.SimulationShowcaseReader;
 import ao.creativemode.kixi.shared.service.FeedScopeAuthorizer.ClassScope;
@@ -33,6 +38,9 @@ import reactor.test.StepVerifier;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
+
 import java.util.List;
 import java.util.Set;
 
@@ -57,6 +65,7 @@ import static org.mockito.Mockito.*;
 class PostServiceTest {
 
     private static final Long ACCOUNT_ID = 1L;
+    private static final Long OTHER_ACCOUNT_ID = 2L;
     private static final Long OTHER_SCHOOL_CLASS_ID = 99L;
     private static final Long MY_CLASS_ID = 10L;
     private static final Long MY_COURSE_ID = 100L;
@@ -64,11 +73,13 @@ class PostServiceTest {
     private static final Long MY_INSTITUTION_ID = 1L;
     private static final Long OTHER_INSTITUTION_ID = 2L;
     private static final Long POST_ID = 500L;
+    private static final Long COMMENT_ID = 900L;
 
     @Mock private PostRepository postRepository;
     @Mock private PostFeedRepository feedRepository;
     @Mock private PostReactionRepository reactionRepository;
     @Mock private PostCommentRepository commentRepository;
+    @Mock private DisplayNameReader displayNames;
     @Mock private PostReportRepository reportRepository;
     @Mock private FeedScopeAuthorizer scopeAuthorizer;
     @Mock private FeedRateLimiter rateLimiter;
@@ -83,9 +94,29 @@ class PostServiceTest {
     @BeforeEach
     void setUp() {
         postService = new PostService(postRepository, feedRepository, reactionRepository,
-                commentRepository, reportRepository, scopeAuthorizer, rateLimiter,
-                showcaseReader, institutionNames, clock);
+                commentRepository, displayNames, reportRepository, scopeAuthorizer,
+                rateLimiter, showcaseReader, institutionNames, clock);
+        lenient().when(displayNames.maskedNameOf(anyLong()))
+                .thenAnswer(call -> Mono.just(maskedNameOf((Long) call.getArgument(0))));
         lenient().when(rateLimiter.check(anyLong())).thenReturn(Mono.empty());
+    }
+
+    /** The masked name the door hands back for whoever asked. */
+    private String maskedNameOf(Long accountId) {
+        return accountId.equals(ACCOUNT_ID) ? "Ana N." : "Bruno S.";
+    }
+
+    /** A comment as the repository would hand it back. */
+    private PostComment comment(Long id, Long authorAccountId, String content, int minute) {
+        PostComment comment = new PostComment();
+        comment.setId(id);
+        comment.setPostId(POST_ID);
+        comment.setAuthorAccountId(authorAccountId);
+        comment.setContent(content);
+        comment.setIsHidden(false);
+        comment.setCreatedAt(LocalDateTime.now(clock).withSecond(0).withNano(0).plusMinutes(minute));
+        comment.setUpdatedAt(comment.getCreatedAt());
+        return comment;
     }
 
     private FeedScope myScope() {
@@ -117,6 +148,19 @@ class PostServiceTest {
         post.setCourseId(999L);
         post.setSchoolYearId(3000L);
         return post;
+    }
+
+    /** A comment under {@link #POST_ID}, the way the repository hands it back for moderation. */
+    private PostComment myComment(boolean hidden) {
+        PostComment comment = new PostComment();
+        comment.setId(COMMENT_ID);
+        comment.setPostId(POST_ID);
+        comment.setAuthorAccountId(ACCOUNT_ID);
+        comment.setContent("A comment");
+        comment.setIsHidden(hidden);
+        comment.setCreatedAt(LocalDateTime.now(clock));
+        comment.setUpdatedAt(LocalDateTime.now(clock));
+        return comment;
     }
 
     // ── Feed: isolation ─────────────────────────────────────────────────────
@@ -366,6 +410,147 @@ class PostServiceTest {
         verifyNoInteractions(commentRepository);
     }
 
+    // === reading the conversation ===========================================
+
+    /**
+     * The conversation, oldest first, with a name on each row.
+     *
+     * <p>Chronological because the issue is a student answering what came before: a page of
+     * the newest comments would show the end of a conversation without its beginning.</p>
+     */
+    @Test
+    void readingTheConversationReturnsItOldestFirstWithNames() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(
+                        comment(1L, OTHER_ACCOUNT_ID, "Primeiro", 0),
+                        comment(2L, ACCOUNT_ID, "Segundo", 1)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::content)
+                .containsExactly("Primeiro", "Segundo");
+        assertThat(comments).extracting(PostCommentResponse::displayName)
+                .containsExactly("Bruno S.", "Ana N.");
+    }
+
+    /** The author's own row is marked, so the client does not compare ids itself. */
+    @Test
+    void theReadersOwnCommentIsMarked() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(
+                        comment(1L, OTHER_ACCOUNT_ID, "Do colega", 0),
+                        comment(2L, ACCOUNT_ID, "Meu", 1)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::mine)
+                .containsExactly(false, true);
+    }
+
+    /**
+     * A comment whose author has no profile still comes back, without a name.
+     *
+     * <p>The door returns an empty Mono for a missing profile. Mapping straight over it
+     * would drop the row, and a comment is not lost because we cannot name it.</p>
+     */
+    @Test
+    void aCommentWithNoProfileStillComesBack() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(displayNames.maskedNameOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.empty());
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(comment(1L, OTHER_ACCOUNT_ID, "Sem perfil", 0)));
+
+        List<PostCommentResponse> comments = postService
+                .listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        assertThat(comments).extracting(PostCommentResponse::content).containsExactly("Sem perfil");
+        assertThat(comments.get(0).displayName()).isNull();
+    }
+
+    /**
+     * Another school's post is 404, not an empty list.
+     *
+     * <p>The id arrives in the URL and a student who guesses one must not read what was
+     * written under it. An empty list would say "there is nothing here" and 403 would say
+     * "there is something and it is not yours".</p>
+     */
+    @Test
+    void readingAnotherSchoolsConversationIs404() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(otherSchoolPost()));
+
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 1, 20))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verifyNoInteractions(commentRepository);
+    }
+
+    /** A read is not a write; the limiter that stops comment spam stays off it. */
+    @Test
+    void readingTheConversationIsNotRateLimited() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.empty());
+
+        postService.listComments(POST_ID, ACCOUNT_ID, 1, 20).collectList().block();
+
+        verify(rateLimiter, never()).check(anyLong());
+    }
+
+    @Test
+    void aConversationPageIsBounded() {
+        // Validated before the scope is resolved, so an unusable page never costs a query.
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 0, 20))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 1, 5000))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+    }
+
+    /** The page asked for is the page asked for, offset included. */
+    @Test
+    void theSecondPageIsTheSecondPage() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
+                .thenReturn(Mono.just(myPost()));
+        when(commentRepository
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.empty());
+
+        postService.listComments(POST_ID, ACCOUNT_ID, 3, 10).collectList().block();
+
+        verify(commentRepository)
+                .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        eq(POST_ID), eq(PageRequest.of(2, 10)));
+    }
+
     @Test
     void reactingToAnotherSchoolsPostIs404() {
         PostReactionRequest request = new PostReactionRequest(PostReactionType.APPLAUSE);
@@ -530,5 +715,179 @@ class PostServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
         verifyNoInteractions(scopeAuthorizer);
+    }
+
+    // ── Comment moderation (issue #313) ─────────────────────────────────────
+
+    /**
+     * A teacher takes down a comment under a post in their own class.
+     *
+     * <p>The write that matters is {@code is_hidden}: until this call existed the
+     * column was written by nobody, so the flag could never be true.</p>
+     */
+    @Test
+    void aTeacherCanHideACommentOnAPostInTheirOwnClass() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(false)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false)).verifyComplete();
+
+        verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
+    }
+
+    /**
+     * The same teacher, a post in another school: 404, and the comment is never even looked up.
+     *
+     * <p>Asking for the comment first would leak its existence through the difference
+     * between a 404 for a bad post and one for a bad comment.</p>
+     */
+    @Test
+    void aTeacherCannotHideACommentOnAPostOutsideTheirClasses() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(otherSchoolPost()));
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verifyNoInteractions(commentRepository);
+    }
+
+    /** An ADMIN moderates in any school, and is not narrowed by a class list at all. */
+    @Test
+    void anAdminCanHideACommentInAnySchool() {
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(otherSchoolPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(false)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, 1000L, true)).verifyComplete();
+
+        verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
+        verifyNoInteractions(scopeAuthorizer);
+    }
+
+    /**
+     * Hiding a comment that is already hidden is not an error, and hiding is what a second
+     * tap has to do: the flag is set, not counted.
+     */
+    @Test
+    void hidingACommentThatIsAlreadyHiddenIsNotAnError() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(true)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false)).verifyComplete();
+
+        verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
+    }
+
+    /** The other half of the round trip: what was taken down comes back. */
+    @Test
+    void unhidingBringsACommentBack() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(true)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(postService.unhideComment(POST_ID, COMMENT_ID, teacherId, false)).verifyComplete();
+
+        verify(commentRepository).save(argThat(saved -> Boolean.FALSE.equals(saved.getIsHidden())));
+    }
+
+    /**
+     * A comment id paired with a post it does not hang from is a 404, whatever it is.
+     *
+     * <p>Ids are guessable: without {@code postId} in the lookup, a moderator with access
+     * to one post could take down a comment of another post in the same school - or,
+     * worse, be made to think they had.</p>
+     */
+    @Test
+    void aCommentThatIsNotOnThePostInTheUrlIs404() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verify(commentRepository, never()).save(any());
+    }
+
+    /** An unknown post is 404 as well, and the comment table is not touched. */
+    @Test
+    void hidingACommentOnAnUnknownPostIs404() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verifyNoInteractions(commentRepository);
+    }
+
+    /**
+     * Moderation of a comment is not a write by a student, so it is not metered: the
+     * limiter on {@code addComment} stops comment spam, and this is not that.
+     */
+    @Test
+    void commentModerationDoesNotGoThroughTheCommentRateLimiter() {
+        Long teacherId = 7L;
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(false)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        postService.hideComment(POST_ID, COMMENT_ID, teacherId, false).block();
+
+        verify(rateLimiter, never()).check(anyLong());
+    }
+
+    /**
+     * A post that is already hidden is still a moderation target.
+     *
+     * <p>The issue's acceptance criteria read "hiding a comment of a hidden post
+     * answers 404", but the proposal in the same issue says to reuse
+     * {@code requireModerationTarget}, which is what {@code hidePost} does: a
+     * moderator who took a post down has to be able to come back and put both it
+     * and its comments back. This test pins that reading - the post has to exist
+     * and be in the moderator's reach, hidden or not - so the decision is visible
+     * here rather than left to be rediscovered as if it were an oversight.</p>
+     */
+    @Test
+    void aHiddenPostIsStillAModerationTarget() {
+        Long teacherId = 7L;
+        Post hidden = myPost();
+        hidden.setIsHidden(true);
+        when(scopeAuthorizer.taughtClassesOf(teacherId)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(hidden));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(myComment(false)));
+        when(commentRepository.save(any(PostComment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false)).verifyComplete();
+
+        verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
     }
 }
