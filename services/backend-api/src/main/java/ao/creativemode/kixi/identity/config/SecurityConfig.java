@@ -84,6 +84,8 @@ public class SecurityConfig {
                         // Public profiles (issue #331): any signed-in account, read only.
                         .pathMatchers(HttpMethod.GET, "/api/v1/profiles/**")
                         .authenticated()
+                        .pathMatchers(HttpMethod.PUT, "/api/v1/profiles/me/visibility")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/mine")
                         .authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/institutions/trash")
