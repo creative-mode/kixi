@@ -59,7 +59,7 @@ public class QuestionImageFileController {
     /** The photos and logos chosen from the device: {@code /uploads/images/{avatar|logo}/{file}}. */
     @GetMapping("/uploads/images/{kind}/{file}")
     public Mono<ResponseEntity<byte[]>> serveImage(@PathVariable String kind, @PathVariable String file) {
-        if (!kind.equals("avatar") && !kind.equals("logo")) {
+        if (!kind.equals("avatar") && !kind.equals("logo") && !kind.equals("post")) {
             return Mono.just(ResponseEntity.notFound().build());
         }
         return read("images", kind, file);
