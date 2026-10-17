@@ -172,4 +172,22 @@ class PersonProfileServiceTest {
             .verify();
         verify(settings, never()).upsertVisibility(any(), any());
     }
+
+    @Test
+    void profileByAccountResolvesTheUserOfThatAccount() {
+        when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
+
+        StepVerifier.create(service.personByAccount(VIEWER_ACCOUNT, false, TARGET_ACCOUNT))
+            .assertNext(profile -> assertThat(profile.userId()).isEqualTo(TARGET_USER))
+            .verifyComplete();
+    }
+
+    @Test
+    void anAccountWithoutAUserHasNoProfile() {
+        when(users.findByAccountIdAndDeletedAtIsNull(777L)).thenReturn(Flux.empty());
+
+        StepVerifier.create(service.personByAccount(VIEWER_ACCOUNT, false, 777L))
+            .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+            .verify();
+    }
 }

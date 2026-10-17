@@ -50,6 +50,14 @@ public class ProfileController {
             .map(ResponseEntity::ok);
     }
 
+    /** The same, by account id: the feed, the comments and the ranking only carry that. */
+    @GetMapping("/accounts/{accountId}")
+    public Mono<ResponseEntity<PersonProfile>> personByAccount(@PathVariable Long accountId) {
+        return Mono.zip(currentAccount.requiredAccountId(), currentAccount.hasAnyRole("ADMIN"))
+            .flatMap(who -> people.personByAccount(who.getT1(), who.getT2(), accountId))
+            .map(ResponseEntity::ok);
+    }
+
     @GetMapping("/me/visibility")
     public Mono<ResponseEntity<Map<String, String>>> myVisibility() {
         return currentAccount.requiredAccountId()

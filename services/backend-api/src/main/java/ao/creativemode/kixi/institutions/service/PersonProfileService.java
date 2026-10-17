@@ -75,6 +75,15 @@ public class PersonProfileService {
                 }));
     }
 
+    /** The same profile by account id, which is what the feed, the comments and the ranking carry. */
+    public Mono<PersonProfile> personByAccount(Long viewerAccountId, boolean viewerIsAdmin, Long accountId) {
+        return users
+            .findByAccountIdAndDeletedAtIsNull(accountId)
+            .next()
+            .switchIfEmpty(Mono.error(ApiException.notFound("Profile not found")))
+            .flatMap(user -> person(viewerAccountId, viewerIsAdmin, user.getId()));
+    }
+
     /** The visibility the signed-in person chose, "school" until they choose. */
     public Mono<String> myVisibility(Long accountId) {
         return myUserId(accountId)
