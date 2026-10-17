@@ -1,0 +1,46 @@
+name: Notas de versão
+
+# Quando uma promoção chega a prod, o agente junta o que saiu no backend e no frontend desde a
+# última versão e publica uma versão no GitHub com as notas e a logo do Kixi.
+# "Simular" mostra as notas no resumo do job sem publicar nada (ver .github/scripts/release-notes.js).
+#
+# Os dois repositórios são públicos, por isso o GITHUB_TOKEN chega para ler o frontend. Se o frontend
+# passar a privado, guarde um token de leitura em FRONTEND_READ_TOKEN.
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Simular: mostrar as notas sem publicar'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: notas-de-versao
+  cancel-in-progress: false
+
+jobs:
+  notas:
+    name: Publicar notas de versão
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+      - uses: actions/github-script@v7
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        with:
+          script: |
+            await require('./.github/scripts/release-notes.js')({
+              github,
+              context,
+              core,
+              dryRun: process.env.DRY_RUN === 'true',
+            });
