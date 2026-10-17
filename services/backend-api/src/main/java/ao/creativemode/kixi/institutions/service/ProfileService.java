@@ -35,7 +35,8 @@ public class ProfileService {
             .flatMap(institution -> Mono.zip(
                     institutions.countActiveTeachers(id),
                     institutions.countActiveStudents(id),
-                    institutions.countVisibleStatements(id))
+                    institutions.countVisibleStatements(id),
+                    institutions.countPublishedRooms(id))
                 .map(counts -> new InstitutionProfile(
                     institution.getId(),
                     institution.getCode(),
@@ -46,7 +47,8 @@ public class ProfileService {
                     institution.getVerifiedAt(),
                     counts.getT1(),
                     counts.getT2(),
-                    counts.getT3())));
+                    counts.getT3(),
+                    counts.getT4())));
     }
 
     public Flux<TeacherCard> teachersOf(Long institutionId) {

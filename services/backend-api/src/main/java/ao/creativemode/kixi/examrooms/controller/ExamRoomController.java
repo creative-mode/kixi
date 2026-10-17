@@ -63,9 +63,10 @@ public class ExamRoomController {
     }
 
     @GetMapping("/owned")
-    public Mono<ResponseEntity<List<ExamRoomResponse>>> owned() {
+    public Mono<ResponseEntity<List<ExamRoomResponse>>> owned(
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Long institutionId) {
         return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMapMany(tuple -> tuple.getT2() ? service.findMine(tuple.getT1()) : reactor.core.publisher.Flux.empty())
+                .flatMapMany(tuple -> tuple.getT2() ? service.findMine(tuple.getT1(), institutionId) : reactor.core.publisher.Flux.empty())
                 .collectList().map(ResponseEntity::ok);
     }
 

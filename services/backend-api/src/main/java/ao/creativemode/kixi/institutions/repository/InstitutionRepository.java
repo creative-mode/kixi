@@ -42,6 +42,18 @@ public interface InstitutionRepository extends ReactiveCrudRepository<Institutio
         """)
     Mono<Long> countVisibleStatements(Long id);
 
+    /**
+     * Exam rooms of the school's classes that left draft. Drafts are the teacher's private work, so
+     * they do not count; plain SQL on purpose, since the institutions module does not depend on
+     * examrooms.
+     */
+    @Query("""
+        SELECT COUNT(*) FROM exam_rooms r
+        JOIN classes cl ON cl.id = r.class_id
+        WHERE cl.institution_id = :id AND r.status <> 'DRAFT'
+        """)
+    Mono<Long> countPublishedRooms(Long id);
+
     /** Schools with at least one active class in the school year (issue #253), by name. */
     @Query("""
         SELECT i.* FROM institutions i

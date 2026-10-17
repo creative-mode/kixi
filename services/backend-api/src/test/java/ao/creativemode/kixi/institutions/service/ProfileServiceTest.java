@@ -48,6 +48,7 @@ class ProfileServiceTest {
         when(institutions.countActiveTeachers(7L)).thenReturn(Mono.just(12L));
         when(institutions.countActiveStudents(7L)).thenReturn(Mono.just(340L));
         when(institutions.countVisibleStatements(7L)).thenReturn(Mono.just(25L));
+        when(institutions.countPublishedRooms(7L)).thenReturn(Mono.just(4L));
 
         StepVerifier.create(service.institution(7L))
             .assertNext(profile -> {
@@ -56,6 +57,7 @@ class ProfileServiceTest {
                 assertThat(profile.teacherCount()).isEqualTo(12L);
                 assertThat(profile.studentCount()).isEqualTo(340L);
                 assertThat(profile.statementCount()).isEqualTo(25L);
+                assertThat(profile.roomCount()).isEqualTo(4L);
             })
             .verifyComplete();
     }
