@@ -228,3 +228,19 @@ def test_process_does_not_use_exam_type_as_subject_when_discipline_is_labelled()
 
     assert metadata.exam_type.value == "Prova de Exame"
     assert metadata.subject_name.value == "Matemática"
+
+
+def test_process_keeps_recognized_text_in_unmapped_when_no_questions_are_parsed():
+    """Text the parser made no questions of is still returned, not dropped (#292)."""
+    processor = OCRPostprocessor()
+    blocks = [
+        block("Tabela de valores trimestrais", 10),
+        block("Janeiro 120 Fevereiro 150", 40),
+    ]
+
+    _, questions, _, unmapped, _ = processor.process(blocks)
+
+    joined = " ".join(item.text for item in unmapped)
+    assert questions == []
+    assert "Tabela de valores trimestrais" in joined
+    assert "Janeiro 120 Fevereiro 150" in joined

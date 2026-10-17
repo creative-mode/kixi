@@ -34,6 +34,7 @@ from app.ocr.postprocessing import (
     ExtractedOption,
     QuestionType,
     MetadataField,
+    UnmappedContent,
     normalize_text,
     detect_language,
 )
@@ -489,6 +490,41 @@ class TestOCREngine:
 
         assert result.status == "error"
         assert "No images provided" in result.error_message
+
+    def _page_result(self, status: str, unmapped=None) -> OCRResult:
+        return OCRResult(
+            status=status,
+            request_id="req-page",
+            processing_time_ms=1,
+            overall_confidence=0.9 if status != "error" else 0.0,
+            document=DocumentInfo(page_count=1, main_language="pt", has_tables=False),
+            metadata=ExtractedMetadata(),
+            questions=[],
+            images_to_upload=[],
+            unmapped_content=unmapped or [],
+            warnings=[],
+        )
+
+    def test_process_images_with_text_but_no_questions_is_partial_not_error(self, sample_image):
+        """Text read without questions is a reading, not a server failure (#292)."""
+        engine = OCREngine()
+        text = [UnmappedContent(0, "Tabela de valores", 0.9, "Texto lido sem perguntas reconhecidas")]
+        engine.process_image = MagicMock(return_value=self._page_result("success", text))
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-292")
+
+        assert result.status == "partial"
+        assert result.questions == []
+        assert {item.text for item in result.unmapped_content} == {"Tabela de valores"}
+
+    def test_process_images_with_no_text_at_all_is_still_error(self, sample_image):
+        """A document the OCR read nothing from keeps the error status."""
+        engine = OCREngine()
+        engine.process_image = MagicMock(return_value=self._page_result("error"))
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-292")
+
+        assert result.status == "error"
 
     def test_shutdown(self):
         """Test engine shutdown."""
