@@ -35,12 +35,18 @@ public interface FriendshipRepository extends ReactiveCrudRepository<Friendship,
      * <p>Only the addressee. A request the caller sent is not an inbox item, and
      * returning their own sent requests here would put their own id in a list of people
      * waiting for them.</p>
+     *
+     * <p>The pair is stored low/high, not requester/addressee: the caller is the addressee
+     * when they are either end of the pair and did not send it. Filtering on
+     * {@code account_high} alone hid every request sent by the higher account from the
+     * lower one, so half of all requests never reached an inbox.</p>
      */
     @Query("""
         SELECT * FROM friendships
          WHERE deleted_at IS NULL
            AND status = 'PENDING'
-           AND account_high = :accountId
+           AND requested_by <> :accountId
+           AND (account_low = :accountId OR account_high = :accountId)
          ORDER BY updated_at DESC, id DESC
         """)
     Flux<Friendship> findPendingFor(Long accountId);
