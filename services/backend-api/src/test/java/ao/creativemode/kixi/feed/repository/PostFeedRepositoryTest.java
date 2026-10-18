@@ -88,4 +88,13 @@ class PostFeedRepositoryTest {
         assertThat((Long[]) countSql.binds().get("institutionIds")).containsExactly(1L);
         assertThat(countSql.binds()).containsEntry("courseId", 20L);
     }
+
+    @Test
+    void theFeedRowKeepsTheBlocksOfABuiltPost() {
+        io.r2dbc.spi.Row row = org.mockito.Mockito.mock(io.r2dbc.spi.Row.class);
+        org.mockito.Mockito.when(row.get(org.mockito.ArgumentMatchers.eq("blocks"), org.mockito.ArgumentMatchers.eq(String.class)))
+                .thenReturn("[{\"type\":\"text\",\"text\":\"ola\"}]");
+
+        assertThat(PostFeedRepository.rowToPost(row).getBlocks()).contains("\"type\":\"text\"");
+    }
 }
