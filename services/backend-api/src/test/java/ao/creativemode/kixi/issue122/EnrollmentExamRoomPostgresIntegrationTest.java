@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -92,6 +93,7 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM account_roles WHERE account_id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM accounts WHERE id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
+        sql("DELETE FROM enrollment_codes WHERE class_id = " + CLASS);
         sql("DELETE FROM classes WHERE id = " + CLASS);
         sql("DELETE FROM courses WHERE id = " + COURSE);
         sql("DELETE FROM school_years WHERE id = " + YEAR);
@@ -123,14 +125,19 @@ class EnrollmentExamRoomPostgresIntegrationTest {
 
     @Test
     void enrollmentApiEnforcesOwnershipCancellationAndRestoration() {
+        // Since #255 a self-enroll needs a code; this one is good for two uses, enough
+        // for the enroll below and the restore-after-cancel further down.
+        String code = issueEnrollmentCode(CLASS, 2).code();
+
         AtomicLong ownEnrollment = new AtomicLong();
         bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .bodyValue("{\"code\":\"" + code + "\"}")
                 .exchange().expectStatus().isCreated().expectBody().jsonPath("$.accountId").isEqualTo((int) STUDENT)
+                .jsonPath("$.classId").isEqualTo((int) CLASS).jsonPath("$.schoolYearId").isEqualTo((int) YEAR)
                 .jsonPath("$.id").value(value -> ownEnrollment.set(((Number) value).longValue()));
 
         bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"code\":\"" + code + "\"}")
                 .exchange().expectStatus().isForbidden();
 
         AtomicLong otherEnrollment = new AtomicLong();
@@ -143,10 +150,53 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + ownEnrollment + " AND deleted_at IS NOT NULL")).isEqualTo(1L);
 
         bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .bodyValue("{\"code\":\"" + code + "\"}")
                 .exchange().expectStatus().isCreated();
         assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + ownEnrollment + " AND deleted_at IS NULL AND status = 'ACTIVE'")).isEqualTo(1L);
         assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + otherEnrollment + " AND deleted_at IS NULL")).isEqualTo(1L);
+    }
+
+    @Test
+    void selfEnrollNowRequiresAValidCodeNotJustAClassId() {
+        // This is the heart of #255: before the fix, this exact body enrolled the student.
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + CLASS + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isBadRequest();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE account_id = " + STUDENT)).isEqualTo(0L);
+    }
+
+    @Test
+    void anAlreadyUsedCodeCannotBeRedeemedByAnotherStudent() {
+        String singleUseCode = issueEnrollmentCode(CLASS, 1).code();
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"code\":\"" + singleUseCode + "\"}")
+                .exchange().expectStatus().isCreated();
+
+        String otherStudentToken = jwtService.generateToken(OTHER_STUDENT, List.of("STUDENT"));
+        bearer(otherStudentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"code\":\"" + singleUseCode + "\"}")
+                .exchange().expectStatus().isBadRequest();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE account_id = " + OTHER_STUDENT)).isEqualTo(0L);
+    }
+
+    @Test
+    void aRevokedCodeCannotBeRedeemed() {
+        EnrollmentCodeFixture fixture = issueEnrollmentCode(CLASS, 5);
+        bearer(adminToken).delete().uri("/api/v1/enrollment-codes/" + fixture.id()).exchange().expectStatus().isOk();
+
+        bearer(studentToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"code\":\"" + fixture.code() + "\"}")
+                .exchange().expectStatus().isBadRequest();
+    }
+
+    @Test
+    void onlyAdminCanIssueEnrollmentCodes() {
+        bearer(ownerToken).post().uri("/api/v1/enrollment-codes").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + CLASS + "}")
+                .exchange().expectStatus().isForbidden();
+        bearer(studentToken).post().uri("/api/v1/enrollment-codes").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + CLASS + "}")
+                .exchange().expectStatus().isForbidden();
     }
 
     @Test
@@ -191,6 +241,19 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = " + room + " AND status = 'CLOSED'")).isEqualTo(1L);
         assertThat(one("SELECT count(*) FROM simulations WHERE id = " + simulationId + " AND status = 'FINISHED' AND deleted_at IS NULL")).isEqualTo(1L);
     }
+
+    private EnrollmentCodeFixture issueEnrollmentCode(long classId, int maxUses) {
+        AtomicReference<String> code = new AtomicReference<>();
+        AtomicLong id = new AtomicLong();
+        bearer(adminToken).post().uri("/api/v1/enrollment-codes").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"classId\":" + classId + ",\"maxUses\":" + maxUses + "}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.code").value(value -> code.set((String) value))
+                .jsonPath("$.id").value(value -> id.set(((Number) value).longValue()));
+        return new EnrollmentCodeFixture(id.get(), code.get());
+    }
+
+    private record EnrollmentCodeFixture(long id, String code) { }
 
     private void role(long accountId, String role) {
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + accountId + ", id FROM roles WHERE name = '" + role + "'");

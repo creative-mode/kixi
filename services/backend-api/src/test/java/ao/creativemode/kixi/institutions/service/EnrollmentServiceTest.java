@@ -30,12 +30,15 @@ import reactor.test.StepVerifier;
 
 class EnrollmentServiceTest {
 
+    private static final String CODE = "ABCD1234";
+
     private EnrollmentRepository enrollments;
     private AccountRepository accounts;
     private ClassRepository classes;
     private SchoolYearRepository schoolYears;
     private AccountRoleRepository accountRoles;
     private RoleRepository roles;
+    private EnrollmentCodeService enrollmentCodeService;
     private EnrollmentService service;
 
     @BeforeEach
@@ -46,8 +49,15 @@ class EnrollmentServiceTest {
         schoolYears = mock(SchoolYearRepository.class);
         accountRoles = mock(AccountRoleRepository.class);
         roles = mock(RoleRepository.class);
+        enrollmentCodeService = mock(EnrollmentCodeService.class);
         service = new EnrollmentService(
-            enrollments, accounts, classes, schoolYears, accountRoles, roles);
+            enrollments, accounts, classes, schoolYears, accountRoles, roles, enrollmentCodeService);
+    }
+
+    /** A code that redeems to {@code classId}, as {@code EnrollmentCodeService.redeem} would resolve it. */
+    private void codeRedeemsTo(Long classId) {
+        when(enrollmentCodeService.redeem(CODE))
+            .thenReturn(Mono.just(new EnrollmentCodeService.Redemption(99L, classId)));
     }
 
     /**
@@ -66,22 +76,66 @@ class EnrollmentServiceTest {
     }
 
     @Test
-    void studentEnrollsThemselves() {
+    void studentEnrollsThemselvesWithACode() {
         when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
         accountHasRoles(42L, 1L, "STUDENT");
+        codeRedeemsTo(7L);
         when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
         when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
         when(enrollments.findFirstByAccountIdAndSchoolYearId(42L, 2024L)).thenReturn(Mono.empty());
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L)))
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
             .expectNextMatches(response ->
                 response.accountId().equals(42L)
                     && response.classId().equals(7L)
                     && response.schoolYearId().equals(2024L)
                     && response.status().equals(Enrollment.STATUS_ACTIVE))
             .verifyComplete();
+    }
+
+    /**
+     * A self-enroll resolves the class strictly from the redeemed code (#255): the
+     * classId/schoolYearId the request also carries, if any, is never trusted.
+     */
+    @Test
+    void selfEnrollIgnoresClientSuppliedClassIdInFavorOfTheCode() {
+        when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        accountHasRoles(42L, 1L, "STUDENT");
+        codeRedeemsTo(7L);
+        when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
+        when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
+        when(enrollments.findFirstByAccountIdAndSchoolYearId(42L, 2024L)).thenReturn(Mono.empty());
+        when(enrollments.save(any(Enrollment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        // classId 999 / schoolYearId 999 are a different class the caller does not have a code for.
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 999L, 999L, CODE)))
+            .expectNextMatches(response -> response.classId().equals(7L) && response.schoolYearId().equals(2024L))
+            .verifyComplete();
+        verify(classes, never()).findByIdAndDeletedAtIsNull(999L);
+    }
+
+    @Test
+    void selfEnrollWithoutACodeIsRejected() {
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L, null)))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.BAD_REQUEST);
+        verify(enrollments, never()).save(any(Enrollment.class));
+    }
+
+    @Test
+    void selfEnrollPropagatesAnInvalidCodeError() {
+        when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        accountHasRoles(42L, 1L, "STUDENT");
+        when(enrollmentCodeService.redeem("WRONG"))
+            .thenReturn(Mono.error(ApiException.badRequest("Invalid, expired, revoked or already used enrollment code")));
+
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, "WRONG")))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.BAD_REQUEST);
+        verify(enrollments, never()).save(any(Enrollment.class));
     }
 
     @Test
@@ -94,14 +148,15 @@ class EnrollmentServiceTest {
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
             .expectNextMatches(response -> response.accountId().equals(43L))
             .verifyComplete();
+        verify(enrollmentCodeService, never()).redeem(any());
     }
 
     @Test
     void studentCannotEnrollAnotherAccount() {
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(43L, 7L, 2024L)))
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.FORBIDDEN);
 
@@ -114,11 +169,12 @@ class EnrollmentServiceTest {
         Enrollment active = new Enrollment(42L, 5L, 2024L);
         active.setId(1L);
         when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        codeRedeemsTo(7L);
         when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
         when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
         when(enrollments.findFirstByAccountIdAndSchoolYearId(42L, 2024L)).thenReturn(Mono.just(active));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L)))
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.CONFLICT);
     }
@@ -130,27 +186,39 @@ class EnrollmentServiceTest {
         cancelled.setId(1L);
         cancelled.markAsDeleted();
         when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        codeRedeemsTo(7L);
         when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
         when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
         when(enrollments.findFirstByAccountIdAndSchoolYearId(42L, 2024L)).thenReturn(Mono.just(cancelled));
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L)))
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
             .expectNextMatches(response ->
                 response.classId().equals(7L) && response.status().equals(Enrollment.STATUS_ACTIVE))
             .verifyComplete();
     }
 
     @Test
-    void classOutsideSchoolYearIsRejected() {
-        accountHasRoles(42L, 1L, "STUDENT");
-        when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+    void staffClassOutsideSchoolYearIsRejected() {
+        accountHasRoles(43L, 1L, "STUDENT");
+        when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2023L)));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void staffEnrollWithoutClassOrSchoolYearIsRejected() {
+        accountHasRoles(43L, 1L, "STUDENT");
+        when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
+
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, null, null, null)))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.BAD_REQUEST);
+        verify(enrollments, never()).save(any(Enrollment.class));
     }
 
     @Test
@@ -159,7 +227,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         accountHasRoles(43L, 2L, "TEACHER");
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -170,7 +238,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(accountRoles.findByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.empty());
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -183,18 +251,32 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(accountRoles.findByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.empty());
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
     }
 
     @Test
-    void unknownClassIsNotFound() {
+    void unknownClassFromARedeemedCodeIsNotFound() {
+        // The class behind a once-valid code may have been soft-deleted since; the
+        // redemption itself already succeeded (and consumed a use) by this point.
+        when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        accountHasRoles(42L, 1L, "STUDENT");
+        codeRedeemsTo(9L);
+        when(classes.findByIdAndDeletedAtIsNull(9L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void unknownClassFromAStaffRequestIsNotFound() {
         when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
         accountHasRoles(42L, 1L, "STUDENT");
         when(classes.findByIdAndDeletedAtIsNull(9L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 9L, 2024L)))
+        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(42L, 9L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.NOT_FOUND);
     }
