@@ -76,7 +76,11 @@ public class FriendshipService {
      */
     public Mono<FriendResponse> accept(Long accountId, Long friendshipId) {
         return friendships.findByIdAndDeletedAtIsNull(friendshipId)
-                .filter(friendship -> friendship.getAccountHigh().equals(accountId))
+                // The pair is stored low/high, so the addressee is "one end of the pair who did not
+                // send it". Asking for `account_high` only meant a request sent by the higher account
+                // could be answered by nobody but its own sender.
+                .filter(friendship -> friendship.involves(accountId)
+                        && !friendship.getRequestedBy().equals(accountId))
                 .switchIfEmpty(Mono.error(ApiException.notFound(
                         "Friend request not found: " + friendshipId)))
                 .flatMap(friendship -> {

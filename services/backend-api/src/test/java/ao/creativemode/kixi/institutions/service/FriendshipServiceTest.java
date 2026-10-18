@@ -172,6 +172,41 @@ class FriendshipServiceTest {
     }
 
     @Test
+    void theLowerAccountCanAnswerARequestTheHigherOneSent() {
+        // Bruno (34) is the higher id and asked Ana (12): the pair is stored low/high, so the
+        // addressee is not always the high end.
+        when(friendships.findByIdAndDeletedAtIsNull(1L))
+                .thenReturn(Mono.just(Friendship.between(ANA, BRUNO, BRUNO)));
+        when(friendships.save(any(Friendship.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.accept(ANA, 1L))
+                .assertNext(friend -> assertThat(friend.accepted()).isTrue())
+                .verifyComplete();
+    }
+
+    @Test
+    void theHigherAccountCannotAcceptItsOwnRequest() {
+        when(friendships.findByIdAndDeletedAtIsNull(1L))
+                .thenReturn(Mono.just(Friendship.between(ANA, BRUNO, BRUNO)));
+
+        StepVerifier.create(service.accept(BRUNO, 1L))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    @Test
+    void someoneOutsideThePairCannotAnswer() {
+        when(friendships.findByIdAndDeletedAtIsNull(1L))
+                .thenReturn(Mono.just(Friendship.between(ANA, BRUNO, ANA)));
+
+        StepVerifier.create(service.accept(99L, 1L))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    @Test
     void anIncomingRequestIsMarkedAsSuch() {
         seatedIn(ANA, YEAR);
         seatedIn(BRUNO, YEAR);
