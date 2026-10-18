@@ -77,6 +77,10 @@ class OCRResult:
     unmapped_content: List[UnmappedContent]
     warnings: List[Warning]
     error_message: Optional[str] = None
+    # #263: quality/transformation metadata and the preprocessing stage's own cost, for the
+    # first page (multi-page merges keep only this one - the metadata is mainly a signal for
+    # "is this submission worth a retake photo", not something every page needs separately).
+    preprocessing: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -85,6 +89,7 @@ class OCRResult:
             "requestId": self.request_id,
             "processingTimeMs": self.processing_time_ms,
             "overallConfidence": round(self.overall_confidence, 3),
+            **({"preprocessing": self.preprocessing} if self.preprocessing else {}),
             "document": {
                 "pageCount": self.document.page_count,
                 "mainLanguage": self.document.main_language,
@@ -168,6 +173,11 @@ class OCREngine:
             enable_denoise=settings.enable_denoise,
             target_dpi=settings.target_dpi,
             min_confidence_threshold=settings.min_confidence_threshold,
+            enable_sheet_detection=settings.enable_sheet_detection,
+            enable_shadow_removal=settings.enable_shadow_removal,
+            min_sharpness_score=settings.min_sharpness_score,
+            min_brightness_score=settings.min_brightness_score,
+            max_brightness_score=settings.max_brightness_score,
         )
 
         self.postprocessor = OCRPostprocessor(
@@ -494,12 +504,43 @@ class OCREngine:
             preprocessing_result = self.preprocessor.preprocess(image)
             processed_image = preprocessing_result.image
 
+            preprocessing_meta: Dict[str, Any] = {
+                "sheetCropped": preprocessing_result.sheet_cropped,
+                "shadowReduced": preprocessing_result.shadow_reduced,
+                "rotationAngle": round(preprocessing_result.rotation_angle, 2),
+                "qualityScore": round(preprocessing_result.quality_score, 2),
+                "isLegible": preprocessing_result.is_legible,
+                "appliedSteps": preprocessing_result.preprocessing_applied,
+                "durationMs": round(preprocessing_result.duration_ms, 1),
+            }
+            if preprocessing_result.rejection_reason:
+                preprocessing_meta["rejectionReason"] = preprocessing_result.rejection_reason
+
             logger.debug(
                 "Preprocessing complete",
                 request_id=request_id,
                 preprocessing_applied=preprocessing_result.preprocessing_applied,
                 rotation_angle=preprocessing_result.rotation_angle,
+                is_legible=preprocessing_result.is_legible,
+                duration_ms=preprocessing_result.duration_ms,
             )
+
+            # #263: an explicit, visible signal when the photo itself is the problem - not a
+            # silent empty result the caller has no way to act on.
+            legibility_warnings: List[Warning] = []
+            if not preprocessing_result.is_legible:
+                logger.warning(
+                    "Image flagged as possibly illegible before OCR",
+                    request_id=request_id,
+                    reason=preprocessing_result.rejection_reason,
+                    quality_score=preprocessing_result.quality_score,
+                )
+                legibility_warnings.append(Warning(
+                    code="image_quality",
+                    field="image",
+                    confidence=0.0,
+                    message=f"A imagem pode estar ilegível ({preprocessing_result.rejection_reason}); tente fotografar de novo com mais luz e sem tremer.",
+                ))
 
             # Run OCR: text lines, and the layout that says where the figures are
             if settings.ocr_pipeline == "vl":
@@ -564,9 +605,19 @@ class OCREngine:
                 text_blocks, metadata, questions
             )
 
+            warnings = [*legibility_warnings, *warnings]
+
             # Determine status
+            error_message = None
             if not text_blocks:
                 status = "error"
+                # #263: an explicit reason beats a bare "error" when the photo itself (not
+                # the service) is why nothing came back.
+                error_message = (
+                    f"Imagem ilegível ({preprocessing_result.rejection_reason})"
+                    if not preprocessing_result.is_legible
+                    else "No text could be extracted from the image"
+                )
             elif overall_confidence < 0.5:
                 status = "partial"
             else:
@@ -589,6 +640,8 @@ class OCREngine:
                 images_to_upload=images_to_upload,
                 unmapped_content=unmapped,
                 warnings=warnings,
+                error_message=error_message,
+                preprocessing=preprocessing_meta,
             )
 
             logger.info(

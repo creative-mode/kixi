@@ -72,6 +72,15 @@ public class ApiAbuseRateLimiter {
                 properties.getUploadMaxAttempts(), properties.getUploadWindowSeconds(), "upload");
     }
 
+    /**
+     * Guards self-enroll (#255): without this, a code with a tight {@code max_uses} is an
+     * invitation to brute-force guess a valid one by account, not just by IP.
+     */
+    public Mono<Void> checkEnrollment(Long accountId) {
+        return check("enrollment:account:" + accountId,
+                properties.getEnrollmentMaxAttempts(), properties.getEnrollmentWindowSeconds(), "enrollment");
+    }
+
     private Mono<Void> check(String rawKey, int maxAttempts, long windowSeconds, String scope) {
         String rateKey = hash(rawKey);
         return databaseClient.sql(CLEANUP_SQL)

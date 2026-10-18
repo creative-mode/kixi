@@ -18,8 +18,16 @@ import reactor.core.publisher.Mono;
 /**
  * Student enrollments in classes.
  *
- * <p>A student enrolls themselves; ADMIN/TEACHER may enroll any account.
- * At most one active enrollment per account and school year exists: a
+ * <p>ADMIN/TEACHER may enroll any account directly, by {@code classId}/{@code
+ * schoolYearId} — that path is unchanged. A student enrolling <em>themselves</em>
+ * no longer may: since #255, self-enroll requires an {@link EnrollmentCode} issued
+ * by the school for that class, redeemed atomically by
+ * {@link EnrollmentCodeService#redeem}, and the class/school year it resolves to
+ * are what gets used — never whatever {@code classId}/{@code schoolYearId} the
+ * request happened to carry. Before #255 a student could enroll in any class of
+ * any school just by sending its id; that is exactly what a code closes off.</p>
+ *
+ * <p>At most one active enrollment per account and school year exists: a
  * cancelled enrollment is restored (and moved to the new class) instead of
  * duplicated.</p>
  *
@@ -39,6 +47,7 @@ public class EnrollmentService {
     private final SchoolYearRepository schoolYearRepository;
     private final AccountRoleRepository accountRoleRepository;
     private final RoleRepository roleRepository;
+    private final EnrollmentCodeService enrollmentCodeService;
 
     public EnrollmentService(
         EnrollmentRepository enrollments,
@@ -46,7 +55,8 @@ public class EnrollmentService {
         ClassRepository classRepository,
         SchoolYearRepository schoolYearRepository,
         AccountRoleRepository accountRoleRepository,
-        RoleRepository roleRepository
+        RoleRepository roleRepository,
+        EnrollmentCodeService enrollmentCodeService
     ) {
         this.enrollments = enrollments;
         this.accountRepository = accountRepository;
@@ -54,6 +64,7 @@ public class EnrollmentService {
         this.schoolYearRepository = schoolYearRepository;
         this.accountRoleRepository = accountRoleRepository;
         this.roleRepository = roleRepository;
+        this.enrollmentCodeService = enrollmentCodeService;
     }
 
     public Mono<EnrollmentResponse> enroll(Long callerAccountId, boolean staff, EnrollRequest request) {
@@ -61,36 +72,63 @@ public class EnrollmentService {
         if (!targetAccountId.equals(callerAccountId) && !staff) {
             return Mono.error(ApiException.forbidden("Only ADMIN or TEACHER can enroll another account"));
         }
+        boolean selfEnroll = targetAccountId.equals(callerAccountId);
 
         return Mono.defer(() -> accountRepository.findById(targetAccountId)
                 .filter(account -> account.getDeletedAt() == null && Boolean.TRUE.equals(account.getActive()))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Account not found"))))
             .then(Mono.defer(() -> requireStudentRole(targetAccountId)))
-            .then(Mono.defer(() -> classRepository.findByIdAndDeletedAtIsNull(request.classId())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))))
-            .flatMap(clazz -> {
-                if (!clazz.getSchoolYearId().equals(request.schoolYearId())) {
-                    return Mono.error(ApiException.badRequest("Class does not belong to the given school year"));
-                }
-                return schoolYearRepository.findByIdAndDeletedAtIsNull(request.schoolYearId())
-                    .switchIfEmpty(Mono.error(ApiException.notFound("School year not found")))
-                    .then(Mono.defer(() ->
-                        enrollments.findFirstByAccountIdAndSchoolYearId(targetAccountId, request.schoolYearId())
-                            .flatMap(existing -> {
-                                if (!existing.isDeleted()) {
-                                    return Mono.<Enrollment>error(ApiException.conflict(
-                                        "Account already has an active enrollment for this school year"));
-                                }
-                                existing.restore();
-                                existing.setClassId(request.classId());
-                                return enrollments.save(existing);
-                            })
-                            .switchIfEmpty(Mono.defer(() -> enrollments.save(
-                                new Enrollment(targetAccountId, request.classId(), request.schoolYearId()))))
-                    ));
-            })
+            .then(Mono.defer(() -> selfEnroll
+                ? resolveBySelfEnrollCode(request.code())
+                : resolveByStaffRequest(request.classId(), request.schoolYearId())))
+            .flatMap(resolved -> schoolYearRepository.findByIdAndDeletedAtIsNull(resolved.schoolYearId())
+                .switchIfEmpty(Mono.error(ApiException.notFound("School year not found")))
+                .then(Mono.defer(() ->
+                    enrollments.findFirstByAccountIdAndSchoolYearId(targetAccountId, resolved.schoolYearId())
+                        .flatMap(existing -> {
+                            if (!existing.isDeleted()) {
+                                return Mono.<Enrollment>error(ApiException.conflict(
+                                    "Account already has an active enrollment for this school year"));
+                            }
+                            existing.restore();
+                            existing.setClassId(resolved.classId());
+                            existing.setEnrollmentCodeId(resolved.enrollmentCodeId());
+                            return enrollments.save(existing);
+                        })
+                        .switchIfEmpty(Mono.defer(() -> enrollments.save(new Enrollment(
+                            targetAccountId, resolved.classId(), resolved.schoolYearId(), resolved.enrollmentCodeId()))))
+                )))
             .map(EnrollmentService::toResponse);
     }
+
+    /**
+     * Redeems {@code code} and resolves it to the class it names, so a self-enroll uses
+     * the class the school chose rather than one a student picked themselves (#255).
+     */
+    private Mono<ResolvedClass> resolveBySelfEnrollCode(String code) {
+        return enrollmentCodeService.redeem(code)
+            .flatMap(redemption -> classRepository.findByIdAndDeletedAtIsNull(redemption.classId())
+                .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))
+                .map(clazz -> new ResolvedClass(clazz.getId(), clazz.getSchoolYearId(), redemption.enrollmentCodeId())));
+    }
+
+    /** The unchanged staff path: ADMIN/TEACHER names the class and school year directly. */
+    private Mono<ResolvedClass> resolveByStaffRequest(Long classId, Long schoolYearId) {
+        if (classId == null || schoolYearId == null) {
+            return Mono.error(ApiException.badRequest("Class and school year are required"));
+        }
+        return classRepository.findByIdAndDeletedAtIsNull(classId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))
+            .flatMap(clazz -> {
+                if (!clazz.getSchoolYearId().equals(schoolYearId)) {
+                    return Mono.error(ApiException.badRequest("Class does not belong to the given school year"));
+                }
+                return Mono.just(new ResolvedClass(clazz.getId(), clazz.getSchoolYearId(), null));
+            });
+    }
+
+    /** Where an enrollment lands, whichever path (code or staff request) resolved it. */
+    private record ResolvedClass(Long classId, Long schoolYearId, Long enrollmentCodeId) { }
 
     /**
      * Rejects an enrollment whose target account is not a student.
