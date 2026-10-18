@@ -17,7 +17,9 @@ public record PostResponse(
         Boolean hasReacted,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        SimulationCard simulation
+        SimulationCard simulation,
+        /** The built post's blocks (issue #347); empty for a plain post. */
+        java.util.List<PostBlock> blocks
 ) {
 
     /** The result card of a SIMULATION post, as it was when published. */

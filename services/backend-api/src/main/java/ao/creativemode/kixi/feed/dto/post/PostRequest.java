@@ -23,8 +23,16 @@ public record PostRequest(
         String content,
 
         /** Only for a SIMULATION post: the finished attempt to publish. The figures come from the server. */
-        Long simulationId
+        Long simulationId,
+
+        /** A built post (issue #347): optional on a DOUBT or TOPIC, required on a STUDY_CARD, SOLUTION or CHALLENGE. */
+        java.util.List<PostBlock> blocks
 ) {
+
+    /** The request as it was before the blocks existed. */
+    public PostRequest(PostType type, Long classId, String title, String content, Long simulationId) {
+        this(type, classId, title, content, simulationId, null);
+    }
 
     private static final int MAX_CONTENT = 2000;
     private static final int MIN_TEXT_CONTENT = 5;
@@ -38,6 +46,9 @@ public record PostRequest(
     public boolean isContentValid() {
         if (type == null) {
             return true; // reported by @NotNull on type
+        }
+        if (blocks != null && !blocks.isEmpty()) {
+            return content == null || content.trim().length() <= MAX_CONTENT; // the summary comes from the blocks
         }
         int length = content == null ? 0 : content.trim().length();
         if (length > MAX_CONTENT) {

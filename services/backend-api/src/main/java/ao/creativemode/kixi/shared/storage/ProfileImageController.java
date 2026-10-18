@@ -35,7 +35,7 @@ import reactor.core.publisher.Mono;
 public class ProfileImageController {
 
     /** The folders an upload can go to. Anything else is a 400, so the key cannot be steered. */
-    private static final Set<String> KINDS = Set.of("avatar", "logo");
+    private static final Set<String> KINDS = Set.of("avatar", "logo", "post");
     private static final int MAX_BYTES = 2 * 1024 * 1024;
     private static final long MAX_PIXELS = 16_000_000L;
 
