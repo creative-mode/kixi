@@ -277,7 +277,7 @@ class PostControllerHttpTest {
     private static PostResponse post(Long id) {
         LocalDateTime now = LocalDateTime.of(2026, 10, 13, 12, 0);
         return new PostResponse(id, 42L, 1L, 2026L, 20L, 10L, "topic", "Title",
-                "A useful topic", false, 0L, false, now, now, null);
+                "A useful topic", false, 0L, false, now, now, null, null);
     }
 
     private static WebTestClientConfigurer studentJwt() {
