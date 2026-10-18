@@ -8,6 +8,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -30,6 +31,7 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.service.EnrollmentService;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -54,6 +56,14 @@ class EnrollmentSecurityTest {
 
     @MockBean
     private MeService meService;
+
+    @MockBean
+    private ApiAbuseRateLimiter rateLimiter;
+
+    @BeforeEach
+    void allowsRateLimiterByDefault() {
+        when(rateLimiter.checkEnrollment(any())).thenReturn(Mono.empty());
+    }
 
     @Test
     void rejectsAnonymousEnrollmentReads() {
@@ -94,7 +104,7 @@ class EnrollmentSecurityTest {
                 .post()
                 .uri("http://localhost/api/v1/enrollments")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("classId", 7, "schoolYearId", 2024))
+                .bodyValue(Map.of("code", "ABCD1234"))
                 .exchange()
                 .expectStatus().isCreated()
                 .expectBody()
@@ -202,13 +212,20 @@ class EnrollmentSecurityTest {
     }
 
     @Test
-    void validatesRequiredEnrollmentFieldsBeforeCallingService() {
+    void emptyEnrollmentBodyReachesTheServiceWhichRejectsTheMissingCode() {
+        // Since #255 an EnrollRequest carries no bean-validation annotations any more
+        // (classId/schoolYearId are staff-only now, code is self-enroll-only, and which
+        // one is required depends on who is enrolling whom) — the controller no longer
+        // rejects an empty body itself; EnrollmentService does, once it knows this is a
+        // self-enroll with no code.
+        when(enrollmentService.enroll(eq(42L), eq(false), any()))
+                .thenReturn(Mono.error(ao.creativemode.kixi.shared.exception.ApiException.badRequest(
+                        "An enrollment code is required")));
+
         client.mutateWith(studentJwt())
                 .post().uri("/api/v1/enrollments")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of())
                 .exchange().expectStatus().isBadRequest();
-
-        org.mockito.Mockito.verifyNoInteractions(enrollmentService);
     }
 
     @Test

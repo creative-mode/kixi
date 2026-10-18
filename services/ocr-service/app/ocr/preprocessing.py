@@ -2,14 +2,18 @@
 Image Preprocessing Module for OCR Service
 
 Provides utilities for image preprocessing to improve OCR accuracy:
+- Sheet detection, perspective correction and cropping (#263)
 - Deskewing (rotation correction)
+- Shadow reduction (#263)
 - Noise reduction
 - Contrast enhancement
 - Binarization
 - Resolution normalization
+- Legibility / quality assessment (#263)
 """
 
 import io
+import time
 import hashlib
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
@@ -23,13 +27,30 @@ from app.config import settings
 
 @dataclass
 class PreprocessingResult:
-    """Result of image preprocessing."""
+    """Result of image preprocessing.
+
+    ``image`` is what the OCR engine reads; the caller keeps its own reference to the
+    original array (preprocessing never mutates it in place), which is how the original
+    photo survives alongside this result (#263: "preservar a imagem original").
+    """
     image: np.ndarray
     original_size: Tuple[int, int]
     processed_size: Tuple[int, int]
     rotation_angle: float
     image_hash: str
     preprocessing_applied: List[str]
+    # #263: transformation metadata beyond rotation.
+    sheet_cropped: bool = False
+    shadow_reduced: bool = False
+    # #263: quality/legibility. quality_score is the raw Laplacian-variance sharpness
+    # reading (higher = sharper); is_legible is that score and the brightness checked
+    # against the configured floors/ceiling; rejection_reason is set only when not legible.
+    quality_score: float = 0.0
+    is_legible: bool = True
+    rejection_reason: Optional[str] = None
+    # #263: "medir custo e tempo do processamento" - wall-clock cost of this pipeline alone,
+    # separate from the OCR engine's own processing_time_ms (which includes this).
+    duration_ms: float = 0.0
 
 
 class ImagePreprocessor:
@@ -50,6 +71,11 @@ class ImagePreprocessor:
         enable_denoise: bool = True,
         target_dpi: int = 300,
         min_confidence_threshold: float = 0.5,
+        enable_sheet_detection: bool = True,
+        enable_shadow_removal: bool = True,
+        min_sharpness_score: float = 15.0,
+        min_brightness_score: float = 20.0,
+        max_brightness_score: float = 245.0,
     ):
         """
         Initialize the image preprocessor.
@@ -59,11 +85,22 @@ class ImagePreprocessor:
             enable_denoise: Whether to apply noise reduction
             target_dpi: Target DPI for resolution normalization
             min_confidence_threshold: Minimum confidence threshold
+            enable_sheet_detection: Whether to detect the sheet's own edges, perspective-correct
+                and crop to them (#263)
+            enable_shadow_removal: Whether to divide out the page's own illumination (#263)
+            min_sharpness_score: Laplacian-variance floor below which an image is flagged illegible
+            min_brightness_score: mean-brightness floor below which an image is flagged too dark
+            max_brightness_score: mean-brightness ceiling above which an image is flagged too bright
         """
         self.enable_deskew = enable_deskew
         self.enable_denoise = enable_denoise
         self.target_dpi = target_dpi
         self.min_confidence_threshold = min_confidence_threshold
+        self.enable_sheet_detection = enable_sheet_detection
+        self.enable_shadow_removal = enable_shadow_removal
+        self.min_sharpness_score = min_sharpness_score
+        self.min_brightness_score = min_brightness_score
+        self.max_brightness_score = max_brightness_score
 
     def preprocess(
         self,
@@ -80,19 +117,47 @@ class ImagePreprocessor:
         Returns:
             PreprocessingResult with processed image and metadata
         """
+        started_at = time.perf_counter()
         preprocessing_applied = []
         original_size = (image.shape[1], image.shape[0])
         rotation_angle = 0.0
+        sheet_cropped = False
+        shadow_reduced = False
 
-        # Calculate image hash for caching
+        # Calculate image hash for caching (of the original bytes, before any of the
+        # transformations below - a photo retaken at a slightly different angle is a
+        # different submission even if every pixel downstream ends up looking similar).
         image_hash = self._calculate_hash(image)
 
+        working = image
+
+        # #263: find the sheet's own edges and perspective-correct/crop to them before
+        # anything else runs on pixels outside the page (a desk corner, a calculator).
+        # Falls back to the full photo - untouched - when no convincing quadrilateral is
+        # found, so a photo already cropped tight to the page is not damaged by a bad guess.
+        if self.enable_sheet_detection:
+            cropped, sheet_cropped = self._detect_and_crop_sheet(working)
+            if sheet_cropped:
+                working = cropped
+                preprocessing_applied.append("sheet_detection_crop")
+
         # Convert to grayscale if needed
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        if len(working.shape) == 3 and working.shape[2] == 3:
+            gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
             preprocessing_applied.append("grayscale_conversion")
         else:
-            gray = image.copy()
+            gray = working.copy()
+
+        # #263: assess legibility on the image close to how the camera produced it - before
+        # denoise/CLAHE can flatter a genuinely blurred or under/over-exposed photo.
+        quality_score, is_legible, rejection_reason = self._assess_quality(gray)
+
+        # #263: divide out the page's own illumination, so a shadow cast across half the
+        # sheet does not read as darker ink there.
+        if self.enable_shadow_removal:
+            gray = self._reduce_shadows(gray)
+            shadow_reduced = True
+            preprocessing_applied.append("shadow_removal")
 
         # Apply noise reduction
         if self.enable_denoise:
@@ -118,6 +183,7 @@ class ImagePreprocessor:
         processed = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
         processed_size = (processed.shape[1], processed.shape[0])
+        duration_ms = (time.perf_counter() - started_at) * 1000
 
         return PreprocessingResult(
             image=processed,
@@ -126,6 +192,12 @@ class ImagePreprocessor:
             rotation_angle=rotation_angle,
             image_hash=image_hash,
             preprocessing_applied=preprocessing_applied,
+            sheet_cropped=sheet_cropped,
+            shadow_reduced=shadow_reduced,
+            quality_score=quality_score,
+            is_legible=is_legible,
+            rejection_reason=rejection_reason,
+            duration_ms=duration_ms,
         )
 
     def preprocess_for_ocr(self, image: np.ndarray) -> np.ndarray:
@@ -164,6 +236,146 @@ class ImagePreprocessor:
             searchWindowSize=21,
         )
         return denoised
+
+    def _detect_and_crop_sheet(self, image: np.ndarray) -> Tuple[np.ndarray, bool]:
+        """
+        Detect the exam sheet's own edges and perspective-correct/crop to them (#263).
+
+        Looks for the largest four-sided, reasonably convex contour that still covers a
+        meaningful share of the frame. A desk corner, a calculator placed on the sheet, or
+        a photo already cropped tight to the page either fail to produce such a contour or
+        produce one too close to the full frame to be worth warping - either way this backs
+        off to the original image untouched, rather than risk cropping into real content.
+
+        Args:
+            image: Original color (or grayscale) input image
+
+        Returns:
+            Tuple of (cropped-and-warped image, whether a crop was actually applied)
+        """
+        height, width = image.shape[:2]
+        frame_area = float(height * width)
+        if frame_area <= 0:
+            return image, False
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+        edges = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=1)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return image, False
+
+        best_quad: Optional[np.ndarray] = None
+        best_area = 0.0
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            # Below this share of the frame it is not "the sheet" - more likely a shadow
+            # edge, a hole punch, or an object lying on the page.
+            if area < frame_area * 0.2 or area <= best_area:
+                continue
+            perimeter = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+            if len(approx) == 4 and cv2.isContourConvex(approx):
+                best_quad = approx.reshape(4, 2).astype(np.float32)
+                best_area = area
+
+        # A quadrilateral covering nearly the whole frame is the photo's own border, not a
+        # sheet inside it - warping to it would do nothing useful and risks clipping edge text.
+        if best_quad is None or best_area > frame_area * 0.97:
+            return image, False
+
+        ordered = self._order_quad_points(best_quad)
+        (tl, tr, br, bl) = ordered
+        warped_width = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
+        warped_height = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+        if warped_width < 50 or warped_height < 50:
+            return image, False
+
+        destination = np.array([
+            [0, 0],
+            [warped_width - 1, 0],
+            [warped_width - 1, warped_height - 1],
+            [0, warped_height - 1],
+        ], dtype=np.float32)
+        matrix = cv2.getPerspectiveTransform(ordered, destination)
+        warped = cv2.warpPerspective(image, matrix, (warped_width, warped_height))
+        return warped, True
+
+    @staticmethod
+    def _order_quad_points(points: np.ndarray) -> np.ndarray:
+        """Order four corner points as (top-left, top-right, bottom-right, bottom-left).
+
+        ``approxPolyDP`` returns the corners in whatever order it walked the contour, which
+        is not necessarily a consistent winding - warping against an unordered quad can flip
+        or shear the page instead of straightening it.
+        """
+        rect = np.zeros((4, 2), dtype=np.float32)
+        total = points.sum(axis=1)
+        rect[0] = points[np.argmin(total)]  # top-left: smallest x+y
+        rect[2] = points[np.argmax(total)]  # bottom-right: largest x+y
+        diff = points[:, 0] - points[:, 1]
+        rect[1] = points[np.argmax(diff)]  # top-right: largest x-y
+        rect[3] = points[np.argmin(diff)]  # bottom-left: smallest x-y
+        return rect
+
+    def _reduce_shadows(self, image: np.ndarray) -> np.ndarray:
+        """
+        Divide out the page's own illumination, so a shadow across part of the sheet does
+        not read as darker ink there (#263).
+
+        Estimates the background (the paper itself, lit unevenly) with a large-kernel
+        median blur - large enough to erase the thin strokes of text/ink but not the slow
+        gradient of a shadow - then divides the image by that estimate and rescales. This is
+        the standard "divide by a heavily blurred copy of itself" trick for scanned/photographed
+        documents, and it is cheap enough to run on every page.
+
+        Args:
+            image: Grayscale input image
+
+        Returns:
+            Shadow-corrected grayscale image
+        """
+        # Kernel size tracks the image's own scale and must be odd for medianBlur.
+        kernel = max(21, (min(image.shape[:2]) // 15) | 1)
+        background = cv2.medianBlur(image, kernel)
+        # Avoid a division by (near) zero on a fully black background patch.
+        background = np.where(background == 0, 1, background)
+        normalized = (image.astype(np.float32) / background.astype(np.float32)) * 255.0
+        return np.clip(normalized, 0, 255).astype(np.uint8)
+
+    def _assess_quality(self, image: np.ndarray) -> Tuple[float, bool, Optional[str]]:
+        """
+        Score legibility so an unreadable photo is flagged rather than silently OCR'd into
+        nothing with no explanation (#263).
+
+        Sharpness is the variance of the Laplacian - a focused photo has a lot of
+        high-frequency edge content and a high variance; heavy blur (camera shake, a hand
+        moving the sheet) flattens it. Brightness is the plain mean pixel value, which
+        catches an under-lit room or a flash blowing the page out to near-white.
+
+        Args:
+            image: Grayscale input image, read as close to the camera's own output as
+                possible (before denoise/contrast enhancement can mask a real problem)
+
+        Returns:
+            Tuple of (sharpness score, is legible, rejection reason or None)
+        """
+        sharpness = float(cv2.Laplacian(image, cv2.CV_64F).var())
+        brightness = float(image.mean())
+
+        # Brightness first: a page that is too dark or blown out has little to no edge
+        # content either, so it would also read as "blurred" by the sharpness check below -
+        # but that is a symptom of the exposure problem, not an independent focus one, and
+        # the exposure reason is the more actionable (and correct) one to report.
+        if brightness < self.min_brightness_score:
+            return sharpness, False, "too_dark"
+        if brightness > self.max_brightness_score:
+            return sharpness, False, "too_bright"
+        if sharpness < self.min_sharpness_score:
+            return sharpness, False, "blurred"
+        return sharpness, True, None
 
     def _deskew(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
         """
@@ -410,4 +622,9 @@ default_preprocessor = ImagePreprocessor(
     enable_denoise=settings.enable_denoise,
     target_dpi=settings.target_dpi,
     min_confidence_threshold=settings.min_confidence_threshold,
+    enable_sheet_detection=settings.enable_sheet_detection,
+    enable_shadow_removal=settings.enable_shadow_removal,
+    min_sharpness_score=settings.min_sharpness_score,
+    min_brightness_score=settings.min_brightness_score,
+    max_brightness_score=settings.max_brightness_score,
 )
