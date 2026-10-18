@@ -90,10 +90,13 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         sql("DELETE FROM exam_room_participants WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM exam_rooms WHERE statement_id = " + STATEMENT);
         sql("DELETE FROM enrollments WHERE account_id IN (" + STUDENT + "," + OTHER_STUDENT + ")");
+        // Must run before the accounts delete below: enrollment_codes.created_by_account_id is
+        // NOT NULL with ON DELETE SET NULL, so deleting an account that still has a code
+        // referencing it as creator throws a NOT NULL violation instead of cascading.
+        sql("DELETE FROM enrollment_codes WHERE class_id = " + CLASS);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM account_roles WHERE account_id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM accounts WHERE id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
-        sql("DELETE FROM enrollment_codes WHERE class_id = " + CLASS);
         sql("DELETE FROM classes WHERE id = " + CLASS);
         sql("DELETE FROM courses WHERE id = " + COURSE);
         sql("DELETE FROM school_years WHERE id = " + YEAR);

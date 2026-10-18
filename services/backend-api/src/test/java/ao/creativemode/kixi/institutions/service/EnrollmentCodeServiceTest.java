@@ -171,8 +171,12 @@ class EnrollmentCodeServiceTest {
         DatabaseClient.GenericExecuteSpec update = mock(DatabaseClient.GenericExecuteSpec.class);
         when(databaseClient.sql(org.mockito.ArgumentMatchers.contains("UPDATE enrollment_codes")))
                 .thenReturn(update);
-        when(update.bind(eq("code"), eq(expectedCode))).thenReturn(update);
-        when(update.map(any(BiFunction.class))).thenReturn(rows(Mono.empty()));
+        // Bound loosely (not eq(expectedCode)): a mismatched matcher here would make bind()
+        // return Mockito's default null instead of chaining to `update`, and the resulting
+        // NPE from the next call would surface as a raw test error rather than the intended
+        // ApiException.
+        when(update.bind(anyString(), any())).thenReturn(update);
+        when(update.map(any(BiFunction.class))).thenAnswer(invocation -> rows(Mono.empty()));
     }
 
     @SuppressWarnings("unchecked")

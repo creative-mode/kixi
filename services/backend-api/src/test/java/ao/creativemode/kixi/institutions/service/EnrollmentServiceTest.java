@@ -119,6 +119,11 @@ class EnrollmentServiceTest {
 
     @Test
     void selfEnrollWithoutACodeIsRejected() {
+        when(accounts.findById(42L)).thenReturn(Mono.just(activeAccount(42L)));
+        accountHasRoles(42L, 1L, "STUDENT");
+        when(enrollmentCodeService.redeem(null))
+            .thenReturn(Mono.error(ApiException.badRequest("An enrollment code is required")));
+
         StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
