@@ -163,7 +163,7 @@ public class PostFeedRepository {
         return ids.toArray(Long[]::new);
     }
 
-    private static Post rowToPost(io.r2dbc.spi.Row row) {
+    static Post rowToPost(io.r2dbc.spi.Row row) {
         return Post.builder()
                 .id(row.get("id", Long.class))
                 .authorAccountId(row.get("author_account_id", Long.class))
@@ -174,6 +174,7 @@ public class PostFeedRepository {
                 .type(row.get("type", String.class))
                 .title(row.get("title", String.class))
                 .content(row.get("content", String.class))
+                .blocks(row.get("blocks", String.class))
                 .simulationId(row.get("simulation_id", Long.class))
                 .statementTitle(row.get("statement_title", String.class))
                 .schoolName(row.get("school_name", String.class))
