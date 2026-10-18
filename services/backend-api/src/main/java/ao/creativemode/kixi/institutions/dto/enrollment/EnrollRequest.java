@@ -1,15 +1,22 @@
 package ao.creativemode.kixi.institutions.dto.enrollment;
 
-import jakarta.validation.constraints.NotNull;
-
 public record EnrollRequest(
         /**
          * Target account. Null (or equal to the caller) means "myself".
          * Only ADMIN/TEACHER may enroll another account.
          */
         Long accountId,
-        @NotNull(message = "Class is required")
+        /**
+         * Used only when ADMIN/TEACHER enrolls another account; a self-enroll ignores
+         * this and derives its class from {@code code} instead (#255), so a student
+         * cannot pick an arbitrary class by guessing its id.
+         */
         Long classId,
-        @NotNull(message = "School year is required")
-        Long schoolYearId
+        /** Same as {@code classId}: staff-enroll only. */
+        Long schoolYearId,
+        /**
+         * The code a school issued for a class (#255). Required for a self-enroll;
+         * ignored for a staff-enroll of another account.
+         */
+        String code
 ) { }

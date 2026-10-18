@@ -43,6 +43,13 @@ public class Enrollment {
     @Column("status")
     private String status = STATUS_ACTIVE;
 
+    /**
+     * The code (#255) this enrollment was redeemed with, when it was a self-enroll.
+     * Null for a staff-made enrollment, which never goes through a code.
+     */
+    @Column("enrollment_code_id")
+    private Long enrollmentCodeId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -59,6 +66,11 @@ public class Enrollment {
         this.classId = classId;
         this.schoolYearId = schoolYearId;
         this.status = STATUS_ACTIVE;
+    }
+
+    public Enrollment(Long accountId, Long classId, Long schoolYearId, Long enrollmentCodeId) {
+        this(accountId, classId, schoolYearId);
+        this.enrollmentCodeId = enrollmentCodeId;
     }
 
     public void markAsDeleted() {

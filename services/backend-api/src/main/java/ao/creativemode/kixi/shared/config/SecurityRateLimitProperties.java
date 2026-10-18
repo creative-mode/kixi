@@ -22,6 +22,12 @@ public class SecurityRateLimitProperties {
     @Min(1)
     private long uploadWindowSeconds = 60;
 
+    @Min(1)
+    private int enrollmentMaxAttempts = 10;
+
+    @Min(1)
+    private long enrollmentWindowSeconds = 60;
+
     public int getLoginMaxAttempts() {
         return loginMaxAttempts;
     }
@@ -52,5 +58,21 @@ public class SecurityRateLimitProperties {
 
     public void setUploadWindowSeconds(long uploadWindowSeconds) {
         this.uploadWindowSeconds = uploadWindowSeconds;
+    }
+
+    public int getEnrollmentMaxAttempts() {
+        return enrollmentMaxAttempts;
+    }
+
+    public void setEnrollmentMaxAttempts(int enrollmentMaxAttempts) {
+        this.enrollmentMaxAttempts = enrollmentMaxAttempts;
+    }
+
+    public long getEnrollmentWindowSeconds() {
+        return enrollmentWindowSeconds;
+    }
+
+    public void setEnrollmentWindowSeconds(long enrollmentWindowSeconds) {
+        this.enrollmentWindowSeconds = enrollmentWindowSeconds;
     }
 }

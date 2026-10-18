@@ -55,6 +55,20 @@ class ApiAbuseRateLimiterTest {
     }
 
     @Test
+    void rejectsExcessSelfEnrollAttemptsWithRetryAfter() {
+        stubReservation(11, 20L);
+
+        StepVerifier.create(limiter.checkEnrollment(42L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiAbuseRateLimitException.class);
+                    ApiAbuseRateLimitException limited = (ApiAbuseRateLimitException) error;
+                    assertThat(limited.getStatusCode()).isEqualTo(429);
+                    assertThat(limited.getRetryAfterSeconds()).isEqualTo(20L);
+                })
+                .verify();
+    }
+
+    @Test
     void failsClosedWhenRateLimitStorageIsUnavailable() {
         stubCleanup();
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);

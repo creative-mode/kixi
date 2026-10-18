@@ -17,6 +17,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import ao.creativemode.kixi.institutions.dto.enrollment.EnrollRequest;
 import ao.creativemode.kixi.institutions.dto.enrollment.EnrollmentResponse;
 import ao.creativemode.kixi.institutions.service.EnrollmentService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import reactor.core.publisher.Mono;
@@ -27,10 +28,16 @@ public class EnrollmentController {
 
     private final EnrollmentService service;
     private final CurrentAccountService currentAccountService;
+    private final ApiAbuseRateLimiter rateLimiter;
 
-    public EnrollmentController(EnrollmentService service, CurrentAccountService currentAccountService) {
+    public EnrollmentController(
+            EnrollmentService service,
+            CurrentAccountService currentAccountService,
+            ApiAbuseRateLimiter rateLimiter
+    ) {
         this.service = service;
         this.currentAccountService = currentAccountService;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -67,6 +74,7 @@ public class EnrollmentController {
             UriComponentsBuilder uriBuilder
     ) {
         return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+            .flatMap(tuple -> rateLimiter.checkEnrollment(tuple.getT1()).thenReturn(tuple))
             .flatMap(tuple -> service.enroll(tuple.getT1(), tuple.getT2(), request))
             .map(enrollment -> {
                 URI location = uriBuilder

@@ -108,6 +108,11 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
                                 "/api/v1/me", "/api/v1/me/**")
                         .authenticated()
+                        // Enrollment codes (#255): only an ADMIN issues, lists or revokes one.
+                        // The controller already enforces this itself; the rule here is the
+                        // same defense-in-depth every other ADMIN-only tree in this file gets.
+                        .pathMatchers("/api/v1/enrollment-codes", "/api/v1/enrollment-codes/**")
+                        .hasRole("ADMIN")
                         // The AI tutor (issue #114). Every signed-in account may
                         // chat; the service scopes each turn to the caller's own
                         // session and to that session's visible statement. An
