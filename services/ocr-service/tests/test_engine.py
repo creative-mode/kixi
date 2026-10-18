@@ -5,6 +5,7 @@ Comprehensive tests for the OCR processing engine.
 """
 
 import pytest
+import cv2
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
 from PIL import Image
@@ -175,6 +176,126 @@ class TestImagePreprocessor:
 
         assert scale == 1.0
         assert resized.shape == small_image.shape
+
+    # -------------------------------------------------------------------------
+    # #263: sheet detection/crop, shadow reduction, legibility, cost/time.
+    # -------------------------------------------------------------------------
+
+    def test_preprocess_measures_its_own_duration(self, sample_image):
+        """Preprocessing reports its own wall-clock cost (#263)."""
+        preprocessor = ImagePreprocessor()
+        result = preprocessor.preprocess(sample_image)
+
+        assert result.duration_ms >= 0.0
+        assert isinstance(result.duration_ms, float)
+
+    def test_sharp_high_contrast_image_is_legible(self, sample_image):
+        """A sharp image with real content passes the legibility check."""
+        preprocessor = ImagePreprocessor()
+        result = preprocessor.preprocess(sample_image)
+
+        assert result.is_legible is True
+        assert result.rejection_reason is None
+        assert result.quality_score > 0.0
+
+    def test_heavily_blurred_image_is_flagged_illegible(self):
+        """A photo too blurred to read is flagged, not silently fed to the OCR (#263)."""
+        # The same high-contrast content as sample_image, but blurred into mush.
+        img = np.ones((480, 640, 3), dtype=np.uint8) * 255
+        img[50:100, 50:200] = 0
+        img[150:180, 50:300] = 0
+        blurred = cv2.GaussianBlur(img, (99, 99), 30)
+
+        preprocessor = ImagePreprocessor()
+        result = preprocessor.preprocess(blurred)
+
+        assert result.is_legible is False
+        assert result.rejection_reason == "blurred"
+
+    def test_too_dark_image_is_flagged_illegible(self):
+        """A near-black photo (bad lighting) is flagged too dark (#263)."""
+        img = np.full((480, 640, 3), 5, dtype=np.uint8)
+
+        preprocessor = ImagePreprocessor()
+        result = preprocessor.preprocess(img)
+
+        assert result.is_legible is False
+        assert result.rejection_reason == "too_dark"
+
+    def test_too_bright_image_is_flagged_illegible(self):
+        """A near-white, blown-out photo is flagged too bright (#263)."""
+        img = np.full((480, 640, 3), 253, dtype=np.uint8)
+
+        preprocessor = ImagePreprocessor()
+        result = preprocessor.preprocess(img)
+
+        assert result.is_legible is False
+        assert result.rejection_reason == "too_bright"
+
+    def test_shadow_removal_flattens_an_illumination_gradient(self):
+        """A shadow cast across half the page is divided out, not read as darker ink (#263)."""
+        height, width = 400, 400
+        # A linear brightness gradient standing in for an uneven shadow across the sheet.
+        gradient = np.tile(np.linspace(100, 220, width, dtype=np.uint8), (height, 1))
+        gray = gradient.copy()
+        # A few dark "ink" strokes thin enough to survive the background estimate.
+        gray[100:104, 50:350] = 10
+        gray[200:204, 50:350] = 10
+
+        preprocessor = ImagePreprocessor()
+        corrected = preprocessor._reduce_shadows(gray)
+
+        # The left and right halves of the raw gradient differ a lot; after dividing out
+        # the (slowly-varying) background they should be far closer to each other.
+        before_gap = abs(int(gray[:, 10].mean()) - int(gray[:, -10].mean()))
+        after_gap = abs(int(corrected[:, 10].mean()) - int(corrected[:, -10].mean()))
+        assert after_gap < before_gap
+
+    def test_sheet_detection_crops_a_clear_quadrilateral(self):
+        """A sheet photographed with visible margin around it is detected and cropped (#263)."""
+        canvas = np.zeros((600, 800, 3), dtype=np.uint8)  # a dark desk around the sheet
+        cv2.rectangle(canvas, (100, 80), (700, 520), (255, 255, 255), thickness=-1)  # the sheet
+        # Some "text" on the sheet so it is not a featureless rectangle.
+        cv2.rectangle(canvas, (150, 120), (500, 150), (0, 0, 0), thickness=-1)
+
+        preprocessor = ImagePreprocessor()
+        cropped, sheet_cropped = preprocessor._detect_and_crop_sheet(canvas)
+
+        assert sheet_cropped is True
+        # The crop should land close to the sheet's own size, not the full 800x600 canvas.
+        assert cropped.shape[1] < canvas.shape[1]
+        assert cropped.shape[0] < canvas.shape[0]
+
+    def test_sheet_detection_backs_off_when_no_quadrilateral_is_found(self, sample_image):
+        """A photo already cropped tight to the page (no visible edge) is left untouched."""
+        preprocessor = ImagePreprocessor()
+        result, sheet_cropped = preprocessor._detect_and_crop_sheet(sample_image)
+
+        assert sheet_cropped is False
+        assert result is sample_image
+
+    def test_preprocess_reports_sheet_and_shadow_flags(self, sample_image):
+        """The full pipeline surfaces the #263 metadata on its result object."""
+        preprocessor = ImagePreprocessor(enable_sheet_detection=True, enable_shadow_removal=True)
+        result = preprocessor.preprocess(sample_image)
+
+        assert isinstance(result.sheet_cropped, bool)
+        assert result.shadow_reduced is True
+        assert "shadow_removal" in result.preprocessing_applied
+
+    def test_disabling_sheet_detection_and_shadow_removal_skips_them(self, sample_image):
+        preprocessor = ImagePreprocessor(
+            enable_sheet_detection=False,
+            enable_shadow_removal=False,
+            enable_deskew=False,
+            enable_denoise=False,
+        )
+        result = preprocessor.preprocess(sample_image)
+
+        assert result.sheet_cropped is False
+        assert result.shadow_reduced is False
+        assert "shadow_removal" not in result.preprocessing_applied
+        assert "sheet_detection_crop" not in result.preprocessing_applied
 
 
 class TestLoadImageFunctions:

@@ -96,6 +96,31 @@ class Settings(BaseSettings):
     enable_deskew: bool = Field(default=True, description="Enable automatic deskewing")
     enable_denoise: bool = Field(default=True, description="Enable noise reduction")
     target_dpi: int = Field(default=300, description="Target DPI for image processing")
+    enable_sheet_detection: bool = Field(
+        default=True,
+        description="Detect the exam sheet's own edges and perspective-correct/crop to them (#263). "
+                     "Falls back to the full photo when no convincing quadrilateral is found - a photo "
+                     "taken flat against a scanner, or with an object over an edge, should still OCR.",
+    )
+    enable_shadow_removal: bool = Field(
+        default=True,
+        description="Estimate the page's own illumination (a large-kernel background blur) and divide it "
+                     "out, so a shadow across half the page does not read as darker ink there (#263).",
+    )
+    min_sharpness_score: float = Field(
+        default=15.0, ge=0,
+        description="Below this Laplacian-variance score an image is flagged illegible (too blurred to "
+                     "read) rather than silently fed to the OCR, which would otherwise just return "
+                     "nothing with no explanation (#263).",
+    )
+    min_brightness_score: float = Field(
+        default=20.0, ge=0, le=255,
+        description="Below this mean brightness (0-255) an image is flagged illegible as too dark.",
+    )
+    max_brightness_score: float = Field(
+        default=245.0, ge=0, le=255,
+        description="Above this mean brightness (0-255) an image is flagged illegible as blown out / too bright.",
+    )
 
     # Caching
     enable_cache: bool = Field(default=True, description="Enable result caching")
