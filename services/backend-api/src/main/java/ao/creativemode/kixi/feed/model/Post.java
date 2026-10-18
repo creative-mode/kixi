@@ -47,6 +47,10 @@ public class Post {
     @Column("content")
     private String content;
 
+    /** The built post's blocks as JSON (issue #347); null for a plain post. */
+    @Column("blocks")
+    private String blocks;
+
     /** Set on a SIMULATION post: the attempt it publishes and the figures taken from it at publish time. */
     @Column("simulation_id")
     private Long simulationId;
