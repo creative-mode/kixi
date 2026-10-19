@@ -3,6 +3,7 @@ package ao.creativemode.kixi.identity.service;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.teachers.TeacherRequest;
 import ao.creativemode.kixi.identity.dto.teachers.TeacherResponse;
+import ao.creativemode.kixi.identity.dto.users.UserRequest;
 import ao.creativemode.kixi.identity.model.Teacher;
 import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
@@ -26,17 +27,20 @@ public class TeacherService {
     private final RoleRepository roleRepository;
     private final AccountService accountService;
     private final AccountRoleService accountRoleService;
+    private final UserService userService;
 
     public TeacherService(
         TeacherRepository repository,
         RoleRepository roleRepository,
         AccountService accountService,
-        AccountRoleService accountRoleService
+        AccountRoleService accountRoleService,
+        UserService userService
     ) {
         this.repository = repository;
         this.roleRepository = roleRepository;
         this.accountService = accountService;
         this.accountRoleService = accountRoleService;
+        this.userService = userService;
     }
 
     public Flux<TeacherResponse> findAllActive() {
@@ -145,6 +149,13 @@ public class TeacherService {
                             .flatMap(created ->
                                 accountRoleService
                                     .assignRoleToAccount(created.id(), role.getId())
+                                    // A conta por si só não abre /profiles/accounts/{id}: esse perfil lê-se
+                                    // sempre por um User (é o que o auto-registo e o login Google criam). Sem
+                                    // este User o professor fica com conta e sem perfil — o "página não existe"
+                                    // ao abrir o perfil de um professor a partir da escola.
+                                    .then(userService.create(
+                                        new UserRequest(created.id(), teacher.getFirstName(), teacher.getLastName(), teacher.getPhoto())
+                                    ))
                                     .then(Mono.defer(() -> {
                                         teacher.setAccountId(created.id());
                                         return repository.save(teacher);

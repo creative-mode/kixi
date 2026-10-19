@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 import ao.creativemode.kixi.identity.dto.accounts.AccountRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
 import ao.creativemode.kixi.identity.dto.teachers.TeacherRequest;
+import ao.creativemode.kixi.identity.dto.users.UserRequest;
+import ao.creativemode.kixi.identity.dto.users.UserResponse;
 import ao.creativemode.kixi.identity.model.Role;
 import ao.creativemode.kixi.identity.model.Teacher;
 import ao.creativemode.kixi.identity.repository.RoleRepository;
@@ -29,6 +31,7 @@ class TeacherServiceTest {
     private RoleRepository roleRepository;
     private AccountService accountService;
     private AccountRoleService accountRoleService;
+    private UserService userService;
     private TeacherService service;
 
     @BeforeEach
@@ -37,16 +40,19 @@ class TeacherServiceTest {
         roleRepository = mock(RoleRepository.class);
         accountService = mock(AccountService.class);
         accountRoleService = mock(AccountRoleService.class);
-        service = new TeacherService(repository, roleRepository, accountService, accountRoleService);
+        userService = mock(UserService.class);
+        service = new TeacherService(repository, roleRepository, accountService, accountRoleService, userService);
     }
 
     @Test
-    void grantAccessCreatesAccountAssignsTeacherRoleAndLinksIt() {
+    void grantAccessCreatesAccountAssignsTeacherRoleLinksItAndOpensItsProfile() {
         AccountRequest request = new AccountRequest("ana.silva", "ana@itel.ao", "password123");
         when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(teacher(1L, null)));
         when(roleRepository.findByNameAndDeletedAtIsNull("TEACHER")).thenReturn(Mono.just(role(7L, "TEACHER")));
         when(accountService.create(request)).thenReturn(Mono.just(accountResponse(50L)));
         when(accountRoleService.assignRoleToAccount(50L, 7L)).thenReturn(Mono.empty());
+        when(userService.create(any(UserRequest.class)))
+                .thenReturn(Mono.just(new UserResponse(1L, 50L, "Ana", "Silva", null, null, null, null)));
         when(repository.save(any(Teacher.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
@@ -58,6 +64,13 @@ class TeacherServiceTest {
                 .verifyComplete();
 
         verify(accountRoleService).assignRoleToAccount(50L, 7L);
+        // #<bug>: sem este User, /profiles/accounts/{id} do professor dava 404 — a conta
+        // existia mas o perfil lia-se sempre de `users`, nunca de `teachers`.
+        ArgumentCaptor<UserRequest> userRequest = ArgumentCaptor.forClass(UserRequest.class);
+        verify(userService).create(userRequest.capture());
+        assertThat(userRequest.getValue().accountId()).isEqualTo(50L);
+        assertThat(userRequest.getValue().firstName()).isEqualTo("Ana");
+        assertThat(userRequest.getValue().lastName()).isEqualTo("Silva");
     }
 
     @Test
