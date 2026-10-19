@@ -12,6 +12,8 @@ import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse.Insti
 import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse.SchoolYearRef;
 import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse.SubjectRef;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.AcademicResultsReader;
+import ao.creativemode.kixi.shared.service.AcademicResultsReader.Result;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -31,22 +33,23 @@ import reactor.core.publisher.Mono;
  * Results are a different thing: {@link #historyOf} takes only the caller's own account id, there
  * is no route that takes another one, and administrators get no exception.</p>
  *
- * <p><b>Which year a result belongs to.</b> {@code simulations.school_year_id} when the simulation
- * has one, else the statement's school year. A simulation of neither is in no year and is left
- * out. Only finished simulations count.</p>
- *
- * <p>Reads the simulation tables with SQL rather than through the simulations module, which
- * institutions may not depend on.</p>
+ * <p>Results come through {@link AcademicResultsReader}, whose rules for which school year a
+ * result belongs to are documented there; the SQL over the simulation tables lives in the
+ * simulations module, which institutions may not depend on.</p>
  */
 @Service
 public class ExperienceService {
 
     private final DatabaseClient database;
     private final PersonProfileService people;
+    private final AcademicResultsReader resultsReader;
 
-    public ExperienceService(DatabaseClient database, PersonProfileService people) {
+    public ExperienceService(
+        DatabaseClient database, PersonProfileService people, AcademicResultsReader resultsReader
+    ) {
         this.database = database;
         this.people = people;
+        this.resultsReader = resultsReader;
     }
 
     /** The timeline of {@code accountId}, as {@code viewer} may see it. */
@@ -178,45 +181,12 @@ public class ExperienceService {
                 new ClassRef(row.get("class_id", Long.class), row.get("class_code", String.class), row.get("grade", Integer.class))})
             .one()
             .switchIfEmpty(Mono.error(ApiException.notFound("No academic history for that school year")))
-            .flatMap(base -> results(accountId, schoolYearId).map(results -> {
+            .flatMap(base -> resultsReader.finishedIn(accountId, schoolYearId).map(results -> {
                 List<Result> all = results;
                 return new AcademicHistoryResponse(
                     (SchoolYearRef) base[0], (InstitutionRef) base[1], (ClassRef) base[2],
                     subjectsOf(all), examsOf(all), totalsOf(all));
             }));
-    }
-
-    private record Result(
-            Long id, Long subjectId, String subject, String title, Double score, Double max,
-            OffsetDateTime date, boolean inRoom) {
-
-        Double percent() {
-            return score == null || max == null || max <= 0 ? null : Math.round(score / max * 10000.0) / 100.0;
-        }
-    }
-
-    private Mono<List<Result>> results(Long accountId, Long schoolYearId) {
-        return database.sql("""
-                SELECT s.id, st.subject_id, sub.name AS subject, st.title, s.final_score,
-                       st.total_max_score, s.finished_at, s.exam_room_id
-                  FROM simulations s
-                  JOIN statements st ON st.id = s.statement_id
-                  LEFT JOIN subjects sub ON sub.id = st.subject_id
-                 WHERE s.account_id = :account AND s.deleted_at IS NULL AND s.status = 'FINISHED'
-                   AND COALESCE(s.school_year_id, st.school_year_id) = :year
-                 ORDER BY s.finished_at, s.id
-                """)
-            .bind("account", accountId).bind("year", schoolYearId)
-            .map(row -> new Result(
-                row.get("id", Long.class), row.get("subject_id", Long.class), row.get("subject", String.class),
-                row.get("title", String.class),
-                row.get("final_score", java.math.BigDecimal.class) == null ? null
-                    : row.get("final_score", java.math.BigDecimal.class).doubleValue(),
-                row.get("total_max_score", java.math.BigDecimal.class) == null ? null
-                    : row.get("total_max_score", java.math.BigDecimal.class).doubleValue(),
-                row.get("finished_at", OffsetDateTime.class),
-                row.get("exam_room_id", Long.class) != null))
-            .all().collectList();
     }
 
     static List<SubjectResult> subjectsOf(List<Result> results) {
