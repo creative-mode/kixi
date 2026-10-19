@@ -62,6 +62,11 @@ class PersonProfileServiceTest {
         when(users.findByAccountIdAndDeletedAtIsNull(TARGET_ACCOUNT)).thenReturn(Flux.just(target));
         when(users.findByAccountIdAndDeletedAtIsNull(VIEWER_ACCOUNT)).thenReturn(Flux.just(viewer));
         when(teachers.findByAccountIdAndDeletedAtIsNull(any())).thenReturn(Mono.empty());
+        // schoolIdsOfAccount() lê sempre teacherLinks por teacher.getId(), mesmo quando o alvo é
+        // aluno (o resultado fica vazio porque `teachers` não devolve nada) — sem este default,
+        // um teste que estabeleça um professor (com id nulo, por omissão) dá
+        // NullPointerException("mapper returned a null Publisher") em vez de Flux vazio.
+        when(teacherLinks.findAllByTeacherIdAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(TARGET_USER)).thenReturn(Flux.just(link(SCHOOL)));
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(VIEWER_USER)).thenReturn(Flux.just(link(SCHOOL)));
 
@@ -91,6 +96,7 @@ class PersonProfileServiceTest {
 
     private static Teacher teacher(String specialty) {
         Teacher teacher = new Teacher();
+        teacher.setId(50L);
         teacher.setAccountId(TARGET_ACCOUNT);
         teacher.setSpecialty(specialty);
         return teacher;
