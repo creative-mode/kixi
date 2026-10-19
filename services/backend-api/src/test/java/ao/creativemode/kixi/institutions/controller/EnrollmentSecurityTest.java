@@ -58,6 +58,9 @@ class EnrollmentSecurityTest {
     private MeService meService;
 
     @MockBean
+    private ao.creativemode.kixi.institutions.service.ExperienceService experienceService;
+
+    @MockBean
     private ApiAbuseRateLimiter rateLimiter;
 
     @BeforeEach
