@@ -7,6 +7,7 @@ import ao.creativemode.kixi.institutions.dto.experience.AcademicHistoryResponse;
 import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.time.Duration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -61,8 +62,18 @@ class ExperiencePostgresTest {
         registry.add("spring.flyway.password", () -> password);
     }
 
+    @AfterEach
+    void leaveNothingBehind() {
+        clean();
+    }
+
     @BeforeEach
     void world() {
+        clean();
+        populate();
+    }
+
+    private void clean() {
         String accounts = "982001,982002,982003,982004,982005";
         sql("DELETE FROM simulations WHERE account_id IN (" + accounts + ")");
         sql("DELETE FROM exam_rooms WHERE id BETWEEN 982800 AND 982899");
@@ -81,11 +92,14 @@ class ExperiencePostgresTest {
         sql("DELETE FROM school_years WHERE id IN (" + Y24 + "," + Y25 + ")");
         sql("DELETE FROM accounts WHERE id IN (" + accounts + ")");
 
+    }
+
+    private void populate() {
         for (long id : new long[] {ANA, BRUNO, CARLA, DINO, NOBODY}) {
             sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active, created_at, updated_at) "
                     + "VALUES (" + id + ", 'exp-" + id + "', 'exp-" + id + "@example.com', 'x', true, true, now(), now())");
         }
-        sql("INSERT INTO school_years (id, start_year, end_year) VALUES (" + Y24 + ", 2090, 2091), (" + Y25 + ", 2091, 2092)");
+        sql("INSERT INTO school_years (id, start_year, end_year) VALUES (" + Y24 + ", 3301, 3302), (" + Y25 + ", 3302, 3303)");
         for (long[] u : new long[][] {{982101, ANA}, {982102, BRUNO}, {982104, DINO}, {982105, NOBODY}}) {
             sql("INSERT INTO users (id, account_id, first_name, last_name) VALUES (" + u[0] + ", " + u[1] + ", 'U" + u[1] + "', 'Teste')");
         }
@@ -112,7 +126,7 @@ class ExperiencePostgresTest {
         assertThat(r.role()).isEqualTo("STUDENT");
         assertThat(r.restricted()).isFalse();
         assertThat(r.entries()).hasSize(2);
-        assertThat(r.entries().get(0).schoolYear().label()).isEqualTo("2091/2092");
+        assertThat(r.entries().get(0).schoolYear().label()).isEqualTo("3302/3303");
         assertThat(r.entries().get(0).institution().name()).isEqualTo("Escola B");
         assertThat(r.entries().get(0).course().name()).isEqualTo("Informática");
         assertThat(r.entries().get(0).classes()).extracting(c -> c.name()).containsExactly("11B");
@@ -168,7 +182,7 @@ class ExperiencePostgresTest {
         enroll(BRUNO, 982402, Y25);
         statement(982601, 982701, "Teste de Matemática", 20, Y25);
         statement(982602, 982702, "Teste de Física", 20, Y25);
-        statement(982603, 982701, "Exame de 2090", 20, Y24);
+        statement(982603, 982701, "Exame de 3301", 20, Y24);
         simulation(ANA, 982601, null, 10, "FINISHED", null);
         simulation(ANA, 982601, null, 15, "FINISHED", 1L);
         simulation(ANA, 982602, null, 20, "FINISHED", null);
@@ -178,7 +192,7 @@ class ExperiencePostgresTest {
 
         AcademicHistoryResponse h = service.historyOf(ANA, Y25).block(WAIT);
 
-        assertThat(h.schoolYear().label()).isEqualTo("2091/2092");
+        assertThat(h.schoolYear().label()).isEqualTo("3302/3303");
         assertThat(h.institution().name()).isEqualTo("Escola B");
         assertThat(h.schoolClass().name()).isEqualTo("11B");
         assertThat(h.totals().simulations()).isEqualTo(3);
@@ -219,6 +233,34 @@ class ExperiencePostgresTest {
         assertThat(h.exams()).isEmpty();
         assertThat(h.totals().simulations()).isZero();
         assertThat(h.totals().average()).isNull();
+    }
+
+    @Test
+    void anOldResultWithNoYearFallsBackToTheSchoolYearRunningWhenItFinished() {
+        enroll(ANA, 982401, Y24);
+        enroll(ANA, 982402, Y25);
+        sql("INSERT INTO statements (id, title, subject_id, total_max_score) VALUES (982610, 'Antigo', 982701, 20)");
+        oldResult(ANA, 982610, 10, "3301-10-15 10:00:00+00");
+        oldResult(ANA, 982610, 12, "3302-03-01 10:00:00+00");
+        oldResult(ANA, 982610, 16, "3302-10-01 10:00:00+00");
+
+        assertThat(service.historyOf(ANA, Y24).block(WAIT).totals().simulations()).isEqualTo(2);
+        assertThat(service.historyOf(ANA, Y25).block(WAIT).totals().simulations()).isEqualTo(1);
+    }
+
+    @Test
+    void aResultWithItsOwnYearIsNotMovedByTheFinishDate() {
+        enroll(ANA, 982401, Y24);
+        statement(982601, 982701, "Teste", 20, Y24);
+        sql("INSERT INTO simulations (account_id, statement_id, school_year_id, final_score, status, finished_at) VALUES ("
+                + ANA + ", 982601, " + Y24 + ", 10, 'FINISHED', '3302-10-01 10:00:00+00')");
+
+        assertThat(service.historyOf(ANA, Y24).block(WAIT).totals().simulations()).isEqualTo(1);
+    }
+
+    private void oldResult(long account, long statement, double score, String finishedAt) {
+        sql("INSERT INTO simulations (account_id, statement_id, final_score, status, finished_at) VALUES ("
+                + account + "," + statement + "," + score + ",'FINISHED','" + finishedAt + "')");
     }
 
     private void enroll(long account, long classId, long year) {
