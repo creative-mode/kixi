@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ao.creativemode.kixi.identity.model.Teacher;
 import ao.creativemode.kixi.identity.model.User;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
@@ -61,6 +62,11 @@ class PersonProfileServiceTest {
         when(users.findByAccountIdAndDeletedAtIsNull(TARGET_ACCOUNT)).thenReturn(Flux.just(target));
         when(users.findByAccountIdAndDeletedAtIsNull(VIEWER_ACCOUNT)).thenReturn(Flux.just(viewer));
         when(teachers.findByAccountIdAndDeletedAtIsNull(any())).thenReturn(Mono.empty());
+        // schoolIdsOfAccount() lê sempre teacherLinks por teacher.getId(), mesmo quando o alvo é
+        // aluno (o resultado fica vazio porque `teachers` não devolve nada) — sem este default,
+        // um teste que estabeleça um professor (com id nulo, por omissão) dá
+        // NullPointerException("mapper returned a null Publisher") em vez de Flux vazio.
+        when(teacherLinks.findAllByTeacherIdAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(TARGET_USER)).thenReturn(Flux.just(link(SCHOOL)));
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(VIEWER_USER)).thenReturn(Flux.just(link(SCHOOL)));
 
@@ -88,6 +94,14 @@ class PersonProfileServiceTest {
         return link;
     }
 
+    private static Teacher teacher(String specialty) {
+        Teacher teacher = new Teacher();
+        teacher.setId(50L);
+        teacher.setAccountId(TARGET_ACCOUNT);
+        teacher.setSpecialty(specialty);
+        return teacher;
+    }
+
     @Test
     void publicProfileShowsEverythingToAnyone() {
         when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
@@ -101,6 +115,37 @@ class PersonProfileServiceTest {
                 assertThat(profile.verified()).isTrue();
                 assertThat(profile.level()).isEqualTo(4);
                 assertThat(profile.badges()).containsExactly("Primeira prova");
+            })
+            .verifyComplete();
+    }
+
+    @Test
+    void teacherProfileShowsSpecialtyInsteadOfGamificationAndNeverReadsStats() {
+        when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
+        when(teachers.findByAccountIdAndDeletedAtIsNull(TARGET_ACCOUNT)).thenReturn(Mono.just(teacher("Matemática")));
+
+        StepVerifier.create(service.person(VIEWER_ACCOUNT, false, TARGET_USER))
+            .assertNext(profile -> {
+                assertThat(profile.kind()).isEqualTo("teacher");
+                assertThat(profile.specialty()).isEqualTo("Matemática");
+                assertThat(profile.level()).isNull();
+                assertThat(profile.xp()).isNull();
+                assertThat(profile.badges()).isEmpty();
+            })
+            .verifyComplete();
+        verify(stats, never()).read(any());
+    }
+
+    @Test
+    void restrictedTeacherProfileHasNoSpecialtyEither() {
+        when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("private"));
+        when(teachers.findByAccountIdAndDeletedAtIsNull(TARGET_ACCOUNT)).thenReturn(Mono.just(teacher("Matemática")));
+
+        StepVerifier.create(service.person(VIEWER_ACCOUNT, false, TARGET_USER))
+            .assertNext(profile -> {
+                assertThat(profile.restricted()).isTrue();
+                assertThat(profile.kind()).isEqualTo("teacher");
+                assertThat(profile.specialty()).isNull();
             })
             .verifyComplete();
     }
