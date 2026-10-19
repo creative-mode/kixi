@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.institutions.service;
 
+import ao.creativemode.kixi.identity.model.Teacher;
 import ao.creativemode.kixi.identity.model.User;
 import ao.creativemode.kixi.identity.repository.TeacherRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
@@ -15,6 +16,7 @@ import ao.creativemode.kixi.institutions.repository.ProfileSettingRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.PublicStatsReader;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -62,11 +64,11 @@ public class PersonProfileService {
             .flatMap(user -> Mono.zip(
                     settings.findVisibility(userId).defaultIfEmpty(ProfileSetting.SCHOOL),
                     schoolIdsOfAccount(user.getAccountId()),
-                    isTeacher(user.getAccountId()))
+                    teacherOf(user.getAccountId()))
                 .flatMap(facts -> {
                     String visibility = facts.getT1();
                     Set<Long> theirSchools = facts.getT2();
-                    boolean teacher = facts.getT3();
+                    Teacher teacher = facts.getT3().orElse(null);
                     boolean owner = user.getAccountId() != null && user.getAccountId().equals(viewerAccountId);
                     return canSeeAll(owner, viewerIsAdmin, visibility, theirSchools, viewerAccountId)
                         .flatMap(all -> all
@@ -117,36 +119,58 @@ public class PersonProfileService {
             .map(viewerSchools -> viewerSchools.stream().anyMatch(theirSchools::contains));
     }
 
-    private Mono<PersonProfile> full(User user, String visibility, boolean teacher, Set<Long> schoolIds) {
+    private Mono<PersonProfile> full(User user, String visibility, Teacher teacher, Set<Long> schoolIds) {
         Mono<List<InstitutionCard>> schools = institutions
             .findAllById(schoolIds)
             .filter(i -> i.getDeletedAt() == null)
             .map(ProfileService::toCard)
             .collectList();
-        Mono<PublicStatsReader.PublicStats> progress = stats.read(user.getAccountId());
 
+        // Um professor nunca ganha XP nem medalhas (são do aluno), por isso nem se lê a gamificação:
+        // em vez disso traz-se a especialidade, o atributo que é mesmo dele.
+        if (teacher != null) {
+            return schools.map(resolved -> new PersonProfile(
+                user.getId(),
+                displayName(user),
+                user.getPhoto(),
+                "teacher",
+                resolved.stream().anyMatch(InstitutionCard::verified),
+                false,
+                visibility,
+                resolved,
+                null,
+                null,
+                List.of(),
+                teacher.getSpecialty()));
+        }
+
+        Mono<PublicStatsReader.PublicStats> progress = stats.read(user.getAccountId());
         return Mono.zip(schools, progress).map(parts -> new PersonProfile(
             user.getId(),
             displayName(user),
             user.getPhoto(),
-            teacher ? "teacher" : "student",
+            "student",
             parts.getT1().stream().anyMatch(InstitutionCard::verified),
             false,
             visibility,
             parts.getT1(),
             parts.getT2().level(),
             parts.getT2().xp(),
-            parts.getT2().badges()));
+            parts.getT2().badges(),
+            null));
     }
 
-    private PersonProfile restricted(User user, String visibility, boolean teacher) {
+    private PersonProfile restricted(User user, String visibility, Teacher teacher) {
         return new PersonProfile(
-            user.getId(), displayName(user), user.getPhoto(), teacher ? "teacher" : "student",
-            false, true, visibility, List.of(), null, null, List.of());
+            user.getId(), displayName(user), user.getPhoto(), teacher != null ? "teacher" : "student",
+            false, true, visibility, List.of(), null, null, List.of(), null);
     }
 
-    private Mono<Boolean> isTeacher(Long accountId) {
-        return teachers.findByAccountIdAndDeletedAtIsNull(accountId).hasElement();
+    private Mono<Optional<Teacher>> teacherOf(Long accountId) {
+        if (accountId == null) {
+            return Mono.just(Optional.empty());
+        }
+        return teachers.findByAccountIdAndDeletedAtIsNull(accountId).map(Optional::of).defaultIfEmpty(Optional.empty());
     }
 
     /** The schools an account belongs to, as a student (any of its users) or as a teacher. */
