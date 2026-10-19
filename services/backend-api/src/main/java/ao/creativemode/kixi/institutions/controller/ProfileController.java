@@ -4,6 +4,8 @@ import ao.creativemode.kixi.institutions.dto.profile.InstitutionCard;
 import ao.creativemode.kixi.institutions.dto.profile.InstitutionProfile;
 import ao.creativemode.kixi.institutions.dto.profile.PersonProfile;
 import ao.creativemode.kixi.institutions.dto.profile.VisibilityRequest;
+import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse;
+import ao.creativemode.kixi.institutions.service.ExperienceService;
 import ao.creativemode.kixi.institutions.service.PersonProfileService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
@@ -32,11 +34,14 @@ public class ProfileController {
 
     private final ProfileService service;
     private final PersonProfileService people;
+    private final ExperienceService experience;
     private final CurrentAccountService currentAccount;
 
     public ProfileController(
-        ProfileService service, PersonProfileService people, CurrentAccountService currentAccount
+        ProfileService service, PersonProfileService people, ExperienceService experience,
+        CurrentAccountService currentAccount
     ) {
+        this.experience = experience;
         this.service = service;
         this.people = people;
         this.currentAccount = currentAccount;
@@ -55,6 +60,18 @@ public class ProfileController {
     public Mono<ResponseEntity<PersonProfile>> personByAccount(@PathVariable Long accountId) {
         return Mono.zip(currentAccount.requiredAccountId(), currentAccount.hasAnyRole("ADMIN"))
             .flatMap(who -> people.personByAccount(who.getT1(), who.getT2(), accountId))
+            .map(ResponseEntity::ok);
+    }
+
+    /**
+     * «Experiência» of a person (schools, courses, classes by school year; subjects for a teacher).
+     * Public to whoever may see the profile; a private profile answers {@code restricted: true}
+     * with no entries. Never carries grades: those are {@code GET /api/v1/me/academic-history}.
+     */
+    @GetMapping("/accounts/{accountId}/experience")
+    public Mono<ResponseEntity<ExperienceResponse>> experienceOf(@PathVariable Long accountId) {
+        return Mono.zip(currentAccount.requiredAccountId(), currentAccount.hasAnyRole("ADMIN"))
+            .flatMap(who -> experience.experience(who.getT1(), who.getT2(), accountId))
             .map(ResponseEntity::ok);
     }
 
