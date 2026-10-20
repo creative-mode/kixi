@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import reactor.core.publisher.Mono;
@@ -49,23 +50,34 @@ public class QuestionImageFileController {
     }
 
     @GetMapping("/uploads/questions/{questionId}/{file}")
-    public Mono<ResponseEntity<byte[]>> serve(@PathVariable String questionId, @PathVariable String file) {
+    public Mono<ResponseEntity<byte[]>> serve(@PathVariable String questionId, @PathVariable String file,
+                                              @RequestParam(name = "w", required = false) Integer width) {
         if (!questionId.matches("\\d{1,18}")) {
             return Mono.just(ResponseEntity.notFound().build());
         }
-        return read("questions", questionId, file);
+        return read("questions", questionId, file, width);
     }
 
     /** The photos and logos chosen from the device: {@code /uploads/images/{avatar|logo}/{file}}. */
     @GetMapping("/uploads/images/{kind}/{file}")
-    public Mono<ResponseEntity<byte[]>> serveImage(@PathVariable String kind, @PathVariable String file) {
+    public Mono<ResponseEntity<byte[]>> serveImage(@PathVariable String kind, @PathVariable String file,
+                                                   @RequestParam(name = "w", required = false) Integer width) {
         if (!kind.equals("avatar") && !kind.equals("logo") && !kind.equals("post")) {
             return Mono.just(ResponseEntity.notFound().build());
         }
-        return read("images", kind, file);
+        return read("images", kind, file, width);
     }
 
-    private Mono<ResponseEntity<byte[]>> read(String area, String folder, String file) {
+    /** The resized copy when a width was asked for and could be made; the original when not (never an error). */
+    private Path variantOf(String area, String folder, String file, Path original, Integer width) {
+        try {
+            return ImageVariants.resolve(root, area, folder, file, original, width);
+        } catch (IOException | RuntimeException failed) {
+            return original;
+        }
+    }
+
+    private Mono<ResponseEntity<byte[]>> read(String area, String folder, String file, Integer width) {
         if (!FILE.matcher(file).matches() || file.contains("..")) {
             return Mono.just(ResponseEntity.notFound().build());
         }
@@ -80,7 +92,7 @@ public class QuestionImageFileController {
                                 .contentType(TYPES.getOrDefault(extension, MediaType.APPLICATION_OCTET_STREAM))
                                 .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable())
                                 .header("X-Content-Type-Options", "nosniff")
-                                .body(Files.readAllBytes(target));
+                                .body(Files.readAllBytes(variantOf(area, folder, file, target, width)));
                     } catch (IOException missing) {
                         return ResponseEntity.<byte[]>notFound().build();
                     }
