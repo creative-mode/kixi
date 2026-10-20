@@ -9,7 +9,7 @@ import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple, Callable
 import hashlib
 import re
@@ -27,6 +27,7 @@ from app.ocr.preprocessing import (
 )
 from app.ocr.ink import is_handwriting
 from app.ocr.layout import LayoutDetector, LayoutRegion
+from app.ocr.formula_model import FormulaImageRecognizer
 from app.ocr.postprocessing import (
     OCRPostprocessor,
     TextBlock,
@@ -36,6 +37,8 @@ from app.ocr.postprocessing import (
     UnmappedContent,
     Warning,
     detect_language,
+    formula_prediction_key,
+    FormulaPredictions,
 )
 
 import structlog
@@ -74,6 +77,7 @@ class PageOcrContext:
     layout_regions: Optional[List[LayoutRegion]]
     width: int
     height: int
+    formula_predictions: FormulaPredictions = field(default_factory=dict)
 
 
 @dataclass
@@ -181,6 +185,7 @@ class OCREngine:
         self._fallback_ocr = None
         self._vl = None
         self._layout = LayoutDetector(use_gpu=use_gpu, enable_mkldnn=settings.ocr_enable_mkldnn)
+        self._formula_recognizer = FormulaImageRecognizer()
         self._initialized = False
         self._executor = ThreadPoolExecutor(max_workers=settings.workers)
 
@@ -199,6 +204,46 @@ class OCREngine:
         self.postprocessor = OCRPostprocessor(
             min_confidence_threshold=settings.min_confidence_threshold,
         )
+
+    def _recognize_formula_regions(
+        self,
+        image: np.ndarray,
+        regions: Optional[List[LayoutRegion]],
+        request_id: str,
+        page_index: int,
+    ) -> FormulaPredictions:
+        if not settings.ocr_formula_latex or not settings.ocr_formula_model_enabled or not regions:
+            return {}
+        candidates = [
+            region for region in regions
+            if region.kind == "formula" and not region.handwritten
+            and region.score >= settings.ocr_layout_min_score
+        ]
+        crops = []
+        usable = []
+        height, width = image.shape[:2]
+        for region in candidates:
+            x1, y1, x2, y2 = (int(round(value)) for value in region.bbox)
+            pad = max(4, int(round(min(max(1, x2 - x1), max(1, y2 - y1)) * 0.06)))
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(width, x2 + pad), min(height, y2 + pad)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crops.append(image[y1:y2, x1:x2].copy())
+            usable.append(region)
+        recognized = self._formula_recognizer.recognize(crops)
+        predictions = {
+            formula_prediction_key(page_index, region.bbox): latex
+            for region, latex in zip(usable, recognized)
+            if latex
+        }
+        logger.info(
+            "Formula regions recognized",
+            request_id=request_id,
+            candidates=len(usable),
+            recognized=len(predictions),
+        )
+        return predictions
 
     def initialize(self) -> None:
         """
@@ -607,6 +652,15 @@ class OCREngine:
                 analysis_image = processed_image
             text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
 
+            formula_started = time.perf_counter()
+            formula_predictions = self._recognize_formula_regions(
+                analysis_image,
+                layout,
+                request_id,
+                page_index,
+            )
+            formula_recognition_ms = (time.perf_counter() - formula_started) * 1000
+
             logger.debug(
                 "OCR complete",
                 request_id=request_id,
@@ -619,11 +673,16 @@ class OCREngine:
             # Detect language
             full_text = " ".join(b.text for b in text_blocks)
             main_language = detect_language(full_text) if full_text else self.lang
-            ocr_ms = (time.perf_counter() - ocr_started) * 1000
+            ocr_ms = max(0.0, (time.perf_counter() - ocr_started) * 1000 - formula_recognition_ms)
 
             # Postprocess to extract structured data. The boxes are in the preprocessed image's frame (deskew
             # can grow the canvas by a few pixels), so that is the size the crops are scaled from.
-            def interpret(blocks: List[TextBlock], frame: np.ndarray = analysis_image, regions=layout):
+            def interpret(
+                blocks: List[TextBlock],
+                frame: np.ndarray = analysis_image,
+                regions=layout,
+                predictions: FormulaPredictions = formula_predictions,
+            ):
                 return self.postprocessor.process(
                     blocks,
                     page_count=1,
@@ -632,6 +691,7 @@ class OCREngine:
                     layout_regions=None if regions is None else {page_index: regions},
                     formula_images=settings.ocr_formula_images,
                     recognize_formulas=settings.ocr_formula_latex,
+                    formula_predictions=predictions,
                 )
 
             parsing_started = time.perf_counter()
@@ -653,14 +713,26 @@ class OCREngine:
                 retry_blocks = self._parse_ocr_results(self._run_ocr(image, fallback=True), page_index)
                 retry_layout = self._detect_layout(image, request_id)
                 retry_blocks, retry_layout = self._mark_handwriting(image, image, retry_blocks, retry_layout)
-                ocr_ms += (time.perf_counter() - fallback_ocr_started) * 1000
+                retry_formula_started = time.perf_counter()
+                retry_formula_predictions = self._recognize_formula_regions(
+                    image,
+                    retry_layout,
+                    request_id,
+                    page_index,
+                )
+                retry_formula_ms = (time.perf_counter() - retry_formula_started) * 1000
+                formula_recognition_ms += retry_formula_ms
+                ocr_ms += max(0.0, (time.perf_counter() - fallback_ocr_started) * 1000 - retry_formula_ms)
                 fallback_parse_started = time.perf_counter()
-                retry = interpret(retry_blocks, image, retry_layout)
+                retry = interpret(retry_blocks, image, retry_layout, retry_formula_predictions)
                 parsing_ms += time.perf_counter() - fallback_parse_started
                 if len(retry[1]) > len(questions) or (
                     len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
                 ):
                     text_blocks = retry_blocks
+                    layout = retry_layout
+                    analysis_image = image
+                    formula_predictions = retry_formula_predictions
                     metadata, questions, images_to_upload, unmapped, warnings = retry
 
             # Calculate confidence
@@ -722,6 +794,7 @@ class OCREngine:
                 timings={
                     "preprocessingMs": round(preprocessing_ms, 1),
                     "ocrMs": round(ocr_ms, 1),
+                    "formulaRecognitionMs": round(formula_recognition_ms, 1),
                     "parsingMs": round(parsing_ms * 1000, 1),
                     "totalMs": round((time.perf_counter() - start_time) * 1000, 1),
                 },
@@ -730,6 +803,7 @@ class OCREngine:
                     source_file_index=source_file_index,
                     text_blocks=list(text_blocks),
                     layout_regions=list(layout) if layout is not None else None,
+                    formula_predictions=formula_predictions,
                     width=int(analysis_image.shape[1]),
                     height=int(analysis_image.shape[0]),
                 ),
@@ -863,6 +937,7 @@ class OCREngine:
         page_timings: Dict[str, float] = {
             "preprocessingMs": 0.0,
             "ocrMs": 0.0,
+            "formulaRecognitionMs": 0.0,
             "parsingMs": 0.0,
         }
 
@@ -929,6 +1004,11 @@ class OCREngine:
                 for page in page_contexts
                 if page.layout_regions is not None
             }
+            formula_predictions = {
+                key: latex
+                for page in page_contexts
+                for key, latex in page.formula_predictions.items()
+            }
             metadata, all_questions, all_images_to_upload, all_unmapped, document_warnings = self.postprocessor.process(
                 all_blocks,
                 page_count=len(images),
@@ -937,6 +1017,7 @@ class OCREngine:
                 layout_regions=layout_regions,
                 formula_images=settings.ocr_formula_images,
                 recognize_formulas=settings.ocr_formula_latex,
+                formula_predictions=formula_predictions,
             )
             combined_parsing_ms = (time.perf_counter() - combined_started) * 1000
             page_timings["parsingMs"] += combined_parsing_ms

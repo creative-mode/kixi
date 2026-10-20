@@ -23,6 +23,13 @@ from .formulas import FORMULA, FormulaSegment, extract_inline_formulas, recogniz
 from .layout import LayoutRegion
 from .ptlex import Lexicon, load_lexicon, repair_text
 
+FormulaPredictionKey = Tuple[int, int, int, int, int]
+FormulaPredictions = Dict[FormulaPredictionKey, str]
+
+
+def formula_prediction_key(page_index: int, bbox: Tuple[int, int, int, int]) -> FormulaPredictionKey:
+    return (page_index, *(int(round(value)) for value in bbox))
+
 
 class QuestionType(str, Enum):
     """Supported question types.
@@ -547,6 +554,7 @@ class OCRPostprocessor:
         layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
         formula_images: bool = False,
         recognize_formulas: bool = True,
+        formula_predictions: Optional[FormulaPredictions] = None,
     ) -> Tuple[ExtractedMetadata, List[ExtractedQuestion], List[ImageToUpload], List[UnmappedContent], List[Warning]]:
         """
         Process OCR text blocks into structured data.
@@ -576,7 +584,13 @@ class OCRPostprocessor:
             sorted_blocks, after, page_limits = self._cut_after_cotacao(sorted_blocks, page_dimensions or {})
             noise.extend(after)
         # Maths the text engine cannot read is garbage in the text: the layout knows where the printed formulas are.
-        sorted_blocks = self._mask_formulas(sorted_blocks, layout_regions, page_limits, recognize=recognize_formulas)
+        sorted_blocks = self._mask_formulas(
+            sorted_blocks,
+            layout_regions,
+            page_limits,
+            recognize=recognize_formulas,
+            formula_predictions=formula_predictions,
+        )
 
         # Combine all text for pattern matching
         full_text = " ".join(b.text for b in sorted_blocks)
@@ -595,7 +609,13 @@ class OCRPostprocessor:
         # Segment and extract questions
         questions = self._extract_questions(sorted_blocks, cotacao_map)
         if recognize_formulas:
-            self._attach_formula_segments(questions, sorted_blocks, layout_regions or {}, page_limits)
+            self._attach_formula_segments(
+                questions,
+                sorted_blocks,
+                layout_regions or {},
+                page_limits,
+                formula_predictions=formula_predictions,
+            )
 
         # Recognize formulas inline in the already-extracted question text (#262): done last, on the
         # finished questions, so it never risks the numbering/cotação/option parsing above, which depends
@@ -1336,6 +1356,7 @@ class OCRPostprocessor:
         blocks: List[TextBlock],
         layout_regions: Dict[int, List[LayoutRegion]],
         page_limits: Optional[Dict[int, int]] = None,
+        formula_predictions: Optional[FormulaPredictions] = None,
     ) -> None:
         """Keep each detected formula's raw OCR, recognition confidence and source confidence on its question."""
         ordered = sorted(questions, key=lambda question: (question.page_index, question.start_y))
@@ -1388,12 +1409,22 @@ class OCRPostprocessor:
                 if matching and any(block.formula_segments for block in matching):
                     continue
 
+                model_latex = (formula_predictions or {}).get(formula_prediction_key(page_index, region.bbox))
                 if matching:
                     raw = " ".join(block.text for block in matching).strip()
                     source_confidence = sum(block.confidence for block in matching) / len(matching)
-                    segment = replace(
-                        recognize_region(raw),
-                        ocr_confidence=source_confidence,
+                    segment = self._recognized_formula_segment(
+                        raw,
+                        model_latex,
+                        source_confidence,
+                        region.score,
+                    )
+                elif model_latex:
+                    segment = FormulaSegment(
+                        raw=model_latex,
+                        latex=model_latex,
+                        confidence=min(0.79, region.score),
+                        kind=FORMULA,
                         layout_confidence=region.score,
                     )
                 else:
@@ -1407,6 +1438,39 @@ class OCRPostprocessor:
                         layout_confidence=region.score,
                     )
                 attach(owner, page_index, center_y, segment)
+
+    @staticmethod
+    def _recognized_formula_segment(
+        raw: str,
+        model_latex: Optional[str],
+        ocr_confidence: Optional[float],
+        layout_confidence: Optional[float],
+    ) -> FormulaSegment:
+        heuristic = recognize_region(raw)
+        if not model_latex:
+            return replace(
+                heuristic,
+                ocr_confidence=ocr_confidence,
+                layout_confidence=layout_confidence,
+            )
+
+        def comparable(value: Optional[str]) -> str:
+            normalized = re.sub(r"\s+", "", value or "")
+            return normalized.replace(r"\left", "").replace(r"\right", "")
+
+        agrees = heuristic.kind == FORMULA and comparable(heuristic.latex) == comparable(model_latex)
+        confidence = min(0.95 if agrees else 0.79, layout_confidence or 1.0)
+        return FormulaSegment(
+            # A formula can be visible to the image recognizer while the text OCR
+            # returns no block. Preserve the recognizer output as textual provenance;
+            # ``ocr_confidence=None`` and the attached crop keep that case explicit.
+            raw=raw or model_latex,
+            latex=model_latex,
+            confidence=confidence,
+            kind=FORMULA,
+            ocr_confidence=ocr_confidence,
+            layout_confidence=layout_confidence,
+        )
 
     def _printed_formulas(
         self,
@@ -1430,6 +1494,7 @@ class OCRPostprocessor:
         layout_regions: Optional[Dict[int, List[LayoutRegion]]],
         page_limits: Optional[Dict[int, int]] = None,
         recognize: bool = True,
+        formula_predictions: Optional[FormulaPredictions] = None,
     ) -> List[TextBlock]:
         """Replace a printed formula's text with its recognized LaTeX (#262), delimited («$...$»), or with the
         «[fórmula]» marker when nothing could be read from it with confidence - keeping the label before it («c)»).
@@ -1475,23 +1540,56 @@ class OCRPostprocessor:
             seen.add(key)
             prefix = self._LABEL_PREFIX.match(block.text.strip())
             lead = prefix.group(0).strip() + " " if prefix else ""
-            recognized = recognize_region(group_text[key]) if recognize else None
+            region = formulas[key[0]][key[1]]
+            model_latex = (formula_predictions or {}).get(formula_prediction_key(key[0], region.bbox))
+            group_blocks = [candidate for candidate, candidate_key in zip(blocks, homes) if candidate_key == key]
+            source_confidence = sum(candidate.confidence for candidate in group_blocks) / len(group_blocks)
+            recognized = (
+                self._recognized_formula_segment(
+                    group_text[key],
+                    model_latex,
+                    source_confidence,
+                    region.score,
+                )
+                if recognize else None
+            )
             if recognized is not None and recognized.kind == FORMULA and recognized.latex:
                 text = f"{lead}${recognized.latex}$"
             else:
                 text = f"{lead}[fórmula]"
             segments = []
             if recognized is not None:
-                group_blocks = [candidate for candidate, candidate_key in zip(blocks, homes) if candidate_key == key]
-                source_confidence = sum(candidate.confidence for candidate in group_blocks) / len(group_blocks)
-                segments.append(replace(recognized, ocr_confidence=source_confidence))
+                segments.append(recognized)
             raw_text = " ".join(
                 candidate.raw_text if candidate.raw_text is not None else candidate.text
                 for candidate, candidate_key in zip(blocks, homes)
                 if candidate_key == key
             )
             out.append(replace(block, text=text, formula_segments=segments, raw_text=raw_text))
-        return out
+
+        next_line_index = max((block.line_index for block in blocks), default=0) + 1
+        for page_index, regions in formulas.items():
+            for region_index, region in enumerate(regions):
+                key = (page_index, region_index)
+                if key in seen:
+                    continue
+                model_latex = (formula_predictions or {}).get(formula_prediction_key(page_index, region.bbox))
+                recognized = (
+                    self._recognized_formula_segment("", model_latex, None, region.score)
+                    if recognize else None
+                )
+                text = f"${recognized.latex}$" if recognized and recognized.latex else "[fórmula]"
+                out.append(TextBlock(
+                    text=text,
+                    confidence=0.0,
+                    bbox=tuple(int(round(value)) for value in region.bbox),
+                    page_index=page_index,
+                    line_index=next_line_index,
+                    formula_segments=[recognized] if recognized is not None else [],
+                    raw_text="",
+                ))
+                next_line_index += 1
+        return self._reading_order(out)
 
     @staticmethod
     def _far_right_of(block: TextBlock, lines: List[TextBlock], page_width: int) -> bool:

@@ -43,9 +43,11 @@ UNRECOGNIZED = "unrecognized"
 class FormulaSegment:
     """Um trecho de texto que o reconhecedor tratou como fórmula (ou tentou tratar).
 
-    ``raw`` é sempre o texto que o OCR leu, nunca alterado - fica como o resultado
-    auditável quando ``latex`` falha. ``latex`` é ``None`` em ``unrecognized``: nunca se
-    inventa uma fórmula a partir de texto que não se consegue reconstruir.
+    ``raw`` preserva a saída textual da fonte que reconheceu a fórmula: o OCR de texto
+    quando ele viu a região, ou a saída sanitizada do reconhecedor visual quando o OCR
+    de texto não produziu nada. O recorte da região continua a ser a evidência visual
+    autoritativa. ``latex`` é ``None`` em ``unrecognized``: nunca se inventa uma fórmula
+    a partir de texto que não se consegue reconstruir.
     """
     raw: str
     latex: Optional[str]

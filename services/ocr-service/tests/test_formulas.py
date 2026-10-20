@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 
 from app.ocr.formulas import FORMULA, UNRECOGNIZED, extract_inline_formulas, recognize_region
+from app.ocr.layout import LayoutRegion
+from app.ocr.postprocessing import OCRPostprocessor, TextBlock, formula_prediction_key
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -108,6 +110,42 @@ def test_recognize_region_on_empty_text_is_unrecognized_not_an_error():
     result = recognize_region("   ")
     assert result.kind == UNRECOGNIZED
     assert result.confidence == 0.0
+
+
+def test_image_model_prediction_replaces_garbled_formula_but_requires_review():
+    region = LayoutRegion("formula", "formula", 0.94, (100, 100, 300, 160), False)
+    block = TextBlock("† = lixo", 0.62, (105, 105, 295, 155), page_index=0)
+    latex = r"\vec{r}(t)=(1-t)\vec{e}_x+(t+1)^2\vec{e}_y"
+
+    masked = OCRPostprocessor()._mask_formulas(
+        [block],
+        {0: [region]},
+        recognize=True,
+        formula_predictions={formula_prediction_key(0, region.bbox): latex},
+    )
+
+    assert masked[0].text == f"${latex}$"
+    assert masked[0].formula_segments[0].latex == latex
+    assert masked[0].formula_segments[0].raw == "† = lixo"
+    assert masked[0].formula_segments[0].confidence == 0.79
+
+
+def test_image_model_prediction_creates_a_formula_block_when_text_ocr_saw_nothing():
+    region = LayoutRegion("formula", "formula", 0.91, (80, 120, 260, 180), False)
+    latex = r"\frac{v_0^2\sin(2\theta)}{g}"
+
+    masked = OCRPostprocessor()._mask_formulas(
+        [],
+        {0: [region]},
+        recognize=True,
+        formula_predictions={formula_prediction_key(0, region.bbox): latex},
+    )
+
+    assert len(masked) == 1
+    assert masked[0].text == f"${latex}$"
+    assert masked[0].bbox == region.bbox
+    assert masked[0].formula_segments[0].raw == latex
+    assert masked[0].formula_segments[0].ocr_confidence is None
 
 
 def test_the_reference_physics_exam_keeps_its_formulas_legible():

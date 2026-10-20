@@ -63,6 +63,15 @@ def test_real_physics_pdf_preserves_questions_subitems_formulas_images_and_confi
         shutdown_engine()
 
     assert result is not None
+    recognized_latex = [
+        formula.latex
+        for question in result.questions
+        for formula in [
+            *question.formulas,
+            *(formula for item in question.subitems_content for formula in item.formulas),
+        ]
+        if formula.kind == "formula" and formula.latex
+    ]
     assert len(progress) == 6, f"progress did not complete all pages: {len(progress)}/6"
     assert [event["page"] for event in progress] == list(range(1, 7))
     assert all(event.get("timings", {}).get("ocrMs") is not None for event in progress)
@@ -81,11 +90,9 @@ def test_real_physics_pdf_preserves_questions_subitems_formulas_images_and_confi
                 + sum(len(item.formulas) for item in question.subitems_content)
                 for question in result.questions
             ),
-            "recognized_latex_segments": sum(
-                formula.kind == "formula" and bool(formula.latex)
-                for question in result.questions
-                for formula in [*question.formulas, *(f for item in question.subitems_content for f in item.formulas)]
-            ),
+            "recognized_latex_segments": len(recognized_latex),
+            "recognized_latex": sorted(set(recognized_latex))
+            if os.environ.get("KIXI_REPORT_PHYSICS_FORMULAS") == "1" else None,
             "formula_images": sum(image.kind == "formula" for image in result.images_to_upload),
             "figure_images": sum(image.kind == "figure" for image in result.images_to_upload),
             "warnings": [warning.code for warning in result.warnings],
@@ -118,6 +125,7 @@ def test_real_physics_pdf_preserves_questions_subitems_formulas_images_and_confi
     ]
     formula_image_questions = {image.region.removeprefix("questao_") for image in formula_images}
     assert formulas or formula_images, "mathematical notation from the printed pages was not retained"
+    assert recognized_latex, "the image recognizer did not produce any LaTeX"
     assert all(
         formula.raw.strip() or question_number in formula_image_questions
         for question_number, formula in formulas
