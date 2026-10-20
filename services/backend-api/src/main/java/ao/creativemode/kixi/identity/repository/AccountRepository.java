@@ -24,6 +24,8 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByEmailAndDeletedAtIsNull(String email);
 
+    Mono<Account> findByGoogleSubAndDeletedAtIsNull(String googleSub);
+
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
 
     Flux<Account> findAllByIdInAndDeletedAtIsNull(Collection<Long> ids);
