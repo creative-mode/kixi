@@ -112,9 +112,9 @@ public class AuthController {
      * locks everyone out at once. So the default is to believe nothing, and the operator
      * names the proxy when the topology makes the header the honest answer.</p>
      *
-     * <p>The leftmost entry is the original client; each proxy appends the peer it saw.
-     * It is taken only when non-blank, so a proxy that forwards an empty header falls
-     * back to the address rather than keying everyone on "".
+     * <p>Only the rightmost entry is used. A trusted direct peer must not let an earlier,
+     * client-supplied value in a forwarded chain choose the rate-limit bucket. An empty
+     * final entry falls back to the address rather than keying everyone on "".
      */
     private String clientAddress(ServerWebExchange exchange) {
         return ao.creativemode.kixi.shared.security.ClientAddress.resolve(exchange, trustedProxies);
