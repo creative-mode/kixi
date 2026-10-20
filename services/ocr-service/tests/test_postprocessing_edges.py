@@ -1,5 +1,7 @@
 """Behavioral coverage for OCR postprocessing edge cases."""
 
+import unicodedata
+
 from app.ocr.postprocessing import (
     ExtractedMetadata,
     ExtractedOption,
@@ -464,6 +466,65 @@ def test_roman_sections_after_lettered_rows_are_not_absorbed_into_the_previous_a
     assert question.subitems_content[4].text == "O raio."
     assert "VII) Para t=3s: parte seguinte" in question.text
     assert "VIII) Represente a trajectória" in question.text
+
+
+def test_physics_roman_sections_preserve_heading_and_child_hierarchy_in_flat_contract():
+    question = ExtractedQuestion(
+        number="4",
+        text=(
+            r"Seja = $\vec{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}$, "
+            "no SI. Determine: V) Para o intervalo [2; 4]s, calcule: "
+            "VI) A equação da trajectória da partícula "
+            "VII) Para t=3s: VIII) Represente a trajectória dessa partícula."
+        ),
+        text_confidence=0.94,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        subitems_content=[
+            SubitemContent(label="a", text="o deslocamento", raw_text="(o deslocamento"),
+            SubitemContent(label="b", text="a velocidade média", raw_text="a velocidade média"),
+            SubitemContent(label="c", text="a aceleração média", raw_text="(a aceleração média"),
+            SubitemContent(label="a", text=unicodedata.normalize("NFD", "0 ângulo entre os vectores e b) 0 raio de curvatura"), raw_text="a) 0 ângulo entre os vectores e b) 0 raio de curvatura; o deslocamento"),
+            SubitemContent(label="b", text="0 raio de curvatura VIII) rodapé", raw_text="b) 0 raio de curvatura VIII) rodapé"),
+        ],
+        raw_text="source question",
+    )
+
+    OCRPostprocessor._structure_roman_sections([question])
+
+    assert question.text == (
+        r"Seja $\vec{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}$, no SI. Determine:" "\n"
+        "V) Para o intervalo [2; 4]s, calcule:\n"
+        "VI) A equação da trajectória da partícula\n"
+        "VII) Para t=3s:\n"
+        "VIII) Represente a trajectória dessa partícula"
+    )
+    assert [(item.label, item.text) for item in question.subitems_content] == [
+        ("V.a", "o deslocamento"),
+        ("V.b", "a velocidade média"),
+        ("V.c", "a aceleração média"),
+        ("VII.a", "o ângulo entre os vectores"),
+        ("VII.b", "o raio de curvatura"),
+    ]
+    assert question.raw_text == "source question"
+
+
+def test_physics_roman_sections_remain_unmodified_when_a_required_child_is_missing():
+    question = ExtractedQuestion(
+        number="4",
+        text="Determine: V) intervalo; VI) trajectória; VII) tempo; VIII) gráfico.",
+        text_confidence=0.9,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        subitems_content=[SubitemContent(label="a", text="o deslocamento")],
+    )
+    original_text = question.text
+    original_items = list(question.subitems_content)
+
+    OCRPostprocessor._structure_roman_sections([question])
+
+    assert question.text == original_text
+    assert question.subitems_content == original_items
 
 
 def test_only_adjacent_duplicate_math_spans_are_collapsed():

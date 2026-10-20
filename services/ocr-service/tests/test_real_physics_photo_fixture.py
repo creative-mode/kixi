@@ -62,16 +62,25 @@ def test_physics_photo_preserves_question_structure_math_and_source_footer(monke
         for formula in question.formulas
         if (latex := formula.latex)
     ), "prose and interval labels must not be promoted to equations"
-    assert [(item.label, item.text.lower()) for item in questions["4"].subitems_content[:3]] == [
-        ("a", "o deslcamento"),
-        ("b", "a velocidade média"),
-        ("c", "a aceleração média"),
-    ]
     labels = [item.label for item in questions["4"].subitems_content]
+    assert labels == ["V.a", "V.b", "V.c", "VII.a", "VII.b"]
+    section_text = questions["4"].text
+    assert "intervalo" in section_text.lower() and "calcule" in section_text.lower()
+    assert "equação" in section_text.lower() and "trajectória" in section_text.lower()
+    assert "t = 3" in section_text.lower() or "t=3" in section_text.lower()
+    assert "represente" in section_text.lower() and "trajectória" in section_text.lower()
+    assert all(section_text.upper().count(f"{label})") == 1 for label in ("V", "VI", "VII", "VIII"))
+    children = {item.label: item.text.lower() for item in questions["4"].subitems_content}
+    assert children["V.a"] == "o deslocamento"
+    assert "velocidade média" in children["V.b"]
+    assert "aceleração média" in children["V.c"]
+    assert children["VII.a"].startswith("o ângulo") and "raio" not in children["VII.a"]
+    assert children["VII.b"] == "o raio de curvatura"
+    assert "Seja $" in section_text and "Seja = $" not in section_text
+    assert "dessa partícula" in section_text
     assert len(labels) == len(set(labels)), "flattened OCR sections must not produce duplicate persistence labels"
-    assert questions["4"].text.upper().count("VIII)") == 1, "the final Roman section must not be duplicated"
-    assert "VII)" in questions["4"].text and "VIII)" in questions["4"].text
     assert all("VII)" not in item.text and "VIII)" not in item.text for item in questions["4"].subitems_content)
+    assert questions["4"].raw_text and "VIII)" in questions["4"].raw_text
 
     all_question_text = " ".join(
         question.text + " " + " ".join(item.text for item in question.subitems_content)
@@ -130,11 +139,9 @@ def test_clean_physics_photo_recovers_vector_formula_from_original_pixels(monkey
     assert r"\boxed" not in questions["4"].text
     assert "$B_{max}e^{-2t}$" in questions["3"].text
     assert "[fórmula]" not in questions["3"].text
-    assert [(item.label, item.text.lower()) for item in questions["4"].subitems_content[:3]] == [
-        ("a", "o deslocamento"),
-        ("b", "a velocidade média"),
-        ("c", "a aceleração média"),
-    ]
-    assert "V) Para o intervalo [2; 4]s, calcule:" in questions["4"].text
-    assert "VIII)" in questions["4"].text
+    assert [item.label for item in questions["4"].subitems_content] == ["V.a", "V.b", "V.c", "VII.a", "VII.b"], (
+        f"question text={questions['4'].text!r}; children={[(item.label, item.text, item.raw_text) for item in questions['4'].subitems_content]!r}"
+    )
+    assert "Seja" in questions["4"].text and "Determine:" in questions["4"].text
+    assert questions["4"].text.upper().count("VIII)") == 1
     assert all("VII)" not in item.text and "VIII)" not in item.text for item in questions["4"].subitems_content)

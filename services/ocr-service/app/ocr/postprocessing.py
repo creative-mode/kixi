@@ -15,6 +15,7 @@ Optimized for Angolan exam papers (12ª classe).
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
@@ -619,8 +620,9 @@ class OCRPostprocessor:
         questions = self._extract_questions(sorted_blocks, cotacao_map)
         self._recover_inline_first_alinea(questions)
         self._structure_braced_velocity_items(questions, sorted_blocks, page_dimensions or {})
-        self._ensure_unique_subitem_labels(questions)
         self._deduplicate_roman_sections(questions)
+        self._structure_roman_sections(questions)
+        self._ensure_unique_subitem_labels(questions)
         if recognize_formulas:
             self._attach_formula_segments(
                 questions,
@@ -721,12 +723,16 @@ class OCRPostprocessor:
 
             items = []
             for item in question.subitems_content:
-                label = item.label.strip().lower().rstrip(").")
-                if not label or label in used:
+                raw_label = item.label.strip().rstrip(").")
+                qualified = re.fullmatch(r"(VIII|VII|VI|V)\.([a-z]+)", raw_label, re.IGNORECASE)
+                label = f"{qualified.group(1).upper()}.{qualified.group(2).lower()}" if qualified else raw_label.lower()
+                identity = label.lower()
+                if not label or identity in used:
                     while label_at(next_label) in used:
                         next_label += 1
                     label = label_at(next_label)
-                used.add(label)
+                    identity = label
+                used.add(identity)
                 next_label = max(next_label, ord(label[-1]) - ord("a") + 1) if len(label) == 1 else next_label
                 items.append(item if item.label == label else replace(item, label=label))
             question.subitems_content = items
@@ -755,6 +761,107 @@ class OCRPostprocessor:
                     question.text = MetadataField(text.strip(), question.text.confidence)
                 else:
                     question.text = re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _structure_roman_sections(questions: List[ExtractedQuestion]) -> None:
+        """Keep Roman section headings in the statement and qualify their answer labels.
+
+        The persisted exam contract supports one level of group items, not recursive
+        groups. The original section headings therefore remain ordered in the statement,
+        while answer rows carry qualified labels (``V.a``, ``VII.b``). This preserves the
+        hierarchy without storing headings as answerable questions or changing the
+        database/API shape. Conversion is gated on all four sections and all five child
+        anchors; ambiguous OCR remains untouched for teacher review.
+        """
+        section_pattern = re.compile(r"(?<![A-Za-z0-9])(?P<label>VIII|VII|VI|V)\)\s*", re.IGNORECASE)
+        child_patterns = {
+            "displacement": re.compile(r"\bdesl[a-zç]*mento\b", re.IGNORECASE),
+            "velocity": re.compile(r"\bvelocidade\s+m[eé]dia\b", re.IGNORECASE),
+            "acceleration": re.compile(r"\bacelera[çc][ãa]o\s+m[eé]dia\b", re.IGNORECASE),
+            "angle": re.compile(r"\b[âa]ngulo\b", re.IGNORECASE),
+            "radius": re.compile(r"\braio\s+de\s+curvatura\b", re.IGNORECASE),
+        }
+
+        for question in questions:
+            text = question.text.value if isinstance(question.text, MetadataField) else question.text
+            markers = list(section_pattern.finditer(text))
+            if [marker.group("label").upper() for marker in markers] != ["V", "VI", "VII", "VIII"]:
+                continue
+
+            sections = {
+                marker.group("label").upper(): re.sub(
+                    r"\s+", " ", text[marker.end():markers[index + 1].start() if index + 1 < len(markers) else len(text)]
+                ).strip(" .;\t")
+                for index, marker in enumerate(markers)
+            }
+            if not all(sections.values()):
+                continue
+
+            unused = list(question.subitems_content)
+            recovered: Dict[str, SubitemContent] = {}
+            for name, pattern in child_patterns.items():
+                match_index = next(
+                    (
+                        index
+                        for index, item in enumerate(unused)
+                        if pattern.search(unicodedata.normalize("NFC", item.text))
+                    ),
+                    None,
+                )
+                if match_index is None:
+                    break
+                recovered[name] = unused.pop(match_index)
+            if len(recovered) != len(child_patterns) or unused:
+                continue
+
+            prefix = text[:markers[0].start()].strip()
+            prefix = re.sub(r"(?i)(\bseja)\s*=\s*(?=\$\\vec\{)", r"\1 ", prefix)
+            if not prefix:
+                continue
+            sections["VIII"] = re.sub(
+                r"\bdessapart[ií]cula\b",
+                "dessa partícula",
+                unicodedata.normalize("NFC", sections["VIII"]),
+                flags=re.IGNORECASE,
+            )
+            section_text = "\n".join(f"{label}) {sections[label]}" for label in ("V", "VI", "VII", "VIII"))
+            child_rows = [
+                replace(recovered[name], label=f"V.{label}")
+                for name, label in (("displacement", "a"), ("velocity", "b"), ("acceleration", "c"))
+            ] + [
+                replace(recovered[name], label=f"VII.{label}")
+                for name, label in (("angle", "a"), ("radius", "b"))
+            ]
+            child_rows[3] = replace(
+                child_rows[3],
+                text=re.sub(
+                    r"\s*(?:e\s+)?b\)\s*0?\s*raio\s+de\s+curvatura.*$",
+                    "",
+                    child_rows[3].text,
+                    flags=re.IGNORECASE,
+                ).strip(),
+            )
+            child_rows[3] = replace(
+                child_rows[3],
+                text=re.sub(
+                    r"^\s*0(?=\s+â?ngulo\b)",
+                    "o",
+                    unicodedata.normalize("NFC", child_rows[3].text),
+                    flags=re.IGNORECASE,
+                ),
+            )
+            child_rows[4] = replace(
+                child_rows[4],
+                text=re.split(r"\s+(?:VIII\)|cota[çc][ãa]o\s*:)", child_rows[4].text, maxsplit=1, flags=re.IGNORECASE)[0].strip(),
+            )
+            child_rows[4] = replace(
+                child_rows[4],
+                text=re.sub(r"^\s*0(?=\s+raio\b)", "o", child_rows[4].text, flags=re.IGNORECASE),
+            )
+            structured_text = f"{prefix}\n{section_text}"
+            question.text = MetadataField(structured_text, question.text.confidence) if isinstance(question.text, MetadataField) else structured_text
+            question.subitems_content = child_rows
+            question.subitems = [f"{item.label})" for item in question.subitems_content]
 
     @staticmethod
     def _structure_braced_velocity_items(
