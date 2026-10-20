@@ -29,6 +29,12 @@
 	#    que não existe e a resposta era 404 outra vez, com a página do frontend em vez
 	#    de JSON.
 	handle /api/* {
+		# request_body max_size is available from Caddy 2.10; keep the edge cap just
+		# above the backend's 50 MiB file aggregate to allow multipart boundaries.
+		@ocr_upload path /api/v1/ocr/extract /api/v1/ocr/extract/* /api/v1/statements/ocr/extract /api/v1/statements/ocr/extract/*
+		request_body @ocr_upload {
+			max_size 55MB
+		}
 		reverse_proxy backend-api:8080 {
 			# O limiter de login e de registo conta por endereço (#123/#240). Atrás de
 			# um proxy, o endereço que a aplicação vê é o do Caddy, partilhado por

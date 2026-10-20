@@ -276,6 +276,7 @@ async def extract_text(
     all_images = []
     source_file_indices = []
     total_upload_bytes = 0
+    total_rendered_pixels = 0
 
     for source_file_index, upload_file in enumerate(images):
         try:
@@ -295,8 +296,17 @@ async def extract_text(
 
             # Handle PDF files
             if file_type == 'pdf':
-                validate_pdf(content, max_pages=settings.max_pdf_pages)
-                pdf_images = extract_images_from_pdf(content)
+                remaining_pixels = settings.max_ocr_pixels_per_request - total_rendered_pixels
+                validate_pdf(
+                    content,
+                    max_pages=settings.max_pdf_pages,
+                    max_total_pixels=remaining_pixels,
+                )
+                pdf_images = extract_images_from_pdf(
+                    content,
+                    dpi=settings.target_dpi,
+                    max_total_pixels=remaining_pixels,
+                )
                 if len(all_images) + len(pdf_images) > settings.max_ocr_pages_per_request:
                     raise HTTPException(
                         status_code=400,
@@ -306,6 +316,9 @@ async def extract_text(
                         ),
                     )
                 all_images.extend(pdf_images)
+                total_rendered_pixels += sum(
+                    int(image.shape[0]) * int(image.shape[1]) for image in pdf_images
+                )
                 source_file_indices.extend([source_file_index] * len(pdf_images))
                 logger.debug(
                     "Extracted images from PDF",
@@ -314,7 +327,9 @@ async def extract_text(
                 )
             else:
                 # Load regular image
-                image = load_image_from_bytes(content)
+                remaining_pixels = settings.max_ocr_pixels_per_request - total_rendered_pixels
+                image = load_image_from_bytes(content, max_pixels=remaining_pixels)
+                total_rendered_pixels += int(image.shape[0]) * int(image.shape[1])
                 all_images.append(image)
                 source_file_indices.append(source_file_index)
 

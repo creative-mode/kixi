@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.ocr.service;
 
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
+import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedOption;
@@ -17,7 +18,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
@@ -73,7 +73,7 @@ public class LegacyOcrStatementService {
     // in an explicit transaction instead, which also survives the self
     // invocation that would otherwise bypass a proxy-based @Transactional.
     public Mono<StatementWithQuestions> createFromOcr(
-        List<FilePart> files,
+        List<OcrUploadedFile> files,
         Long createdBy
     ) {
         log.info(
@@ -82,7 +82,7 @@ public class LegacyOcrStatementService {
         );
 
         return ocrServiceClient
-            .extractText(files)
+            .extractTextFromUploadedFiles(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
                     log.error("OCR extraction failed: requestId={}", ocrResponse.requestId());

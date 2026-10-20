@@ -6,12 +6,14 @@ Supports multi-page PDFs and various PDF rendering qualities.
 """
 
 import io
+import math
 from typing import List, Optional
 
 import numpy as np
 from PIL import Image
 
 import structlog
+from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +36,7 @@ def extract_images_from_pdf(
     dpi: int = 300,
     first_page: Optional[int] = None,
     last_page: Optional[int] = None,
+    max_total_pixels: Optional[int] = None,
 ) -> List[np.ndarray]:
     """
     Extract images from PDF pages.
@@ -57,7 +60,7 @@ def extract_images_from_pdf(
 
     try:
         # Try PyMuPDF first (faster and more reliable)
-        images = _extract_with_pymupdf(pdf_content, dpi, first_page, last_page)
+        images = _extract_with_pymupdf(pdf_content, dpi, first_page, last_page, max_total_pixels)
     except ImportError:
         logger.warning("PyMuPDF not available, falling back to pdf2image")
         try:
@@ -88,6 +91,7 @@ def _extract_with_pymupdf(
     dpi: int = 300,
     first_page: Optional[int] = None,
     last_page: Optional[int] = None,
+    max_total_pixels: Optional[int] = None,
 ) -> List[np.ndarray]:
     """
     Extract images using PyMuPDF (fitz).
@@ -123,8 +127,22 @@ def _extract_with_pymupdf(
         zoom = dpi / 72.0
         matrix = fitz.Matrix(zoom, zoom)
 
+        rendered_pixels = 0
         for page_num in range(start_page, end_page):
             page = pdf_document[page_num]
+
+            page_pixels = _rendered_page_pixels(page.rect.width, page.rect.height, dpi)
+            if page_pixels > settings.max_image_pixels:
+                raise ValueError("PDF page exceeds the maximum rendered pixel count")
+            rendered_pixels += page_pixels
+            request_pixel_limit = min(
+                settings.max_ocr_pixels_per_request,
+                settings.max_ocr_pixels_per_request
+                if max_total_pixels is None
+                else max_total_pixels,
+            )
+            if rendered_pixels > request_pixel_limit:
+                raise ValueError("PDF exceeds the maximum total rendered pixel count")
 
             # Render page to pixmap
             pixmap = page.get_pixmap(matrix=matrix, alpha=False)
@@ -257,7 +275,11 @@ def get_pdf_info(pdf_content: bytes) -> dict:
     return info
 
 
-def validate_pdf(pdf_content: bytes, max_pages: int = 50) -> None:
+def validate_pdf(
+    pdf_content: bytes,
+    max_pages: int = 50,
+    max_total_pixels: Optional[int] = None,
+) -> None:
     """
     Validate a PDF file for OCR processing.
 
@@ -283,7 +305,41 @@ def validate_pdf(pdf_content: bytes, max_pages: int = 50) -> None:
                 f"maximum allowed is {max_pages}"
             )
 
+        import fitz
+
+        document = fitz.open(stream=pdf_content, filetype="pdf")
+        try:
+            total_pixels = 0
+            for page in document:
+                page_pixels = _rendered_page_pixels(
+                    page.rect.width,
+                    page.rect.height,
+                    settings.target_dpi,
+                )
+                if page_pixels > settings.max_image_pixels:
+                    raise ValueError("PDF page exceeds the maximum rendered pixel count")
+                total_pixels += page_pixels
+                request_pixel_limit = min(
+                    settings.max_ocr_pixels_per_request,
+                    settings.max_ocr_pixels_per_request
+                    if max_total_pixels is None
+                    else max_total_pixels,
+                )
+                if total_pixels > request_pixel_limit:
+                    raise ValueError("PDF exceeds the maximum total rendered pixel count")
+        finally:
+            document.close()
+
     except ValueError:
         raise
     except Exception as e:
         raise ValueError(f"Failed to validate PDF: {e}")
+
+
+def _rendered_page_pixels(width_points: float, height_points: float, dpi: int) -> int:
+    if width_points <= 0 or height_points <= 0 or dpi <= 0:
+        raise ValueError("PDF page has invalid dimensions")
+    zoom = dpi / 72.0
+    width_pixels = math.ceil(width_points * zoom)
+    height_pixels = math.ceil(height_points * zoom)
+    return width_pixels * height_pixels

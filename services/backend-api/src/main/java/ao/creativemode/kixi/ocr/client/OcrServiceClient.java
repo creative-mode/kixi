@@ -6,14 +6,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -91,63 +89,8 @@ public class OcrServiceClient {
     }
 
     /**
-     * Extract text from uploaded file parts.
-     *
-     * @param files List of uploaded file parts (images or PDFs)
-     * @return Mono containing the OCR response
-     */
-    public Mono<OcrResponse> extractText(List<FilePart> files) {
-        if (files == null || files.isEmpty()) {
-            return Mono.error(new IllegalArgumentException("At least one file is required"));
-        }
-
-        log.info("Sending OCR request: {} file(s)", files.size());
-
-        MultipartBodyBuilder builder = new MultipartBodyBuilder();
-
-        for (FilePart file : files) {
-            builder.asyncPart("images", file.content(), DataBuffer.class)
-                    .filename(file.filename())
-                    .contentType(getContentType(file.filename()));
-        }
-
-        return webClient.post()
-                .uri("/ocr/v1/extract")
-                .headers(this::applyAuthentication)
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(BodyInserters.fromMultipartData(builder.build()))
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, response ->
-                        response.bodyToMono(String.class)
-                                .flatMap(body -> Mono.error(new OcrClientException(
-                                        "OCR request failed: " + body,
-                                        response.statusCode().value()))))
-                .onStatus(HttpStatusCode::is5xxServerError, response ->
-                        response.bodyToMono(String.class)
-                                .flatMap(body -> Mono.error(new OcrServerException(
-                                        "OCR service error: " + body,
-                                        response.statusCode().value(),
-                                        isContentError(body)))))
-                .bodyToMono(OcrResponse.class)
-                .timeout(timeout)
-                .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1))
-                        .filter(this::isRetryable)
-                        .doBeforeRetry(signal -> log.warn(
-                                "Retrying OCR request, attempt {}: type={}",
-                                signal.totalRetries() + 1,
-                                signal.failure().getClass().getSimpleName())))
-                .doOnSuccess(response -> log.info(
-                        "OCR request successful: requestId={}, status={}, confidence={}",
-                        response.requestId(),
-                        response.status(),
-                        response.overallConfidence()))
-                .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
-    }
-
-    /**
-     * Extract text from bytes retained by the persistence flow. This variant
-     * avoids replaying a consumed multipart stream when OCR regions are later
-     * associated with their source page.
+     * Extract text from already bounded and validated file bytes. Retaining the
+     * bytes avoids replaying multipart streams when OCR regions need their source.
      */
     public Mono<OcrResponse> extractTextFromUploadedFiles(List<OcrUploadedFile> files) {
         if (files == null || files.isEmpty()) {

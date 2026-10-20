@@ -171,6 +171,7 @@ public class OcrImageAssociationService {
 
     private byte[] cropToPng(OcrUploadedFile source, OcrResponse.ImageToUpload region) {
         try {
+            OcrUploadBuffer.validateContent(source.content());
             BufferedImage image = ImageIO.read(new ByteArrayInputStream(source.content()));
             if (image == null) {
                 return null;
@@ -203,6 +204,7 @@ public class OcrImageAssociationService {
 
     private boolean isRaster(OcrUploadedFile file) {
         try {
+            OcrUploadBuffer.validateContent(file.content());
             return ImageIO.read(new ByteArrayInputStream(file.content())) != null;
         } catch (IOException | RuntimeException error) {
             return false;

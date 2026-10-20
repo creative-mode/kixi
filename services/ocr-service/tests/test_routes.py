@@ -199,6 +199,41 @@ class TestExtractEndpoint:
 
         assert response.status_code in [200, 207]
 
+    def test_rejects_image_over_pixel_limit_before_calling_ocr(
+        self, client, engine_override, sample_image_bytes, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "max_image_pixels", 1)
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("oversized.png", sample_image_bytes, "image/png"))],
+        )
+
+        assert response.status_code == 400
+        mock_engine.process_image_async.assert_not_awaited()
+
+    def test_rejects_oversized_pdf_page_before_rendering_or_ocr(
+        self, client, engine_override
+    ):
+        document = fitz.open()
+        document.new_page(width=50_000, height=50_000)
+        content = document.tobytes()
+        document.close()
+        mock_engine = MagicMock()
+        mock_engine.process_image_async = AsyncMock()
+        engine_override(mock_engine)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("oversized.pdf", content, "application/pdf"))],
+        )
+
+        assert response.status_code == 400
+        mock_engine.process_image_async.assert_not_awaited()
+
     def test_extract_engine_error_returns_server_error(self, client, engine_override, sample_image_bytes, mock_ocr_result):
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(
