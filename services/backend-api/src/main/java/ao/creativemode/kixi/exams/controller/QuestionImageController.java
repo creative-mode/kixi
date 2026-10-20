@@ -3,6 +3,7 @@ package ao.creativemode.kixi.exams.controller;
 import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
 import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageResponse;
 import ao.creativemode.kixi.exams.service.QuestionImageService;
+import ao.creativemode.kixi.exams.service.QuestionImageReadAccessService;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
@@ -24,13 +25,16 @@ public class QuestionImageController {
     private final QuestionImageService service;
     private final CurrentAccountService currentAccountService;
     private final ApiAbuseRateLimiter abuseRateLimiter;
+    private final QuestionImageReadAccessService readAccess;
 
     public QuestionImageController(QuestionImageService service,
                                    CurrentAccountService currentAccountService,
-                                   ApiAbuseRateLimiter abuseRateLimiter) {
+                                   ApiAbuseRateLimiter abuseRateLimiter,
+                                   QuestionImageReadAccessService readAccess) {
         this.service = service;
         this.currentAccountService = currentAccountService;
         this.abuseRateLimiter = abuseRateLimiter;
+        this.readAccess = readAccess;
     }
 
     /**
@@ -48,7 +52,8 @@ public class QuestionImageController {
      */
     @GetMapping("/question/{questionId}")
     public Mono<ResponseEntity<List<QuestionImageResponse>>> listByQuestion(@PathVariable Long questionId) {
-        return service.findByQuestionId(questionId)
+        return readAccess.requireQuestion(questionId)
+                .thenMany(service.findByQuestionId(questionId))
                 .collectList()
                 .map(ResponseEntity::ok);
     }
@@ -68,7 +73,8 @@ public class QuestionImageController {
      */
     @GetMapping("/{id}")
     public Mono<ResponseEntity<QuestionImageResponse>> getById(@PathVariable Long id) {
-        return service.findByIdActive(id)
+        return readAccess.requireImage(id)
+                .then(service.findByIdActive(id))
                 .map(ResponseEntity::ok);
     }
 
@@ -82,7 +88,8 @@ public class QuestionImageController {
             @RequestPart("file") Mono<FilePart> filePartMono,
             UriComponentsBuilder uriBuilder) {
 
-        return currentAccountService.requiredAccountId()
+        return readAccess.requireWritableQuestion(request.questionId())
+                .then(currentAccountService.requiredAccountId())
                 .flatMap(abuseRateLimiter::checkUpload)
                 .then(service.createWithFile(request, filePartMono))
                 .map(created -> {
@@ -103,7 +110,8 @@ public class QuestionImageController {
             @PathVariable Long id,
             @Valid @RequestBody QuestionImageRequest request) {
 
-        return service.update(id, request)
+        return readAccess.requireWritableImage(id, false)
+                .then(service.update(id, request))
                 .map(ResponseEntity::ok);
     }
 
@@ -112,7 +120,8 @@ public class QuestionImageController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return service.softDelete(id)
+        return readAccess.requireWritableImage(id, false)
+                .then(service.softDelete(id))
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -121,7 +130,8 @@ public class QuestionImageController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return service.restore(id)
+        return readAccess.requireWritableImage(id, true)
+                .then(service.restore(id))
                 .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -130,7 +140,8 @@ public class QuestionImageController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return service.hardDelete(id)
+        return readAccess.requireWritableImage(id, true)
+                .then(service.hardDelete(id))
                 .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 }

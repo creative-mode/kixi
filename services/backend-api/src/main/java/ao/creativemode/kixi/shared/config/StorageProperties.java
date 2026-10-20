@@ -15,6 +15,7 @@ public class StorageProperties {
     private String localRoot = "services/backend-api/src/main/resources/static/uploads";
     private String publicBaseUrl = "/uploads";
     private String s3Endpoint = "";
+    private String s3PublicEndpoint = "";
     private String s3Region = "us-east-1";
     private String s3Bucket = "kixi-images";
     private String s3AccessKey = "";
@@ -52,6 +53,14 @@ public class StorageProperties {
 
     public void setS3Endpoint(String s3Endpoint) {
         this.s3Endpoint = s3Endpoint;
+    }
+
+    public String getS3PublicEndpoint() {
+        return s3PublicEndpoint;
+    }
+
+    public void setS3PublicEndpoint(String s3PublicEndpoint) {
+        this.s3PublicEndpoint = s3PublicEndpoint;
     }
 
     public String getS3Region() {

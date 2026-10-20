@@ -210,10 +210,16 @@ public class QuestionImageService {
     }
 
     private QuestionImageResponse toResponse(QuestionImage entity) {
+        String imageUrl = entity.getStorageKey() == null || entity.getStorageKey().isBlank()
+                ? storage.resolveUrl(entity.getImageUrl())
+                : storage.urlFor(entity.getStorageKey());
+        if (imageUrl == null) {
+            imageUrl = entity.getImageUrl();
+        }
         return new QuestionImageResponse(
                 entity.getId(),
                 entity.getQuestionId(),
-                entity.getImageUrl(),
+                imageUrl,
                 entity.getCaption(),
                 entity.getOrderIndex(),
                 entity.getCreatedAt(),

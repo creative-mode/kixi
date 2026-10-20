@@ -75,6 +75,19 @@ public class LocalImageStorage implements ImageStorage {
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
+    @Override
+    public String urlFor(String key) {
+        return publicUrl(key);
+    }
+
+    @Override
+    public String resolveUrl(String reference) {
+        if (reference == null || !reference.startsWith("storage://")) {
+            return reference;
+        }
+        return publicUrl(reference.substring("storage://".length()));
+    }
+
     private Path resolveKey(String key) {
         Path resolved = root.resolve(key).normalize();
         if (!resolved.startsWith(root)) {
