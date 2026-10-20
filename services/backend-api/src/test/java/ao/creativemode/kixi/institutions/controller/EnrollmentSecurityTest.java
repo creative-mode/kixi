@@ -86,7 +86,7 @@ class EnrollmentSecurityTest {
 
     @Test
     void studentListsOwnEnrollments() {
-        when(enrollmentService.findVisible(eq(42L), eq(false), any()))
+        when(enrollmentService.findVisible(eq(42L), eq(false), eq(false), any()))
             .thenReturn(Flux.just(new EnrollmentResponse(1L, 42L, 7L, 2024L, "ACTIVE")));
 
         client.mutateWith(studentJwt())
@@ -100,7 +100,7 @@ class EnrollmentSecurityTest {
 
     @Test
     void studentEnrollsThemselves() {
-        when(enrollmentService.enroll(eq(42L), eq(false), any()))
+        when(enrollmentService.enroll(eq(42L), eq(false), eq(false), any()))
             .thenReturn(Mono.just(new EnrollmentResponse(1L, 42L, 7L, 2024L, "ACTIVE")));
 
         client.mutateWith(studentJwt())
@@ -174,12 +174,13 @@ class EnrollmentSecurityTest {
                 .jsonPath("$.length()").isEqualTo(2);
 
         org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never())
-                .findVisible(any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+                .findVisible(any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                        org.mockito.ArgumentMatchers.anyBoolean(), any());
     }
 
     @Test
     void anAdministratorWithAccountIdStillGetsThatAccountOnly() {
-        when(enrollmentService.findVisible(eq(1L), eq(true), eq(43L))).thenReturn(Flux.empty());
+        when(enrollmentService.findVisible(eq(1L), eq(true), eq(false), eq(43L))).thenReturn(Flux.empty());
 
         client.mutateWith(adminJwt())
                 .get()
@@ -187,13 +188,13 @@ class EnrollmentSecurityTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        org.mockito.Mockito.verify(enrollmentService).findVisible(1L, true, 43L);
+        org.mockito.Mockito.verify(enrollmentService).findVisible(1L, true, false, 43L);
         org.mockito.Mockito.verify(enrollmentService, org.mockito.Mockito.never()).findAllActive();
     }
 
     @Test
     void aStudentNeverReachesTheFullListing() {
-        when(enrollmentService.findVisible(eq(42L), eq(false), any())).thenReturn(Flux.empty());
+        when(enrollmentService.findVisible(eq(42L), eq(false), eq(false), any())).thenReturn(Flux.empty());
 
         client.mutateWith(studentJwt())
                 .get()
@@ -221,7 +222,7 @@ class EnrollmentSecurityTest {
         // one is required depends on who is enrolling whom) — the controller no longer
         // rejects an empty body itself; EnrollmentService does, once it knows this is a
         // self-enroll with no code.
-        when(enrollmentService.enroll(eq(42L), eq(false), any()))
+        when(enrollmentService.enroll(eq(42L), eq(false), eq(false), any()))
                 .thenReturn(Mono.error(ao.creativemode.kixi.shared.exception.ApiException.badRequest(
                         "An enrollment code is required")));
 
@@ -233,17 +234,18 @@ class EnrollmentSecurityTest {
 
     @Test
     void studentCancelsOwnEnrollmentAndGetsNoContent() {
-        when(enrollmentService.cancel(42L, false, 1L)).thenReturn(Mono.empty());
+        when(enrollmentService.cancel(42L, false, false, 1L))
+                .thenReturn(Mono.just(new EnrollmentResponse(1L, 42L, 7L, 2024L, "CANCELLED")));
 
         client.mutateWith(studentJwt()).delete().uri("/api/v1/enrollments/1")
                 .exchange().expectStatus().isNoContent();
 
-        org.mockito.Mockito.verify(enrollmentService).cancel(42L, false, 1L);
+        org.mockito.Mockito.verify(enrollmentService).cancel(42L, false, false, 1L);
     }
 
     @Test
     void studentCannotEnrollAnotherAccount() {
-        when(enrollmentService.enroll(eq(42L), eq(false), any()))
+        when(enrollmentService.enroll(eq(42L), eq(false), eq(false), any()))
                 .thenReturn(Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden("forbidden")));
 
         client.mutateWith(studentJwt()).post().uri("/api/v1/enrollments")

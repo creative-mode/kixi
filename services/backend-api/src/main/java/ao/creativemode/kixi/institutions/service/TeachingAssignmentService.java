@@ -219,6 +219,17 @@ public class TeachingAssignmentService {
             .then();
     }
 
+    /** Completes only when the active teacher has at least one active assignment in the class. */
+    public Mono<Void> requireAssignedToClass(Long accountId, Long classId) {
+        return teacherRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .flatMap(teacher -> classRepository.findByIdAndDeletedAtIsNull(classId)
+                .flatMap(klass -> assignments.existsByTeacherIdAndClassIdAndSchoolYearIdAndDeletedAtIsNull(
+                    teacher.getId(), classId, klass.getSchoolYearId())))
+            .filter(Boolean::booleanValue)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Enrollment not found")))
+            .then();
+    }
+
     // ── Internals ───────────────────────────────────────────────────────────
 
     /**

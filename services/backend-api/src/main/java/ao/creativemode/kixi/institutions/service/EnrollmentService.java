@@ -18,8 +18,8 @@ import reactor.core.publisher.Mono;
 /**
  * Student enrollments in classes.
  *
- * <p>ADMIN/TEACHER may enroll any account directly, by {@code classId}/{@code
- * schoolYearId} — that path is unchanged. A student enrolling <em>themselves</em>
+ * <p>ADMIN may enroll any account directly. TEACHER may enroll accounts only in
+ * an institution to which they are affiliated. A student enrolling <em>themselves</em>
  * no longer may: since #255, self-enroll requires an {@link EnrollmentCode} issued
  * by the school for that class, redeemed atomically by
  * {@link EnrollmentCodeService#redeem}, and the class/school year it resolves to
@@ -48,6 +48,8 @@ public class EnrollmentService {
     private final AccountRoleRepository accountRoleRepository;
     private final RoleRepository roleRepository;
     private final EnrollmentCodeService enrollmentCodeService;
+    private final InstitutionAccessService institutionAccessService;
+    private final TeachingAssignmentService teachingAssignmentService;
 
     public EnrollmentService(
         EnrollmentRepository enrollments,
@@ -56,7 +58,9 @@ public class EnrollmentService {
         SchoolYearRepository schoolYearRepository,
         AccountRoleRepository accountRoleRepository,
         RoleRepository roleRepository,
-        EnrollmentCodeService enrollmentCodeService
+        EnrollmentCodeService enrollmentCodeService,
+        InstitutionAccessService institutionAccessService,
+        TeachingAssignmentService teachingAssignmentService
     ) {
         this.enrollments = enrollments;
         this.accountRepository = accountRepository;
@@ -65,11 +69,15 @@ public class EnrollmentService {
         this.accountRoleRepository = accountRoleRepository;
         this.roleRepository = roleRepository;
         this.enrollmentCodeService = enrollmentCodeService;
+        this.institutionAccessService = institutionAccessService;
+        this.teachingAssignmentService = teachingAssignmentService;
     }
 
-    public Mono<EnrollmentResponse> enroll(Long callerAccountId, boolean staff, EnrollRequest request) {
+    public Mono<EnrollmentResponse> enroll(
+        Long callerAccountId, boolean admin, boolean teacher, EnrollRequest request
+    ) {
         Long targetAccountId = request.accountId() != null ? request.accountId() : callerAccountId;
-        if (!targetAccountId.equals(callerAccountId) && !staff) {
+        if (!targetAccountId.equals(callerAccountId) && !admin && !teacher) {
             return Mono.error(ApiException.forbidden("Only ADMIN or TEACHER can enroll another account"));
         }
         boolean selfEnroll = targetAccountId.equals(callerAccountId);
@@ -80,7 +88,7 @@ public class EnrollmentService {
             .then(Mono.defer(() -> requireStudentRole(targetAccountId)))
             .then(Mono.defer(() -> selfEnroll
                 ? resolveBySelfEnrollCode(request.code())
-                : resolveByStaffRequest(request.classId(), request.schoolYearId())))
+                : resolveByStaffRequest(callerAccountId, admin, teacher, request.classId(), request.schoolYearId())))
             .flatMap(resolved -> schoolYearRepository.findByIdAndDeletedAtIsNull(resolved.schoolYearId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("School year not found")))
                 .then(Mono.defer(() ->
@@ -112,18 +120,27 @@ public class EnrollmentService {
                 .map(clazz -> new ResolvedClass(clazz.getId(), clazz.getSchoolYearId(), redemption.enrollmentCodeId())));
     }
 
-    /** The unchanged staff path: ADMIN/TEACHER names the class and school year directly. */
-    private Mono<ResolvedClass> resolveByStaffRequest(Long classId, Long schoolYearId) {
+    /** Resolves a staff-selected class after enforcing the caller's institutional scope. */
+    private Mono<ResolvedClass> resolveByStaffRequest(
+        Long callerAccountId, boolean admin, boolean teacher, Long classId, Long schoolYearId
+    ) {
         if (classId == null || schoolYearId == null) {
             return Mono.error(ApiException.badRequest("Class and school year are required"));
         }
         return classRepository.findByIdAndDeletedAtIsNull(classId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Class not found")))
             .flatMap(clazz -> {
-                if (!clazz.getSchoolYearId().equals(schoolYearId)) {
-                    return Mono.error(ApiException.badRequest("Class does not belong to the given school year"));
-                }
-                return Mono.just(new ResolvedClass(clazz.getId(), clazz.getSchoolYearId(), null));
+                Mono<Void> authorization = !admin && teacher
+                    ? institutionAccessService.requireTeacherAffiliatedToInstitution(
+                        callerAccountId, clazz.getInstitutionId())
+                    : Mono.empty();
+                return authorization.then(Mono.defer(() -> {
+                    if (!clazz.getSchoolYearId().equals(schoolYearId)) {
+                        return Mono.error(ApiException.badRequest(
+                            "Class does not belong to the given school year"));
+                    }
+                    return Mono.just(new ResolvedClass(clazz.getId(), clazz.getSchoolYearId(), null));
+                }));
             });
     }
 
@@ -151,14 +168,23 @@ public class EnrollmentService {
 
     /**
      * Active enrollments visible to the caller: their own, or another
-     * account's when the caller is staff.
+     * account's when the caller is ADMIN, or classes taught by a TEACHER.
      */
-    public Flux<EnrollmentResponse> findVisible(Long callerAccountId, boolean staff, Long accountId) {
+    public Flux<EnrollmentResponse> findVisible(
+        Long callerAccountId, boolean admin, boolean teacher, Long accountId
+    ) {
         Long targetAccountId = accountId != null ? accountId : callerAccountId;
-        if (!targetAccountId.equals(callerAccountId) && !staff) {
+        if (!targetAccountId.equals(callerAccountId) && !admin && !teacher) {
             return Flux.error(ApiException.forbidden("Only ADMIN or TEACHER can list another account's enrollments"));
         }
-        return enrollments.findAllByAccountIdAndDeletedAtIsNull(targetAccountId).map(EnrollmentService::toResponse);
+        return enrollments.findAllByAccountIdAndDeletedAtIsNull(targetAccountId)
+            .concatMap(enrollment -> {
+                if (admin || targetAccountId.equals(callerAccountId) || !teacher) {
+                    return Mono.just(toResponse(enrollment));
+                }
+                return teachingAssignmentService.requireAssignedToClass(callerAccountId, enrollment.getClassId())
+                    .thenReturn(toResponse(enrollment));
+            });
     }
 
     /**
@@ -169,14 +195,23 @@ public class EnrollmentService {
         return enrollments.findAllByDeletedAtIsNullOrderByIdAsc().map(EnrollmentService::toResponse);
     }
 
-    public Mono<EnrollmentResponse> cancel(Long callerAccountId, boolean staff, Long enrollmentId) {
+    public Mono<EnrollmentResponse> cancel(
+        Long callerAccountId, boolean admin, boolean teacher, Long enrollmentId
+    ) {
         return enrollments.findById(enrollmentId)
             .filter(enrollment -> !enrollment.isDeleted())
             .switchIfEmpty(Mono.error(ApiException.notFound("Enrollment not found")))
             .flatMap(enrollment -> {
-                if (!enrollment.getAccountId().equals(callerAccountId) && !staff) {
+                if (enrollment.getAccountId().equals(callerAccountId) || admin) {
+                    return Mono.just(enrollment);
+                }
+                if (!teacher) {
                     return Mono.error(ApiException.forbidden("Only ADMIN or TEACHER can cancel another account's enrollment"));
                 }
+                return teachingAssignmentService.requireAssignedToClass(callerAccountId, enrollment.getClassId())
+                    .thenReturn(enrollment);
+            })
+            .flatMap(enrollment -> {
                 enrollment.markAsDeleted();
                 return enrollments.save(enrollment);
             })
