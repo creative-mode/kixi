@@ -51,6 +51,7 @@ class SimulationSubmissionServiceTest {
         teachingAuthorizer = mock(TeachingAssignmentAuthorizer.class);
         service = new SimulationSubmissionService(simulations, answers, questions, options, statements, teachingAuthorizer);
         when(simulations.claimSubmission(10L)).thenReturn(Mono.just(1));
+        when(simulations.lockForAnswerWriteByAnswerId(30L)).thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
     }
 
     @Test
@@ -287,6 +288,41 @@ class SimulationSubmissionServiceTest {
                 .assertNext(response -> assertThat(response.isCorrect()).isTrue())
                 .verifyComplete();
         verifyNoInteractions(teachingAuthorizer, statements);
+    }
+
+    @Test
+    void rejectsGradingAnAnswerThatWasAlreadyGraded() {
+        SimulationAnswer graded = pendingAnswer();
+        graded.setReviewStatus(SimulationAnswerStatus.GRADED);
+        graded.setScoreObtained(3.0f);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(graded));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question(2L, 5)));
+
+        StepVerifier.create(service.grade(30L, 4.5, 99L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatus().value()).isEqualTo(409);
+                })
+                .verify();
+
+        assertThat(graded.getScoreObtained()).isEqualTo(3.0f);
+        verify(answers, never()).save(any());
+    }
+
+    @Test
+    void rejectsScoreAboveQuestionMaximumWithoutSaving() {
+        SimulationAnswer pending = pendingAnswer();
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(pending));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question(2L, 5)));
+
+        StepVerifier.create(service.grade(30L, 5.1, 99L, true))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatus().value()).isEqualTo(400);
+                })
+                .verify();
+
+        verify(answers, never()).save(any());
     }
 
     private Simulation simulation(SimulationStatus status) {

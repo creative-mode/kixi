@@ -61,7 +61,7 @@ public interface SimulationRepository extends ReactiveCrudRepository<Simulation,
     Mono<Simulation> lockForAnswerWrite(Long id);
 
     @Query("SELECT s.* FROM simulations s JOIN simulation_answers a ON a.simulation_id = s.id "
-            + "WHERE a.id = :answerId AND s.deleted_at IS NULL FOR UPDATE")
+            + "WHERE a.id = :answerId AND s.deleted_at IS NULL FOR UPDATE OF s, a")
     Mono<Simulation> lockForAnswerWriteByAnswerId(Long answerId);
 
     @Query("SELECT * FROM simulations WHERE exam_room_id = :roomId AND deleted_at IS NULL ORDER BY id FOR UPDATE")
