@@ -60,4 +60,28 @@ class QuestionImageFileControllerTest {
         client.get().uri("/uploads/questions/..%2Fdonations/secret.png").exchange().expectStatus().isNotFound();
         client.get().uri("/uploads/questions/abc/ocr-1b2c.png").exchange().expectStatus().isNotFound();
     }
+
+    @Test
+    void aWidthAsksForASmallerCopyAndAnythingOddFallsBackToTheOriginal() throws Exception {
+        Files.createDirectories(root.resolve("images/avatar"));
+        java.awt.image.BufferedImage big = new java.awt.image.BufferedImage(600, 600, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < 600; x++) {
+            for (int y = 0; y < 600; y++) {
+                big.setRGB(x, y, (x * 5 + y * 3) & 0xFFFFFF);
+            }
+        }
+        javax.imageio.ImageIO.write(big, "png", root.resolve("images/avatar/big.png").toFile());
+        long original = Files.size(root.resolve("images/avatar/big.png"));
+
+        client.get().uri("/uploads/images/avatar/big.png?w=96").exchange()
+                .expectStatus().isOk()
+                .expectHeader().value("Cache-Control", v -> org.assertj.core.api.Assertions.assertThat(v).contains("immutable"))
+                .expectBody(byte[].class).value(body -> org.assertj.core.api.Assertions.assertThat((long) body.length).isLessThan(original));
+        // a width that is not offered, and one that is not a number, give the original (or a 400 for the latter), never a new file
+        client.get().uri("/uploads/images/avatar/big.png?w=97").exchange()
+                .expectBody(byte[].class).value(body -> org.assertj.core.api.Assertions.assertThat((long) body.length).isEqualTo(original));
+        client.get().uri("/uploads/images/avatar/big.png?w=abc").exchange().expectStatus().is4xxClientError();
+        org.assertj.core.api.Assertions.assertThat(root.resolve("variants/images/avatar")).isDirectory();
+        org.assertj.core.api.Assertions.assertThat(root.resolve("variants/images/avatar/97")).doesNotExist();
+    }
 }

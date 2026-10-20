@@ -98,6 +98,14 @@ class PostServiceTest {
                 rateLimiter, showcaseReader, institutionNames, clock);
         lenient().when(displayNames.maskedNameOf(anyLong()))
                 .thenAnswer(call -> Mono.just(maskedNameOf((Long) call.getArgument(0))));
+        lenient().when(displayNames.briefsOf(org.mockito.ArgumentMatchers.anyCollection()))
+                .thenAnswer(call -> {
+                    java.util.Map<Long, DisplayNameReader.Brief> briefs = new java.util.HashMap<>();
+                    for (Object id : (java.util.Collection<?>) call.getArgument(0)) {
+                        briefs.put((Long) id, new DisplayNameReader.Brief(maskedNameOf((Long) id), "/uploads/images/avatar/" + id + ".jpg"));
+                    }
+                    return Mono.just(briefs);
+                });
         lenient().when(rateLimiter.check(anyLong())).thenReturn(Mono.empty());
     }
 
@@ -470,7 +478,7 @@ class PostServiceTest {
         when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
         when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID))
                 .thenReturn(Mono.just(myPost()));
-        when(displayNames.maskedNameOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.empty());
+        when(displayNames.briefsOf(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(Mono.just(java.util.Map.of()));
         when(commentRepository
                 .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
                         eq(POST_ID), any(Pageable.class)))

@@ -35,6 +35,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -269,7 +271,17 @@ public class PostService {
                     .flatMapMany(visible -> commentRepository
                             .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
                                     postId, PageRequest.of(page - 1, limit))
-                            .flatMapSequential(comment -> toCommentResponse(comment, accountId)));
+                            .collectList()
+                            .flatMapMany(comments -> {
+                                // One read for the distinct authors, not one per comment.
+                                List<Long> authors = comments.stream()
+                                        .map(PostComment::getAuthorAccountId).distinct().toList();
+                                return displayNames.briefsOf(authors)
+                                        .defaultIfEmpty(Map.of())
+                                        .flatMapMany(briefs -> Flux.fromIterable(comments)
+                                                .map(comment -> toCommentResponse(
+                                                        comment, accountId, briefs.get(comment.getAuthorAccountId()))));
+                            }));
         });
     }
 
@@ -286,21 +298,24 @@ public class PostService {
      * returns an empty Mono when there is no person behind the id, and mapping straight
      * over it would drop the row — a comment is not lost because we cannot name it.</p>
      */
+    private PostCommentResponse toCommentResponse(PostComment comment, Long readerAccountId, DisplayNameReader.Brief brief) {
+        return new PostCommentResponse(
+                comment.getId(),
+                comment.getPostId(),
+                comment.getAuthorAccountId(),
+                comment.getContent(),
+                comment.getIsHidden(),
+                comment.getCreatedAt(),
+                comment.getUpdatedAt(),
+                comment.getAuthorAccountId().equals(readerAccountId),
+                brief == null ? null : brief.maskedName(),
+                brief == null ? null : brief.photo());
+    }
+
     private Mono<PostCommentResponse> toCommentResponse(PostComment comment, Long readerAccountId) {
-        boolean mine = comment.getAuthorAccountId().equals(readerAccountId);
-        return displayNames.maskedNameOf(comment.getAuthorAccountId())
-                .map(Optional::of)
-                .defaultIfEmpty(Optional.empty())
-                .map(name -> new PostCommentResponse(
-                        comment.getId(),
-                        comment.getPostId(),
-                        comment.getAuthorAccountId(),
-                        comment.getContent(),
-                        comment.getIsHidden(),
-                        comment.getCreatedAt(),
-                        comment.getUpdatedAt(),
-                        mine,
-                        name.orElse(null)));
+        return displayNames.briefsOf(List.of(comment.getAuthorAccountId()))
+                .defaultIfEmpty(Map.of())
+                .map(briefs -> toCommentResponse(comment, readerAccountId, briefs.get(comment.getAuthorAccountId())));
     }
 
     /**
