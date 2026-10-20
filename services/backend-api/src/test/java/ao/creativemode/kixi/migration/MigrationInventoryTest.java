@@ -101,6 +101,21 @@ class MigrationInventoryTest {
         assertTrue(migration.contains("idx_api_abuse_rate_limits_updated_at"));
     }
 
+    @Test
+    void simulationIntegrityRepeatableMigrationStoresOnlyAllowlistedEventsAndServerTime() throws IOException, URISyntaxException {
+        String migration = Files.readString(
+                migrationDirectory().resolve("R__simulation_integrity_events.sql")).toLowerCase();
+
+        assertTrue(migration.contains("create table if not exists simulation_integrity_events"));
+        assertTrue(migration.contains("references simulations(id) on delete cascade"));
+        assertTrue(migration.contains("occurred_at timestamp with time zone not null default current_timestamp"));
+        assertTrue(migration.contains("'tab_hidden'"));
+        assertTrue(migration.contains("'paste_blocked'"));
+        assertTrue(migration.contains("'tutor_blocked'"));
+        assertTrue(migration.contains("kind = 'paste_blocked' and question_id is not null"));
+        assertFalse(migration.contains("answer_text"));
+    }
+
     private Path migrationDirectory() throws URISyntaxException {
         return Path.of(Objects.requireNonNull(
                 getClass().getClassLoader().getResource("db/migration")

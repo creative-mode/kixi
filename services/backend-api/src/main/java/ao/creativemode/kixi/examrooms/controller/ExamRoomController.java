@@ -18,7 +18,9 @@ import ao.creativemode.kixi.examrooms.service.ExamRoomService;
 import ao.creativemode.kixi.examrooms.service.ExamRoomMonitoringService;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomGradeResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
+import ao.creativemode.kixi.examrooms.dto.ExamRoomIntegrityResponse;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.examrooms.service.ExamRoomIntegrityService;
 import jakarta.validation.Valid;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Flux;
@@ -29,20 +31,23 @@ public class ExamRoomController {
     private final ExamRoomService service;
     private final CurrentAccountService current;
     private final ExamRoomMonitoringService monitoring;
+    private final ExamRoomIntegrityService integrity;
     private final ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction;
 
     public ExamRoomController(ExamRoomService service, CurrentAccountService current,
             ExamRoomMonitoringService monitoring) {
-        this(service, current, monitoring, null);
+        this(service, current, monitoring, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ExamRoomController(ExamRoomService service, CurrentAccountService current,
-            ExamRoomMonitoringService monitoring, ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction) {
+            ExamRoomMonitoringService monitoring, ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction,
+            ExamRoomIntegrityService integrity) {
         this.service = service;
         this.current = current;
         this.monitoring = monitoring;
         this.correction = correction;
+        this.integrity = integrity;
     }
 
     @PostMapping
@@ -124,6 +129,12 @@ public class ExamRoomController {
     @GetMapping("/{id}/grades")
     public Mono<ResponseEntity<List<ExamRoomGradeResponse>>> grades(@PathVariable Long id) {
         return staffContext().flatMap(context -> monitoring.grades(id, context.accountId(), context.admin()))
+                .map(ResponseEntity::ok);
+    }
+
+    @GetMapping("/{id}/integrity")
+    public Mono<ResponseEntity<ExamRoomIntegrityResponse>> integrity(@PathVariable Long id) {
+        return staffContext().flatMap(context -> integrity.list(id, context.accountId(), context.admin()))
                 .map(ResponseEntity::ok);
     }
 

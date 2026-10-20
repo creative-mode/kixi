@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.critical;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Duration;
@@ -88,7 +89,10 @@ class CriticalExamFlowPostgresIntegrationTest {
 
         sql("DELETE FROM simulation_answers WHERE simulation_id IN "
                 + "(SELECT id FROM simulations WHERE statement_id = " + STATEMENT + ")");
+        sql("DELETE FROM exam_room_participants WHERE exam_room_id IN "
+                + "(SELECT id FROM exam_rooms WHERE statement_id = " + STATEMENT + ")");
         sql("DELETE FROM simulations WHERE statement_id = " + STATEMENT);
+        sql("DELETE FROM exam_rooms WHERE statement_id = " + STATEMENT);
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
@@ -180,6 +184,83 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.questions[0].correctOptionId").isEqualTo(RIGHT_OPTION)
                 .jsonPath("$.questions[0].scoreObtained").isEqualTo(5.0)
                 .jsonPath("$.questions[0].isCorrect").isEqualTo(true);
+    }
+
+    @Test
+    void studentEventsArePersistedAndVisibleOnlyToAuthorizedRoomStaff() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+
+        long room = database.sql("INSERT INTO exam_rooms (statement_id, teacher_account_id, starts_at, ends_at, "
+                        + "duration_minutes, status) VALUES (:statement, :teacher, CURRENT_TIMESTAMP, "
+                        + "CURRENT_TIMESTAMP + INTERVAL '1 hour', 60, 'RUNNING') RETURNING id")
+                .bind("statement", STATEMENT).bind("teacher", TEACHER)
+                .map((row, metadata) -> row.get("id", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        sql("UPDATE simulations SET exam_room_id = " + room + ", exam_room_duration_minutes = 60 WHERE id = "
+                + simulation);
+        sql("INSERT INTO exam_room_participants (exam_room_id, account_id, simulation_id) VALUES (" + room + ", "
+                + STUDENT + ", " + simulation + ")");
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.simulationId").isEqualTo(simulation)
+                .jsonPath("$.kind").isEqualTo("TAB_HIDDEN")
+                .jsonPath("$.at").exists()
+                .jsonPath("$.questionId").doesNotExist();
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"PASTE_BLOCKED\",\"questionId\":" + QUESTION + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.kind").isEqualTo("PASTE_BLOCKED")
+                .jsonPath("$.questionId").isEqualTo(QUESTION);
+
+        bearer(teacherToken)
+                .get()
+                .uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.roomId").isEqualTo(room)
+                .jsonPath("$.participants[0].accountId").isEqualTo(STUDENT)
+                .jsonPath("$.participants[0].simulationId").isEqualTo(simulation)
+                .jsonPath("$.participants[0].events.length()").isEqualTo(2)
+                .jsonPath("$.participants[0].events[1].questionId").isEqualTo(QUESTION);
+
+        String otherTeacherToken = jwtService.generateToken(999L, List.of("TEACHER"));
+        bearer(otherTeacherToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isForbidden();
+        bearer(studentToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isUnauthorized();
+
+        Long saved = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(saved).isEqualTo(2L);
     }
 
     @Test
