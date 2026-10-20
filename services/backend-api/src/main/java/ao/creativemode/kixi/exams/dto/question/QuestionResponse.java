@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.dto.question;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * A question as read back.
@@ -32,5 +33,23 @@ public record QuestionResponse(
         LocalDateTime updatedAt,
         LocalDateTime deletedAt,
         Long parentId,
-        String label
-) { }
+        String label,
+        String rawText,
+        Double ocrConfidence,
+        Boolean ocrReviewed,
+        List<FormulaEvidence> formulas
+) {
+    public QuestionResponse(Long id, Long statementId, Integer number, String text, String questionType,
+            Double maxScore, Integer orderIndex, Integer pageIndex, String modelAnswer, Boolean needsReview,
+            LocalDateTime createdAt, LocalDateTime updatedAt, LocalDateTime deletedAt, Long parentId, String label) {
+        this(id, statementId, number, text, questionType, maxScore, orderIndex, pageIndex, modelAnswer,
+            needsReview, createdAt, updatedAt, deletedAt, parentId, label, null, null, null, null);
+    }
+
+    public record FormulaEvidence(String raw, String latex, Double confidence, String kind,
+            Double ocrConfidence, Double layoutConfidence) {
+        public FormulaEvidence(String raw, String latex, Double confidence, String kind) {
+            this(raw, latex, confidence, kind, null, null);
+        }
+    }
+}

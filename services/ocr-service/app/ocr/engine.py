@@ -6,11 +6,13 @@ formulas) that the postprocessor ties to the questions. PaddleOCR-VL is availabl
 """
 
 import asyncio
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 import hashlib
+import re
 import uuid
 
 import numpy as np
@@ -64,6 +66,17 @@ class DocumentInfo:
 
 
 @dataclass
+class PageOcrContext:
+    """Internal OCR evidence needed to structure multi-page questions as one document."""
+    page_index: int
+    source_file_index: int
+    text_blocks: List[TextBlock]
+    layout_regions: Optional[List[LayoutRegion]]
+    width: int
+    height: int
+
+
+@dataclass
 class OCRResult:
     """Complete OCR extraction result."""
     status: str  # "success", "partial", "error"
@@ -81,6 +94,8 @@ class OCRResult:
     # first page (multi-page merges keep only this one - the metadata is mainly a signal for
     # "is this submission worth a retake photo", not something every page needs separately).
     preprocessing: Optional[Dict[str, Any]] = None
+    timings: Optional[Dict[str, float]] = None
+    page_context: Optional[PageOcrContext] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -115,6 +130,7 @@ class OCRResult:
             ],
             "unmappedContent": [u.to_dict() for u in self.unmapped_content],
             "warnings": [w.to_dict() for w in self.warnings],
+            **({"timings": self.timings} if self.timings else {}),
             **({"errorMessage": self.error_message} if self.error_message else {}),
         }
 
@@ -401,9 +417,9 @@ class OCREngine:
 
     @staticmethod
     def _numbering_has_gaps(questions: List[ExtractedQuestion]) -> bool:
-        """Questions numbered 1, 4, 5 are missing two: the lines that carried the numbers were not read."""
+        """Detect gaps within a page without assuming its first question is numbered one."""
         numbers = [int(q.number) for q in questions if str(q.number).isdigit()]
-        return bool(numbers) and numbers != list(range(1, len(numbers) + 1))
+        return bool(numbers) and numbers != list(range(numbers[0], numbers[0] + len(numbers)))
 
     def _detect_layout(self, image: np.ndarray, request_id: str) -> Optional[List[LayoutRegion]]:
         """Figures, tables and formulas of the page; None when the layout was not run (disabled or failed).
@@ -477,6 +493,7 @@ class OCREngine:
         page_index: int = 0,
         request_id: Optional[str] = None,
         source_file_index: int = 0,
+        native_text_page: Optional[Dict[str, Any]] = None,
     ) -> OCRResult:
         """
         Process a single image and extract text with structure.
@@ -489,7 +506,7 @@ class OCREngine:
         Returns:
             OCRResult with extracted data
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
         logger.info(
@@ -501,7 +518,9 @@ class OCREngine:
 
         try:
             # Preprocess the image
+            preprocessing_started = time.perf_counter()
             preprocessing_result = self.preprocessor.preprocess(image)
+            preprocessing_ms = (time.perf_counter() - preprocessing_started) * 1000
             processed_image = preprocessing_result.image
 
             preprocessing_meta: Dict[str, Any] = {
@@ -543,12 +562,49 @@ class OCREngine:
                 ))
 
             # Run OCR: text lines, and the layout that says where the figures are
-            if settings.ocr_pipeline == "vl":
+            ocr_started = time.perf_counter()
+            native_lines = (native_text_page or {}).get("lines") or []
+            native_gap_count = sum(
+                1 for line in native_lines
+                if re.search(r"\S[ \t]{3,}\S", str(line.get("text", "")))
+            )
+            native_usable = (
+                len(native_lines) >= 3
+                and sum(len(str(line.get("text", "")).strip()) for line in native_lines) >= 80
+            )
+            if native_usable:
+                page_width = float((native_text_page or {}).get("width") or 0)
+                page_height = float((native_text_page or {}).get("height") or 0)
+                # Native text coordinates belong to the source PDF page. Keep the
+                # unmodified render as the layout/crop frame so preprocessing cannot
+                # shift formula and figure associations away from their source region.
+                analysis_image = image
+                image_height, image_width = analysis_image.shape[:2]
+                text_blocks = []
+                for line_index, line in enumerate(native_lines):
+                    try:
+                        x0, y0, x1, y1 = line["bbox"]
+                        bbox = (
+                            round(float(x0) * image_width / page_width),
+                            round(float(y0) * image_height / page_height),
+                            round(float(x1) * image_width / page_width),
+                            round(float(y1) * image_height / page_height),
+                        )
+                        text_blocks.append(TextBlock(
+                            text=str(line["text"]), confidence=0.99, bbox=bbox,
+                            page_index=page_index, line_index=line_index,
+                        ))
+                    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                        continue
+                layout = self._detect_layout(analysis_image, request_id)
+            elif settings.ocr_pipeline == "vl":
                 text_blocks, layout = self._run_vl(processed_image, page_index)
+                analysis_image = processed_image
             else:
                 raw_results = self._run_ocr(processed_image)
                 text_blocks = self._parse_ocr_results(raw_results, page_index)
                 layout = self._detect_layout(processed_image, request_id)
+                analysis_image = processed_image
             text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
 
             logger.debug(
@@ -563,10 +619,11 @@ class OCREngine:
             # Detect language
             full_text = " ".join(b.text for b in text_blocks)
             main_language = detect_language(full_text) if full_text else self.lang
+            ocr_ms = (time.perf_counter() - ocr_started) * 1000
 
             # Postprocess to extract structured data. The boxes are in the preprocessed image's frame (deskew
             # can grow the canvas by a few pixels), so that is the size the crops are scaled from.
-            def interpret(blocks: List[TextBlock], frame: np.ndarray = processed_image, regions=layout):
+            def interpret(blocks: List[TextBlock], frame: np.ndarray = analysis_image, regions=layout):
                 return self.postprocessor.process(
                     blocks,
                     page_count=1,
@@ -577,7 +634,9 @@ class OCREngine:
                     recognize_formulas=settings.ocr_formula_latex,
                 )
 
+            parsing_started = time.perf_counter()
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
+            parsing_ms = time.perf_counter() - parsing_started
 
             # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
             # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
@@ -590,10 +649,14 @@ class OCREngine:
                 and (len(questions) < settings.ocr_min_questions or self._numbering_has_gaps(questions))
             ):
                 logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
+                fallback_ocr_started = time.perf_counter()
                 retry_blocks = self._parse_ocr_results(self._run_ocr(image, fallback=True), page_index)
                 retry_layout = self._detect_layout(image, request_id)
                 retry_blocks, retry_layout = self._mark_handwriting(image, image, retry_blocks, retry_layout)
+                ocr_ms += (time.perf_counter() - fallback_ocr_started) * 1000
+                fallback_parse_started = time.perf_counter()
                 retry = interpret(retry_blocks, image, retry_layout)
+                parsing_ms += time.perf_counter() - fallback_parse_started
                 if len(retry[1]) > len(questions) or (
                     len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
                 ):
@@ -605,7 +668,13 @@ class OCREngine:
                 text_blocks, metadata, questions
             )
 
-            warnings = [*legibility_warnings, *warnings]
+            native_text_warnings = ([Warning(
+                code="NATIVE_TEXT_GAP",
+                field="formulas",
+                confidence=0.0,
+                message="O texto do PDF contém espaços que podem corresponder a fórmulas ou símbolos não extraídos. Confirme estes trechos com o documento original.",
+            )] if native_gap_count else [])
+            warnings = [*legibility_warnings, *native_text_warnings, *warnings]
 
             # Determine status
             error_message = None
@@ -618,12 +687,20 @@ class OCREngine:
                     if not preprocessing_result.is_legible
                     else "No text could be extracted from the image"
                 )
+            elif not questions:
+                status = "partial"
+                warnings.append(Warning(
+                    code="NO_QUESTIONS",
+                    field="questions",
+                    confidence=overall_confidence,
+                    message="Foi lido texto, mas não foi possível estruturar questões nesta página.",
+                ))
             elif overall_confidence < 0.5:
                 status = "partial"
             else:
                 status = "success"
 
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             result = OCRResult(
                 status=status,
@@ -642,6 +719,20 @@ class OCREngine:
                 warnings=warnings,
                 error_message=error_message,
                 preprocessing=preprocessing_meta,
+                timings={
+                    "preprocessingMs": round(preprocessing_ms, 1),
+                    "ocrMs": round(ocr_ms, 1),
+                    "parsingMs": round(parsing_ms * 1000, 1),
+                    "totalMs": round((time.perf_counter() - start_time) * 1000, 1),
+                },
+                page_context=PageOcrContext(
+                    page_index=page_index,
+                    source_file_index=source_file_index,
+                    text_blocks=list(text_blocks),
+                    layout_regions=list(layout) if layout is not None else None,
+                    width=int(analysis_image.shape[1]),
+                    height=int(analysis_image.shape[0]),
+                ),
             )
 
             logger.info(
@@ -656,7 +747,7 @@ class OCREngine:
             return result
 
         except Exception as e:
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             logger.error(
                 "Image processing failed",
@@ -676,6 +767,7 @@ class OCREngine:
                 unmapped_content=[],
                 warnings=[],
                 error_message="Image processing failed",
+                timings={"totalMs": round((time.perf_counter() - start_time) * 1000, 1)},
             )
 
     async def process_image_async(
@@ -712,8 +804,19 @@ class OCREngine:
         request_id: Optional[str] = None,
         source_file_indices: Optional[List[int]] = None,
     ) -> OCRResult:
+        return self.process_images_with_progress(images, request_id, source_file_indices)
+
+    def process_images_with_progress(
+        self,
+        images: List[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        on_page_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancelled: Optional[threading.Event] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+    ) -> OCRResult:
         """
-        Process multiple images (multi-page document).
+        Process pages sequentially and report measured completion after each page.
 
         Args:
             images: List of images as numpy arrays
@@ -722,7 +825,7 @@ class OCREngine:
         Returns:
             Combined OCRResult with data from all pages
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
         logger.info(
@@ -753,8 +856,19 @@ class OCREngine:
         has_tables = False
         languages = []
         read_any_text = False
+        has_partial_page = False
+        has_partial_content_page = False
+        has_unreadable_page = False
+        page_contexts: List[PageOcrContext] = []
+        page_timings: Dict[str, float] = {
+            "preprocessingMs": 0.0,
+            "ocrMs": 0.0,
+            "parsingMs": 0.0,
+        }
 
         for idx, image in enumerate(images):
+            if cancelled is not None and cancelled.is_set():
+                break
             result = self.process_image(
                 image,
                 page_index=idx,
@@ -762,12 +876,22 @@ class OCREngine:
                 source_file_index=(source_file_indices[idx]
                                    if source_file_indices and idx < len(source_file_indices)
                                    else 0),
+                native_text_page=(native_text_pages[idx]
+                                  if native_text_pages and idx < len(native_text_pages)
+                                  else None),
             )
 
             # ``process_image`` only marks ``error`` when it saw no text blocks at all, so a
             # page that is not an error did read text, even if it became no question.
             if result.status != "error":
                 read_any_text = True
+            has_partial_page = has_partial_page or result.status == "partial"
+            has_partial_content_page = has_partial_content_page or (
+                result.status == "partial" and bool(result.questions)
+            )
+            has_unreadable_page = has_unreadable_page or result.status == "error"
+            if result.page_context is not None:
+                page_contexts.append(result.page_context)
 
             # Merge results
             all_questions.extend(result.questions)
@@ -778,10 +902,57 @@ class OCREngine:
             if result.document.has_tables:
                 has_tables = True
             languages.append(result.document.main_language)
+            for key in page_timings:
+                page_timings[key] += float((result.timings or {}).get(key, 0))
+
+            if on_page_complete is not None:
+                on_page_complete({
+                    "page": idx + 1,
+                    "pageCount": len(images),
+                    "timings": result.timings or {},
+                })
 
             # Use metadata from first page
             if idx == 0:
                 metadata = result.metadata
+
+        # Parse the complete document after each page has been recognized. This retains streaming page
+        # progress but lets a question or alínea continue across a physical page break without dropping text.
+        combined_parsing_ms = 0.0
+        if len(page_contexts) == len(images) and page_contexts:
+            combined_started = time.perf_counter()
+            all_blocks = [block for page in page_contexts for block in page.text_blocks]
+            page_dimensions = {page.page_index: (page.width, page.height) for page in page_contexts}
+            source_indices = {page.page_index: page.source_file_index for page in page_contexts}
+            layout_regions = {
+                page.page_index: page.layout_regions
+                for page in page_contexts
+                if page.layout_regions is not None
+            }
+            metadata, all_questions, all_images_to_upload, all_unmapped, document_warnings = self.postprocessor.process(
+                all_blocks,
+                page_count=len(images),
+                page_dimensions=page_dimensions,
+                source_file_indices=source_indices,
+                layout_regions=layout_regions,
+                formula_images=settings.ocr_formula_images,
+                recognize_formulas=settings.ocr_formula_latex,
+            )
+            combined_parsing_ms = (time.perf_counter() - combined_started) * 1000
+            page_timings["parsingMs"] += combined_parsing_ms
+            # Keep page-local acquisition warnings (e.g. image quality and missing native PDF glyphs),
+            # while replacing per-page structural warnings with the document-level parser result.
+            page_warnings = [
+                warning for warning in all_warnings
+                if warning.code in {"image_quality", "NATIVE_TEXT_GAP"}
+            ]
+            all_warnings = []
+            seen_warnings = set()
+            for warning in [*document_warnings, *page_warnings]:
+                key = (warning.code, warning.field, warning.confidence, warning.message)
+                if key not in seen_warnings:
+                    seen_warnings.add(key)
+                    all_warnings.append(warning)
 
         # Determine main language (most common)
         main_language = max(set(languages), key=languages.count) if languages else self.lang
@@ -792,14 +963,16 @@ class OCREngine:
         else:
             overall_confidence = 0.0
 
-        processing_time_ms = int((time.time() - start_time) * 1000)
+        processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
         # Determine status. Text the parser could not turn into questions is still a reading:
         # the caller gets it with ``partial`` (207) instead of a 500 it cannot tell apart from a
         # service failure. Only a document with no text at all is an error.
         if not all_questions and not read_any_text:
             status = "error"
-        elif not all_questions or overall_confidence < 0.5:
+        elif has_unreadable_page or has_partial_content_page or (
+            has_partial_page and len(page_contexts) < len(images)
+        ) or not all_questions or overall_confidence < 0.5:
             status = "partial"
         else:
             status = "success"
@@ -819,7 +992,59 @@ class OCREngine:
             images_to_upload=all_images_to_upload,
             unmapped_content=all_unmapped,
             warnings=all_warnings,
+            timings={
+                **{key: round(value, 1) for key, value in page_timings.items()},
+                **({"combinedParsingMs": round(combined_parsing_ms, 1)} if combined_parsing_ms else {}),
+                "totalMs": round((time.perf_counter() - start_time) * 1000, 1),
+            },
         )
+
+    async def process_images_progress_async(
+        self,
+        images: List[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+    ):
+        """Yield a bounded, backpressured event after each completed page and then the result."""
+        loop = asyncio.get_running_loop()
+        events: asyncio.Queue = asyncio.Queue(maxsize=1)
+        cancelled = threading.Event()
+
+        def report(event: Dict[str, Any]) -> None:
+            pending = asyncio.run_coroutine_threadsafe(events.put(event), loop)
+            while not cancelled.is_set():
+                try:
+                    pending.result(timeout=0.1)
+                    return
+                except TimeoutError:
+                    continue
+                except Exception:
+                    return
+            pending.cancel()
+
+        task = loop.run_in_executor(
+            self._executor,
+            self.process_images_with_progress,
+            images,
+            request_id,
+            source_file_indices,
+            report,
+            cancelled,
+            native_text_pages,
+        )
+        try:
+            while not task.done():
+                try:
+                    yield await asyncio.wait_for(events.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+            result = await task
+            while not events.empty():
+                yield events.get_nowait()
+            yield {"type": "result", "result": result}
+        finally:
+            cancelled.set()
 
     async def process_images_async(
         self,

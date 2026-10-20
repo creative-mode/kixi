@@ -86,11 +86,13 @@ public class ManualStatementService {
             java.util.concurrent.atomic.AtomicInteger position) {
         if (!isGroup(data)) {
             return saveLeaf(statementId, number, data.text(), leafType(data.type(), data.options()),
-                data.maxScore(), data.options(), null, null, position.incrementAndGet());
+                data.maxScore(), data.options(), null, null, data.rawText(), data.confidence(),
+                data.reviewed(), data.formulas(), position.incrementAndGet());
         }
         // The group is only the common statement: nothing to answer, so no score and no options.
         Question header = new Question(statementId, number, data.text().trim(), Question.GROUP);
         header.setOrderIndex(position.incrementAndGet());
+        applyOcrEvidence(header, data.rawText(), data.confidence(), data.reviewed(), data.formulas());
         return questionRepository.save(header).flatMap(saved -> {
             List<ManualStatementRequest.Item> items = data.items();
             return Flux.range(0, items.size())
@@ -101,14 +103,16 @@ public class ManualStatementService {
                     // order of the paper is order_index.
                     return saveLeaf(statementId, number * 100 + k + 1, item.text(),
                         leafType(item.type(), item.options()), item.maxScore(), item.options(),
-                        saved.getId(), labelOf(item.label(), k), position.incrementAndGet());
+                        saved.getId(), labelOf(item.label(), k), item.rawText(), item.confidence(),
+                        item.reviewed(), item.formulas(), position.incrementAndGet());
                 })
                 .then(Mono.just(saved));
         });
     }
 
     private Mono<Question> saveLeaf(Long statementId, int number, String text, String type, Double maxScore,
-            List<ManualStatementRequest.Option> given, Long parentId, String label, int orderIndex) {
+            List<ManualStatementRequest.Option> given, Long parentId, String label, String rawText,
+            Double confidence, Boolean reviewed, List<ManualStatementRequest.Formula> formulas, int orderIndex) {
         List<ManualStatementRequest.Option> options = optionsFor(type, given);
 
         Question question = new Question(statementId, number, text.trim(), type);
@@ -116,6 +120,7 @@ public class ManualStatementService {
         question.setMaxScore(maxScore);
         question.setParentId(parentId);
         question.setLabel(label);
+        applyOcrEvidence(question, rawText, confidence, reviewed, formulas);
 
         return questionRepository
             .save(question)
@@ -133,6 +138,15 @@ public class ManualStatementService {
                     })
                     .then(Mono.just(saved))
             );
+    }
+
+    private static void applyOcrEvidence(Question question, String rawText, Double confidence,
+            Boolean reviewed, List<ManualStatementRequest.Formula> formulas) {
+        question.setRawText(rawText);
+        question.setOcrConfidence(confidence);
+        question.setOcrFormulas(QuestionOcrEvidence.encode(formulas));
+        question.setOcrReviewed(Boolean.TRUE.equals(reviewed));
+        question.setNeedsReview(QuestionOcrEvidence.needsReview(confidence, formulas, reviewed));
     }
 
     private static boolean isGroup(ManualStatementRequest.Question data) {
@@ -198,6 +212,33 @@ public class ManualStatementService {
                 requireValidLeaf(question.type(), question.options(), where);
             }
         }
+        if (Boolean.TRUE.equals(request.visible()) && statementNeedsReview(request)) {
+            throw ApiException.unprocessableEntity(
+                "Review every low-confidence OCR question and formula before publishing the statement");
+        }
+        if (Boolean.TRUE.equals(request.visible()) && hasIncompleteAnswerKey(request)) {
+            throw ApiException.unprocessableEntity(
+                "Mark a correct option for every question that has answer options before publishing the statement");
+        }
+    }
+
+    private static boolean statementNeedsReview(ManualStatementRequest request) {
+        return request.questions().stream().anyMatch(question ->
+            QuestionOcrEvidence.needsReview(question.confidence(), question.formulas(), question.reviewed())
+                || question.items() != null && question.items().stream().anyMatch(item ->
+                    QuestionOcrEvidence.needsReview(item.confidence(), item.formulas(), item.reviewed())));
+    }
+
+    private static boolean hasIncompleteAnswerKey(ManualStatementRequest request) {
+        return request.questions().stream().anyMatch(question ->
+            hasOptionsWithoutCorrectAnswer(question.options())
+                || question.items() != null && question.items().stream().anyMatch(item ->
+                    hasOptionsWithoutCorrectAnswer(item.options())));
+    }
+
+    private static boolean hasOptionsWithoutCorrectAnswer(List<ManualStatementRequest.Option> options) {
+        return options != null && !options.isEmpty() && options.stream().noneMatch(
+            option -> Boolean.TRUE.equals(option.correct()));
     }
 
     private static void requireValidItems(List<ManualStatementRequest.Item> items, String where) {
@@ -250,8 +291,9 @@ public class ManualStatementService {
         statement.setCourseId(request.courseId());
         statement.setInstitutionId(request.institutionId());
         statement.setCreatedBy(accountId);
-        statement.setVisible(Boolean.TRUE.equals(request.visible()));
-        statement.setNeedsReview(false);
+        boolean needsReview = statementNeedsReview(request);
+        statement.setVisible(Boolean.TRUE.equals(request.visible()) && !needsReview);
+        statement.setNeedsReview(needsReview);
         statement.setSource(SOURCE);
         statement.setDeletedAt(null);
         return statement;

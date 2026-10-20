@@ -4,6 +4,7 @@ import ao.creativemode.kixi.feed.dto.post.PostRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionSetRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.enums.PostReactionType;
 import ao.creativemode.kixi.feed.enums.PostType;
@@ -617,6 +618,34 @@ class PostServiceTest {
         StepVerifier.create(postService.toggleReaction(POST_ID, ACCOUNT_ID, request))
                 .assertNext(response -> assertThat(response.reacted()).isTrue())
                 .verifyComplete();
+    }
+
+    @Test
+    void settingAReactionToPresentIsIdempotent() {
+        PostReactionSetRequest request = new PostReactionSetRequest(PostReactionType.APPLAUSE, true);
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(reactionRepository.insertReaction(POST_ID, ACCOUNT_ID, "applause")).thenReturn(Mono.just(0));
+
+        StepVerifier.create(postService.setReaction(POST_ID, ACCOUNT_ID, request))
+                .assertNext(response -> assertThat(response.reacted()).isTrue())
+                .verifyComplete();
+        verify(reactionRepository).insertReaction(POST_ID, ACCOUNT_ID, "applause");
+        verify(reactionRepository, never()).deleteReaction(any(), any(), any());
+    }
+
+    @Test
+    void settingAReactionToAbsentIsIdempotent() {
+        PostReactionSetRequest request = new PostReactionSetRequest(PostReactionType.APPLAUSE, false);
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        when(reactionRepository.deleteReaction(POST_ID, ACCOUNT_ID, "applause")).thenReturn(Mono.just(0));
+
+        StepVerifier.create(postService.setReaction(POST_ID, ACCOUNT_ID, request))
+                .assertNext(response -> assertThat(response.reacted()).isFalse())
+                .verifyComplete();
+        verify(reactionRepository).deleteReaction(POST_ID, ACCOUNT_ID, "applause");
+        verify(reactionRepository, never()).insertReaction(any(), any(), any());
     }
 
     // ── Reports and auto-hide ────────────────────────────────────────────────

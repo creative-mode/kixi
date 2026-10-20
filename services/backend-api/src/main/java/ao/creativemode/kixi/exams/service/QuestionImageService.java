@@ -218,6 +218,9 @@ public class QuestionImageService {
                 entity.getOrderIndex(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
-                entity.getDeletedAt());
+                entity.getDeletedAt(),
+                entity.getOcrKind(),
+                entity.getOcrPageIndex(),
+                entity.getOcrScore());
     }
 }

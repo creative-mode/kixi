@@ -7,6 +7,8 @@ import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedOption;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedQuestion;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
 import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
+import ao.creativemode.kixi.exams.service.QuestionOcrEvidence;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
@@ -351,16 +353,25 @@ public class LegacyOcrStatementService {
         }
 
         // OCR metadata
+        question.setRawText(extracted.rawText() != null ? extracted.rawText() : extracted.getTextValue());
         question.setOcrConfidence(extracted.confidence());
+        question.setOcrFormulas(QuestionOcrEvidence.encode(formulaEvidence(extracted)));
+        question.setOcrReviewed(false);
         question.setPageIndex(extracted.pageIndex());
 
-        // Mark for review if low confidence
-        question.setNeedsReview(
-            extracted.confidence() != null &&
-                extracted.confidence() < LOW_CONFIDENCE_THRESHOLD
-        );
+        question.setNeedsReview(QuestionOcrEvidence.needsReview(
+            extracted.confidence(), formulaEvidence(extracted), false));
 
         return question;
+    }
+
+    private static List<ManualStatementRequest.Formula> formulaEvidence(ExtractedQuestion extracted) {
+        if (extracted.formulas() == null || extracted.formulas().isEmpty()) return null;
+        return extracted.formulas().stream()
+            .map(formula -> new ManualStatementRequest.Formula(
+                formula.raw(), formula.latex(), formula.confidence(), formula.kind(),
+                formula.ocrConfidence(), formula.layoutConfidence()))
+            .toList();
     }
 
     /**

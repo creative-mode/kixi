@@ -50,6 +50,12 @@ class TextBlock:
     # In blue pen: a student's working or a teacher's note, never part of the printed exam (set by the engine,
     # which is the one that sees the colours).
     handwritten: bool = False
+    formula_segments: List[FormulaSegment] = field(default_factory=list)
+    raw_text: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.raw_text is None:
+            self.raw_text = self.text
 
 
 @dataclass
@@ -88,6 +94,12 @@ class SubitemContent:
     text: str   # The content of the subitem
     cotacao: Optional[float] = None
     type: Optional[str] = None
+    confidence: Optional[float] = None
+    formulas: List[FormulaSegment] = field(default_factory=list)
+    page_index: int = -1
+    start_y: int = 0
+    end_y: int = 0
+    raw_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -97,6 +109,12 @@ class SubitemContent:
         }
         if self.type is not None:
             result["type"] = self.type
+        if self.confidence is not None:
+            result["confidence"] = round(self.confidence, 3)
+        if self.formulas:
+            result["formulas"] = [formula.to_dict() for formula in self.formulas]
+        if self.raw_text is not None:
+            result["rawText"] = self.raw_text
         return result
 
 
@@ -123,6 +141,7 @@ class ExtractedQuestion:
     # entre $...$ - esta lista é o mesmo resultado, estruturado, com o texto em bruto e a
     # confiança de cada um.
     formulas: List[FormulaSegment] = field(default_factory=list)
+    raw_text: Optional[str] = None
 
     @property
     def confidence(self) -> float:
@@ -142,6 +161,7 @@ class ExtractedQuestion:
             "subitems": self.subitems,
             "subitemsContent": [s.to_dict() for s in self.subitems_content] if self.subitems_content else [],
             "text": {"value": self.text, "confidence": round(self.text_confidence, 3)},
+            "rawText": self.raw_text if self.raw_text is not None else self.text,
             "type": self.question_type.value,
             "cotacao": self.cotacao,
             "hasImage": self.has_image,
@@ -272,6 +292,11 @@ class _Alinea:
     """An alínea being collected (label without the parenthesis: "a", "b"...)."""
     label: str
     parts: List[str] = field(default_factory=list)
+    confidences: List[float] = field(default_factory=list)
+    page_index: int = -1
+    start_y: int = 0
+    end_y: int = 0
+    raw_parts: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -280,6 +305,8 @@ class _Draft:
     question: ExtractedQuestion
     stem_parts: List[str] = field(default_factory=list)
     alineas: List[_Alinea] = field(default_factory=list)
+    stem_confidences: List[float] = field(default_factory=list)
+    raw_text_parts: List[str] = field(default_factory=list)
 
 
 class OCRPostprocessor:
@@ -567,14 +594,17 @@ class OCRPostprocessor:
 
         # Segment and extract questions
         questions = self._extract_questions(sorted_blocks, cotacao_map)
-        warnings.extend(self._generate_question_warnings(questions))
-        warnings.extend(self._generate_cotacao_warnings(metadata, questions))
+        if recognize_formulas:
+            self._attach_formula_segments(questions, sorted_blocks, layout_regions or {}, page_limits)
 
         # Recognize formulas inline in the already-extracted question text (#262): done last, on the
         # finished questions, so it never risks the numbering/cotação/option parsing above, which depends
         # on the exact (unmodified) text the OCR and _mask_formulas produced.
         if recognize_formulas:
             questions = [self._recognize_question_formulas(q) for q in questions]
+
+        warnings.extend(self._generate_question_warnings(questions))
+        warnings.extend(self._generate_cotacao_warnings(metadata, questions))
 
         # Calculate total max score from questions or cotação map
         total_score = sum(q.cotacao for q in questions if q.cotacao is not None)
@@ -1204,15 +1234,23 @@ class OCRPostprocessor:
         segments: List[FormulaSegment] = []
 
         new_text, found = extract_inline_formulas(question.text)
-        segments.extend(found)
+        segments.extend(replace(item, ocr_confidence=question.text_confidence) for item in found)
 
         new_subitems = question.subitems_content
         if question.subitems_content:
             updated = []
             for item in question.subitems_content:
                 item_text, item_found = extract_inline_formulas(item.text)
-                segments.extend(item_found)
-                updated.append(replace(item, text=item_text) if item_found else item)
+                item_segments = [
+                    replace(formula, ocr_confidence=item.confidence)
+                    for formula in item_found
+                ]
+                segments.extend(item_segments)
+                updated.append(replace(
+                    item,
+                    text=item_text,
+                    formulas=OCRPostprocessor._merge_formula_segments(item.formulas, item_segments),
+                ) if item_found else item)
             new_subitems = updated
 
         new_options = question.options
@@ -1220,13 +1258,155 @@ class OCRPostprocessor:
             updated_opts = []
             for opt in question.options:
                 opt_text, opt_found = extract_inline_formulas(opt.option_text)
-                segments.extend(opt_found)
+                segments.extend(
+                    replace(formula, ocr_confidence=opt.confidence)
+                    for formula in opt_found
+                )
                 updated_opts.append(replace(opt, option_text=opt_text) if opt_found else opt)
             new_options = updated_opts
 
         if not segments:
             return question
-        return replace(question, text=new_text, subitems_content=new_subitems, options=new_options, formulas=segments)
+        return replace(
+            question,
+            text=new_text,
+            subitems_content=new_subitems,
+            options=new_options,
+            formulas=OCRPostprocessor._merge_formula_segments(question.formulas, segments),
+        )
+
+    @staticmethod
+    def _merge_formula_segments(
+        existing: List[FormulaSegment], incoming: List[FormulaSegment]
+    ) -> List[FormulaSegment]:
+        """Merge text and layout detections of the same formula without losing source evidence."""
+        merged = list(existing)
+        for candidate in incoming:
+            index = next((
+                i for i, current in enumerate(merged)
+                if OCRPostprocessor._same_formula_detection(current, candidate)
+            ), None)
+            if index is None:
+                merged.append(candidate)
+                continue
+            current = merged[index]
+            # Keep the layout result as the canonical segment: it can be an explicit
+            # unrecognized formula whose raw OCR must not be replaced by partial text hits.
+            canonical = candidate if (
+                current.layout_confidence is None and candidate.layout_confidence is not None
+            ) else current
+            merged[index] = replace(
+                canonical,
+                confidence=min(current.confidence, candidate.confidence),
+                ocr_confidence=min(
+                    value for value in (current.ocr_confidence, candidate.ocr_confidence)
+                    if value is not None
+                ) if current.ocr_confidence is not None or candidate.ocr_confidence is not None else None,
+                layout_confidence=min(
+                    value for value in (current.layout_confidence, candidate.layout_confidence)
+                    if value is not None
+                ) if current.layout_confidence is not None or candidate.layout_confidence is not None else None,
+            )
+        return merged
+
+    @staticmethod
+    def _same_formula_detection(left: FormulaSegment, right: FormulaSegment) -> bool:
+        """Match exact detections, or text spans contained in a layout-detected formula."""
+        if left.raw == right.raw and left.latex == right.latex and left.kind == right.kind:
+            return True
+        if left.layout_confidence is None and right.layout_confidence is None:
+            return False
+
+        def normalized(value: Optional[str]) -> str:
+            return re.sub(r"\s+", "", value or "").casefold()
+
+        left_values = {normalized(left.raw), normalized(left.latex)} - {""}
+        right_values = {normalized(right.raw), normalized(right.latex)} - {""}
+        # Requiring a multi-character span avoids treating a common single digit or
+        # symbol as the same formula merely because it occurs inside a larger one.
+        return any(
+            min(len(a), len(b)) >= 2 and (a in b or b in a)
+            for a in left_values
+            for b in right_values
+        )
+
+    def _attach_formula_segments(
+        self,
+        questions: List[ExtractedQuestion],
+        blocks: List[TextBlock],
+        layout_regions: Dict[int, List[LayoutRegion]],
+        page_limits: Optional[Dict[int, int]] = None,
+    ) -> None:
+        """Keep each detected formula's raw OCR, recognition confidence and source confidence on its question."""
+        ordered = sorted(questions, key=lambda question: (question.page_index, question.start_y))
+        printed = self._printed_formulas(layout_regions, page_limits)
+
+        def owner_for(page_index: int, y: float) -> Optional[ExtractedQuestion]:
+            owner = None
+            for question in ordered:
+                if (question.page_index, question.start_y) <= (page_index, y):
+                    owner = question
+            return owner
+
+        def subitem_for(owner: ExtractedQuestion, page_index: int, y: float) -> Optional[int]:
+            candidates = [
+                index for index, item in enumerate(owner.subitems_content)
+                if item.page_index == page_index and item.start_y <= y <= item.end_y
+            ]
+            return candidates[-1] if candidates else None
+
+        def attach(owner: ExtractedQuestion, page_index: int, y: float, segment: FormulaSegment) -> None:
+            index = subitem_for(owner, page_index, y)
+            if index is not None:
+                item = owner.subitems_content[index]
+                owner.subitems_content[index] = replace(
+                    item,
+                    formulas=self._merge_formula_segments(item.formulas, [segment]),
+                )
+            owner.formulas = self._merge_formula_segments(owner.formulas, [segment])
+
+        for page_index, regions in printed.items():
+            page_blocks = [block for block in blocks if block.page_index == page_index]
+            attached_block_ids = set()
+            for region in regions:
+                matching = [
+                    block for block in page_blocks
+                    if self._overlap(block.bbox, region.bbox) >= 0.6 * (block.bbox[2] - block.bbox[0]) * (block.bbox[3] - block.bbox[1])
+                ]
+                center_y = (region.bbox[1] + region.bbox[3]) / 2
+                owner = owner_for(page_index, center_y)
+                if owner is None:
+                    continue
+
+                new_matching = [block for block in matching if id(block) not in attached_block_ids]
+                attached = [segment for block in new_matching for segment in block.formula_segments]
+                if attached:
+                    attached_block_ids.update(id(block) for block in new_matching)
+                    for segment in attached:
+                        attach(owner, page_index, center_y, replace(segment, layout_confidence=region.score))
+                    continue
+                if matching and any(block.formula_segments for block in matching):
+                    continue
+
+                if matching:
+                    raw = " ".join(block.text for block in matching).strip()
+                    source_confidence = sum(block.confidence for block in matching) / len(matching)
+                    segment = replace(
+                        recognize_region(raw),
+                        ocr_confidence=source_confidence,
+                        layout_confidence=region.score,
+                    )
+                else:
+                    # The layout model sees a printed formula, but text OCR produced no line for it.
+                    # Keep the missing raw text explicit; do not synthesize a formula.
+                    segment = FormulaSegment(
+                        raw="",
+                        latex=None,
+                        confidence=0.0,
+                        kind="unrecognized",
+                        layout_confidence=region.score,
+                    )
+                attach(owner, page_index, center_y, segment)
 
     def _printed_formulas(
         self,
@@ -1300,7 +1480,17 @@ class OCRPostprocessor:
                 text = f"{lead}${recognized.latex}$"
             else:
                 text = f"{lead}[fórmula]"
-            out.append(replace(block, text=text))
+            segments = []
+            if recognized is not None:
+                group_blocks = [candidate for candidate, candidate_key in zip(blocks, homes) if candidate_key == key]
+                source_confidence = sum(candidate.confidence for candidate in group_blocks) / len(group_blocks)
+                segments.append(replace(recognized, ocr_confidence=source_confidence))
+            raw_text = " ".join(
+                candidate.raw_text if candidate.raw_text is not None else candidate.text
+                for candidate, candidate_key in zip(blocks, homes)
+                if candidate_key == key
+            )
+            out.append(replace(block, text=text, formula_segments=segments, raw_text=raw_text))
         return out
 
     @staticmethod
@@ -1362,11 +1552,21 @@ class OCRPostprocessor:
         def close() -> None:
             nonlocal draft
             if draft is not None:
+                if draft.stem_confidences:
+                    draft.question.text_confidence = sum(draft.stem_confidences) / len(draft.stem_confidences)
                 questions.append(self._build_question(draft, cotacao_map))
                 draft = None
 
         last_number = 0
+        current_page: Optional[int] = None
+        page_start_available = True
+        page_is_document_start = True
         for block in blocks:
+            if block.page_index != current_page:
+                page_is_document_start = current_page is None
+                current_page = block.page_index
+                page_start_available = True
+
             text = block.text.strip()
             if not text:
                 continue
@@ -1375,11 +1575,27 @@ class OCRPostprocessor:
             if self._is_coordination_block(text):
                 continue
 
-            question_info = self._detect_question_number(text, expected=last_number + 1)
+            expected_number = last_number + 1
+            question_info = self._detect_question_number(text, expected=expected_number)
+
+            # A new page may begin in the middle of an exam's numbering. Re-sync only on
+            # an explicit printed label; bare numbers remain ambiguous and cannot re-sync
+            # the page after a skipped question.
+            if page_start_available:
+                explicit = self._detect_question_number(text)
+                if explicit is not None and explicit[0] > last_number:
+                    question_info = explicit
+                elif question_info is None:
+                    # Bare numbers are accepted in the document's first page for
+                    # compatibility. At later page breaks, the expected bare number remains
+                    # valid; a non-sequential bare number cannot anchor the new page.
+                    question_info = None
+
             if question_info is not None:
                 close()
                 q_num, remainder = question_info
                 last_number = q_num
+                page_start_available = False
                 question = ExtractedQuestion(
                     number=str(q_num),
                     text="",
@@ -1398,7 +1614,12 @@ class OCRPostprocessor:
                         ExtractedOption(option_label=label, option_text=option_text, confidence=block.confidence)
                         for label, option_text in inline_here[1]
                     ]
-                draft = _Draft(question=question, stem_parts=[remainder] if remainder else [])
+                draft = _Draft(
+                    question=question,
+                    stem_parts=[remainder] if remainder else [],
+                    stem_confidences=[block.confidence],
+                    raw_text_parts=[block.raw_text if block.raw_text is not None else block.text],
+                )
                 has_image, image_desc = self._detect_image_reference(text)
                 if has_image:
                     question.has_image = True
@@ -1408,12 +1629,16 @@ class OCRPostprocessor:
             if draft is None:
                 continue
 
+            source_text = block.raw_text if block.raw_text is not None else block.text
+            if source_text:
+                draft.raw_text_parts.append(source_text)
+
             question = draft.question
             inline = None if draft.alineas else self._split_inline_options(text, len(question.options or []))
             if inline is not None:
                 lead, found = inline
                 if lead:
-                    self._append_part(draft, lead)
+                    self._append_part(draft, lead, block.confidence, block)
                 if question.options is None:
                     question.options = []
                 question.options.extend(
@@ -1425,7 +1650,15 @@ class OCRPostprocessor:
             alinea = self._detect_alinea(text, draft, cotacao_map)
             if alinea is not None:
                 label, remainder = alinea
-                draft.alineas.append(_Alinea(label=label, parts=[remainder] if remainder else []))
+                draft.alineas.append(_Alinea(
+                    label=label,
+                    parts=[remainder] if remainder else [],
+                    confidences=[block.confidence],
+                    page_index=block.page_index,
+                    start_y=block.bbox[1],
+                    end_y=block.bbox[3],
+                    raw_parts=[source_text],
+                ))
             elif self._is_option_block(text):
                 option = self._detect_option(text)
                 if option:
@@ -1437,9 +1670,9 @@ class OCRPostprocessor:
                         confidence=block.confidence,
                     ))
                 else:
-                    self._append_part(draft, text)
+                    self._append_part(draft, text, block.confidence, block)
             else:
-                self._append_part(draft, text)
+                self._append_part(draft, text, block.confidence, block)
 
             question.end_y = max(question.end_y, block.bbox[3])
             has_image, image_desc = self._detect_image_reference(text)
@@ -1579,11 +1812,27 @@ class OCRPostprocessor:
         return text[:chosen[0].start()].strip(), found
 
     @staticmethod
-    def _append_part(draft: "_Draft", text: str) -> None:
+    def _append_part(
+        draft: "_Draft",
+        text: str,
+        confidence: Optional[float] = None,
+        block: Optional[TextBlock] = None,
+    ) -> None:
         if draft.alineas:
-            draft.alineas[-1].parts.append(text)
+            alinea = draft.alineas[-1]
+            alinea.parts.append(text)
+            if block is not None:
+                source_text = block.raw_text if block.raw_text is not None else block.text
+                if source_text:
+                    alinea.raw_parts.append(source_text)
+            if confidence is not None:
+                alinea.confidences.append(confidence)
+            if block is not None and block.page_index == alinea.page_index:
+                alinea.end_y = max(alinea.end_y, block.bbox[3])
         else:
             draft.stem_parts.append(text)
+            if confidence is not None:
+                draft.stem_confidences.append(confidence)
 
     def _detect_alinea(
         self,
@@ -1665,6 +1914,10 @@ class OCRPostprocessor:
                 except ValueError:
                     continue
                 remainder = text[match.end():].strip()
+                # A compact hyphenated expression such as ``4-2(-2)^2`` is more
+                # likely arithmetic than a numbered stem; do not let it anchor a page.
+                if match.group(0).endswith("-") and remainder[:1].isdigit():
+                    continue
                 # Whole words: "classifique" is not the "classe" of a header line.
                 if remainder and re.search(
                     r"\b(?:classe|class|ano\s+lectivo|ano\s+letivo|dura[çc][ãa]o)\b", remainder, re.IGNORECASE
@@ -1710,7 +1963,7 @@ class OCRPostprocessor:
                     option_label=chr(ord("A") + i),
                     # a lone "X" after an option is the mark of the answer the teacher ticked, not part of it
                     option_text=re.sub(r"\s+[xX×]$", "", sub.text).strip(),
-                    confidence=question.text_confidence,
+                    confidence=sub.confidence if sub.confidence is not None else question.text_confidence,
                 )
                 for i, sub in enumerate(subs)
             ]
@@ -1755,6 +2008,7 @@ class OCRPostprocessor:
 
         question.subitems = [f"{sub.label})" for sub in subs]
         question.subitems_content = subs
+        question.raw_text = " ".join(part for part in draft.raw_text_parts if part).strip()
         self._finalize_question(question, cotacao_map)
         return question
 
@@ -1794,7 +2048,20 @@ class OCRPostprocessor:
             # Before the general cleaning: that one would strip "2 valores" and leave an empty "()" behind.
             raw = self._remove_inline_cotacao(raw)
         text = self._clean_text(raw)
-        return SubitemContent(label=alinea.label, text=self._clean_footer_garbage(text), cotacao=cotacao)
+        confidence = (
+            sum(alinea.confidences) / len(alinea.confidences)
+            if alinea.confidences else None
+        )
+        return SubitemContent(
+            label=alinea.label,
+            text=self._clean_footer_garbage(text),
+            cotacao=cotacao,
+            confidence=confidence,
+            page_index=alinea.page_index,
+            start_y=alinea.start_y,
+            end_y=alinea.end_y,
+            raw_text=" ".join(part for part in alinea.raw_parts if part).strip(),
+        )
 
     def _is_true_false(self, stem: str, subs: List[SubitemContent]) -> bool:
         """V/F when the statement says so, or when most alíneas end in an empty "( )" to be ticked."""
@@ -2314,8 +2581,8 @@ class OCRPostprocessor:
                     continue  # the signature and the logos of the footer
                 if (page_limits or {}).get(page_index) is not None and y1 >= page_limits[page_index]:
                     continue  # below the cotação line: the stamp, the signature, scribbles in the free space
-                inside = sum(self._overlap(b.bbox, region.bbox) for b in page_blocks)
-                if region.kind == "figure" and area and inside > 0.5 * area:
+                text_cover = max((self._overlap(b.bbox, region.bbox) for b in page_blocks), default=0)
+                if region.kind == "figure" and area and text_cover > 0.5 * area:
                     continue  # mostly text: the layout model took a paragraph for a picture
                 if region.kind == "formula" and (not formula_images or region.handwritten or region.score < 0.5):
                     continue  # formulas are cropped on request, and never the ones in a student's pen
@@ -2513,6 +2780,22 @@ class OCRPostprocessor:
                     field=f"question_{question.number}",
                     confidence=question.question_type_confidence,
                 ))
+
+            for index, formula in enumerate(question.formulas, start=1):
+                if formula.kind == "unrecognized":
+                    warnings.append(Warning(
+                        code="UNRECOGNIZED_FORMULA",
+                        field=f"question_{question.number}_formula_{index}",
+                        confidence=formula.confidence,
+                        message="A fórmula foi detectada, mas o texto OCR não permite reconstruí-la com confiança.",
+                    ))
+                elif formula.confidence < self.low_confidence_threshold:
+                    warnings.append(Warning(
+                        code="LOW_CONFIDENCE_FORMULA",
+                        field=f"question_{question.number}_formula_{index}",
+                        confidence=formula.confidence,
+                        message="A fórmula reconhecida precisa de revisão.",
+                    ))
 
         return warnings
 

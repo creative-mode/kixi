@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.ocr.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -20,10 +22,13 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.ConfidenceField;
 import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.ExtractedQuestion;
+import ao.creativemode.kixi.ocr.dto.OcrResponse.FormulaSegment;
 import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.academic.model.Subject;
 import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
+import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
@@ -191,6 +196,81 @@ class OcrPersistenceServiceTest {
         StepVerifier.create(result)
             .assertNext(resolved -> assertThat(resolved.getId()).isEqualTo(1L))
             .verifyComplete();
+    }
+
+    @Test
+    void directOcrPersistenceKeepsOriginalTextFormulaConfidenceAndReviewState() throws Exception {
+        ExtractedQuestion extracted = new ExtractedQuestion(
+            "1", 0.71, List.of(), List.of(), new ConfidenceField<>("Determine v0", 0.71),
+            "dissertativa", null, List.of(), false, null, 0, 0, 100,
+            List.of(new FormulaSegment("v0", "v_0", 0.62, "formula")), "1 Determine v0 (source OCR)");
+        Method mapper = OcrPersistenceService.class.getDeclaredMethod(
+            "mapExtractedToQuestion", Long.class, ExtractedQuestion.class, int.class);
+        mapper.setAccessible(true);
+
+        Question saved = (Question) mapper.invoke(service, 9L, extracted, 0);
+
+        assertThat(saved.getText()).isEqualTo("Determine v0");
+        assertThat(saved.getRawText()).isEqualTo("1 Determine v0 (source OCR)");
+        assertThat(saved.getNeedsReview()).isTrue();
+        assertThat(saved.getOcrReviewed()).isFalse();
+        assertThat(saved.getOcrFormulas()).contains("v_0", "0.62");
+    }
+
+    @Test
+    void persistsStructuredSubitemsAsChildrenWithoutFlatteningTheirMathEvidence() throws Exception {
+        AtomicLong ids = new AtomicLong();
+        when(questionRepository.save(any(Question.class))).thenAnswer(invocation -> {
+            Question question = invocation.getArgument(0);
+            question.setId(ids.incrementAndGet());
+            return Mono.just(question);
+        });
+
+        FormulaSegment statementFormula = new FormulaSegment("v₀", "v_0", 0.94, "formula", 0.91, 0.96);
+        FormulaSegment itemFormula = new FormulaSegment("x²", "x^2", 0.61, "formula", 0.58, 0.83);
+        ExtractedQuestion extracted = new ExtractedQuestion(
+            "3", 0.92, List.of("a", "b"),
+            List.of(
+                new OcrResponse.SubitemContent("a", "Calcule x.", 2.0, "dissertativa", 0.72,
+                    List.of(itemFormula), "a) Calcule x. OCR source"),
+                new OcrResponse.SubitemContent("b", "Indique o resultado.", 1.0, "dissertativa", 0.95,
+                    List.of())
+            ),
+            new ConfidenceField<>("Determine v₀.", 0.92), "composta", 3.0, List.of(), false, null, 0, 20, 80,
+            List.of(statementFormula));
+
+        Method createQuestions = OcrPersistenceService.class.getDeclaredMethod(
+            "createQuestions", Long.class, List.class);
+        createQuestions.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Flux<Question> persisted = (Flux<Question>) createQuestions.invoke(service, 9L, List.of(extracted));
+
+        List<Question> questions = persisted.collectList().block();
+
+        assertThat(questions).hasSize(3);
+        Question parent = questions.get(0);
+        Question firstItem = questions.get(1);
+        Question secondItem = questions.get(2);
+        assertThat(parent.getQuestionType()).isEqualTo(Question.GROUP);
+        assertThat(parent.getText()).isEqualTo("Determine v₀.");
+        assertThat(firstItem.getRawText()).isEqualTo("a) Calcule x. OCR source");
+        assertThat(parent.getRawText()).isEqualTo("Determine v₀.");
+        assertThat(parent.getMaxScore()).isNull();
+        assertThat(parent.getOcrFormulas()).contains("v₀", "v_0", "0.94");
+        assertThat(firstItem.getParentId()).isEqualTo(parent.getId());
+        assertThat(firstItem.getLabel()).isEqualTo("a");
+        assertThat(firstItem.getNumber()).isEqualTo(301);
+        assertThat(firstItem.getOrderIndex()).isEqualTo(1);
+        assertThat(firstItem.getText()).isEqualTo("Calcule x.");
+        assertThat(firstItem.getQuestionType()).isEqualTo("development");
+        assertThat(firstItem.getMaxScore()).isEqualTo(2.0);
+        assertThat(firstItem.getOcrConfidence()).isEqualTo(0.72);
+        assertThat(firstItem.getNeedsReview()).isTrue();
+        assertThat(firstItem.getOcrFormulas()).contains("x²", "x^2", "0.61");
+        assertThat(secondItem.getParentId()).isEqualTo(parent.getId());
+        assertThat(secondItem.getLabel()).isEqualTo("b");
+        assertThat(secondItem.getNumber()).isEqualTo(302);
+        assertThat(secondItem.getOrderIndex()).isEqualTo(2);
     }
 
     // OcrMetadata field order: examType, durationMinutes, variant, title,

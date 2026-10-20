@@ -166,6 +166,89 @@ class ManualStatementServiceTest {
     }
 
     @Test
+    void keepsLowConfidenceOcrEvidenceAndRequiresExplicitReview() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+        var formula = new ManualStatementRequest.Formula("v0", "v_0", 0.62, "formula");
+        var question = new ManualStatementRequest.Question(
+            "Determine $v_0$", 5.0, null, "open", null,
+            "Determine v0", 0.71, false, List.of(formula));
+        var request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova física", "Teste", 60,
+            null, null, null, null, CLASS_ID, null, false, List.of(question));
+
+        StepVerifier.create(service.create(request, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<Statement> savedStatement = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(savedStatement.capture());
+        assertThat(savedStatement.getValue().getNeedsReview()).isTrue();
+        ArgumentCaptor<Question> savedQuestion = ArgumentCaptor.forClass(Question.class);
+        verify(questions).save(savedQuestion.capture());
+        assertThat(savedQuestion.getValue().getRawText()).isEqualTo("Determine v0");
+        assertThat(savedQuestion.getValue().getOcrConfidence()).isEqualTo(0.71);
+        assertThat(savedQuestion.getValue().getNeedsReview()).isTrue();
+        assertThat(savedQuestion.getValue().getOcrReviewed()).isFalse();
+        assertThat(QuestionOcrEvidence.decode(savedQuestion.getValue().getOcrFormulas()))
+            .containsExactly(formula);
+    }
+
+    @Test
+    void refusesToCreateVisibleStatementWithUnreviewedOcrEvidence() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        ManualStatementRequest.Question question = new ManualStatementRequest.Question(
+            "Determine $v_0$", 5.0, null, "open", null,
+            "Determine v0", 0.71, false,
+            List.of(new ManualStatementRequest.Formula("v0", "v_0", 0.62, "formula")));
+        ManualStatementRequest request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova física", "Teste", 60,
+            null, null, null, null, CLASS_ID, null, true, List.of(question));
+
+        StepVerifier.create(service.create(request, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statements, never()).save(any());
+    }
+
+    @Test
+    void refusesToCreateVisibleStatementWithoutAnAnswerKey() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        ManualStatementRequest.Question question = new ManualStatementRequest.Question("Escolha", 5.0,
+            List.of(new ManualStatementRequest.Option("A", "um", false),
+                new ManualStatementRequest.Option("B", "dois", false)));
+        ManualStatementRequest request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova física", "Teste", 60,
+            null, null, null, null, CLASS_ID, null, true, List.of(question));
+
+        StepVerifier.create(service.create(request, 9L, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statements, never()).save(any());
+    }
+
+    @Test
+    void persistsTheTeacherAcknowledgementWithoutDroppingLowFormulaConfidence() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+        var formula = new ManualStatementRequest.Formula("v0", "v_0", 0.62, "formula");
+        var question = new ManualStatementRequest.Question(
+            "Determine $v_0$", 5.0, null, "open", null,
+            "Determine v0", 0.71, true, List.of(formula));
+        var request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova física", "Teste", 60,
+            null, null, null, null, CLASS_ID, null, false, List.of(question));
+
+        StepVerifier.create(service.create(request, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<Question> saved = ArgumentCaptor.forClass(Question.class);
+        verify(questions).save(saved.capture());
+        assertThat(saved.getValue().getNeedsReview()).isFalse();
+        assertThat(saved.getValue().getOcrReviewed()).isTrue();
+        assertThat(saved.getValue().getOcrConfidence()).isEqualTo(0.71);
+        assertThat(QuestionOcrEvidence.decode(saved.getValue().getOcrFormulas()))
+            .containsExactly(formula);
+    }
+
+    @Test
     void aCreatedStatementIsInvisibleByDefaultAndDropsABlankVariant() {
         when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
         givenSaves();

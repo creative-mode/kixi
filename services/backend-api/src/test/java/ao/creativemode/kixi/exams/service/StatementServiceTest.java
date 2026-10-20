@@ -57,6 +57,7 @@ class StatementServiceTest {
         writeAccess = mock(StatementWriteAccessService.class);
         service = new StatementService(statementRepository, questionRepository, optionRepository,
                 accessService, validator, writeAccess);
+        when(questionRepository.existsQuestionsNeedingReview(anyLong())).thenReturn(Mono.just(false));
         givenTheWriteRuleAllows();
     }
 
@@ -289,6 +290,27 @@ class StatementServiceTest {
                 .verifyComplete();
     }
 
+    @Test
+    void refusesApprovalWhenSubitemNeedsOcrReviewEvenIfStatementFlagIsClear() {
+        Statement existing = statement(1L);
+        existing.setNeedsReview(false);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.existsQuestionsNeedingReview(1L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.approveReview(1L, 9L, true))
+            .expectErrorSatisfies(error -> {
+                assertThat(error).isInstanceOf(ApiException.class);
+                assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(error.getMessage()).contains("low-confidence OCR");
+            })
+            .verify();
+
+        // The persisted question state is authoritative, even when the
+        // statement-level summary flag is stale or already clear.
+        verify(questionRepository).existsQuestionsNeedingReview(1L);
+        verify(statementRepository, never()).save(any(Statement.class));
+    }
+
     // ── What has to be true before a statement goes live ────────────────────
 
     @Test
@@ -463,10 +485,59 @@ class StatementServiceTest {
         existing.setVisible(false);
         when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
         when(statementRepository.save(existing)).thenReturn(Mono.just(existing));
+        givenTheAnswerKeyIsComplete();
+        givenTheScoresAddUp(0.0);
 
         StepVerifier.create(service.setVisible(1L, true, 9L, true))
                 .assertNext(result -> assertThat(result.getVisible()).isTrue())
                 .verifyComplete();
+    }
+
+    @Test
+    void cannotPublishStatementWhileOcrReviewIsPending() {
+        Statement existing = statement(1L);
+        existing.setVisible(false);
+        existing.setNeedsReview(true);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+
+        StepVerifier.create(service.setVisible(1L, true, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+    }
+
+    @Test
+    void cannotPublishWhenQuestionNeedsOcrReviewButStatementFlagIsOutOfSync() {
+        Statement existing = statement(1L);
+        existing.setVisible(false);
+        existing.setNeedsReview(false);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.existsQuestionsNeedingReview(1L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.setVisible(1L, true, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage()).contains("low-confidence OCR"))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
+        verify(questionRepository, never()).findQuestionsWithoutCorrectOption(anyLong());
+    }
+
+    @Test
+    void cannotPublishStatementWithIncompleteAnswerKeyEvenWhenReviewFlagIsClear() {
+        Statement existing = statement(1L);
+        existing.setVisible(false);
+        existing.setNeedsReview(false);
+        existing.setTotalMaxScore(5.0);
+        when(statementRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(existing));
+        when(questionRepository.findQuestionsWithoutCorrectOption(1L)).thenReturn(Flux.just(question(8L, 3)));
+
+        StepVerifier.create(service.setVisible(1L, true, 9L, true))
+                .expectErrorSatisfies(error -> assertThat(error.getMessage()).contains("correct option"))
+                .verify();
+
+        verify(statementRepository, never()).save(any());
     }
 
     // ── Who may change a statement ──────────────────────────────────────────

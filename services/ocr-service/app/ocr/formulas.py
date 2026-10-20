@@ -51,6 +51,8 @@ class FormulaSegment:
     latex: Optional[str]
     confidence: float
     kind: str  # FORMULA | UNRECOGNIZED
+    ocr_confidence: Optional[float] = None
+    layout_confidence: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
         result: Dict[str, object] = {
@@ -58,6 +60,10 @@ class FormulaSegment:
             "kind": self.kind,
             "confidence": round(self.confidence, 3),
         }
+        if self.ocr_confidence is not None:
+            result["ocrConfidence"] = round(self.ocr_confidence, 3)
+        if self.layout_confidence is not None:
+            result["layoutConfidence"] = round(self.layout_confidence, 3)
         if self.latex is not None:
             result["latex"] = self.latex
         return result

@@ -534,6 +534,7 @@ givenTheStatementIsReadable();
      */
     private void givenTheStatementIsReadyToApprove() {
         givenTheStatementIsReadable();
+        when(questions.existsQuestionsNeedingReview(1L)).thenReturn(Mono.just(false));
         when(questions.findQuestionsWithoutCorrectOption(1L)).thenReturn(Flux.empty());
         when(questions.calculateTotalMaxScore(1L)).thenReturn(Mono.just(0.0));
     }

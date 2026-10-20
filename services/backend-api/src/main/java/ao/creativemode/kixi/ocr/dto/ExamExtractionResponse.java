@@ -2,6 +2,7 @@ package ao.creativemode.kixi.ocr.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Response DTO for structured exam extraction from OCR.
@@ -45,7 +46,13 @@ public record ExamExtractionResponse(
 
     @JsonProperty("needs_review") Boolean needsReview,
 
-    List<WarningData> warnings
+    List<WarningData> warnings,
+
+    String status,
+
+    @JsonProperty("errorMessage") String errorMessage,
+
+    Map<String, Double> timings
 ) {
     /**
      * Create from OcrResponse.
@@ -101,7 +108,10 @@ public record ExamExtractionResponse(
                 ? response.warnings().stream()
                     .map(WarningData::fromOcrWarning)
                     .toList()
-                : List.of()
+                : List.of(),
+            response.status(),
+            response.errorMessage(),
+            response.timings()
         );
     }
 
@@ -138,7 +148,9 @@ public record ExamExtractionResponse(
         @JsonProperty("subitems_content") List<SubitemData> subitemsContent,
 
         /** Formulas recognized in the statement, alíneas or options (#262); empty when none. */
-        List<FormulaData> formulas
+        List<FormulaData> formulas,
+
+        @JsonProperty("rawText") String rawText
     ) {
         /** The shape before the alíneas were exposed. */
         public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
@@ -151,7 +163,15 @@ public record ExamExtractionResponse(
                 List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
                 List<SubitemData> subitemsContent) {
             this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
-                subitemsContent, List.of());
+                subitemsContent, List.of(), null);
+        }
+
+        /** Preserve the response shape with formula evidence before raw OCR was exposed. */
+        public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
+                List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
+                List<SubitemData> subitemsContent, List<FormulaData> formulas) {
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
+                subitemsContent, formulas, null);
         }
 
         /**
@@ -179,7 +199,8 @@ public record ExamExtractionResponse(
                     : List.of(),
                 q.formulas() != null
                     ? q.formulas().stream().map(FormulaData::fromFormulaSegment).toList()
-                    : List.of()
+                    : List.of(),
+                q.rawText()
             );
         }
 
@@ -203,19 +224,58 @@ public record ExamExtractionResponse(
      * Option data for multiple choice questions.
      */
     /** One alínea of a question: a), b)... with its own type. */
-    public record SubitemData(String label, String text, Double cotacao, String type) {
+    public record SubitemData(
+        String label,
+        String text,
+        Double cotacao,
+        String type,
+        Double confidence,
+        List<FormulaData> formulas,
+        @JsonProperty("rawText") String rawText
+    ) {
+        public SubitemData(String label, String text, Double cotacao, String type, Double confidence,
+                List<FormulaData> formulas) {
+            this(label, text, cotacao, type, confidence, formulas, null);
+        }
+
+        /** Preserve the response constructor used before per-alínea OCR metadata was exposed. */
+        public SubitemData(String label, String text, Double cotacao, String type) {
+            this(label, text, cotacao, type, null, List.of(), null);
+        }
+
         public static SubitemData from(OcrResponse.SubitemContent item) {
             if (item == null) return null;
-            return new SubitemData(item.label(), item.text(), item.cotacao(), item.type());
+            return new SubitemData(
+                item.label(),
+                item.text(),
+                item.cotacao(),
+                item.type(),
+                item.confidence(),
+                item.formulas() != null
+                    ? item.formulas().stream().map(FormulaData::fromFormulaSegment).toList()
+                    : List.of(),
+                item.rawText()
+            );
         }
     }
 
     /** One formula recognized in a question's text (#262). {@code kind} is "formula" when there is LaTeX
      * of enough confidence, or "unrecognized" when the span looked like maths but none was produced. */
-    public record FormulaData(String raw, String latex, Double confidence, String kind) {
+    public record FormulaData(
+            String raw,
+            String latex,
+            Double confidence,
+            String kind,
+            Double ocrConfidence,
+            Double layoutConfidence
+    ) {
+        public FormulaData(String raw, String latex, Double confidence, String kind) {
+            this(raw, latex, confidence, kind, null, null);
+        }
+
         public static FormulaData fromFormulaSegment(OcrResponse.FormulaSegment f) {
             if (f == null) return null;
-            return new FormulaData(f.raw(), f.latex(), f.confidence(), f.kind());
+            return new FormulaData(f.raw(), f.latex(), f.confidence(), f.kind(), f.ocrConfidence(), f.layoutConfidence());
         }
     }
 

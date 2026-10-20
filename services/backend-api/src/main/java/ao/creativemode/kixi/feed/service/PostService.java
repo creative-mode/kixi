@@ -6,6 +6,7 @@ import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postModeration.ReportedPostResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionSetRequest;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionToggleResponse;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportResponse;
@@ -228,6 +229,20 @@ public class PostService {
                                 ? Mono.just(new PostReactionToggleResponse(false))
                                 : reactionRepository.insertReaction(postId, accountId, type)
                                         .map(inserted -> new PostReactionToggleResponse(inserted > 0))));
+    }
+
+    /** Explicit desired state makes network retries idempotent, unlike the legacy toggle endpoint. */
+    @Transactional
+    public Mono<PostReactionToggleResponse> setReaction(Long postId, Long accountId, PostReactionSetRequest request) {
+        String type = request.reaction().getValue();
+        return rateLimiter.check(accountId)
+                .then(scopeAuthorizer.scopeOf(accountId))
+                .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> request.reacted()
+                        ? reactionRepository.insertReaction(postId, accountId, type)
+                                .thenReturn(new PostReactionToggleResponse(true))
+                        : reactionRepository.deleteReaction(postId, accountId, type)
+                                .thenReturn(new PostReactionToggleResponse(false)));
     }
 
     @Transactional

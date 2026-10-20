@@ -65,6 +65,10 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     )
     Flux<Question> findAllByStatementIdOrderedByOrderIndex(Long statementId);
 
+    @Query("SELECT EXISTS (SELECT 1 FROM questions WHERE statement_id = :statementId "
+        + "AND needs_review = TRUE AND deleted_at IS NULL)")
+    Mono<Boolean> existsQuestionsNeedingReview(Long statementId);
+
     /**
      * The active questions of a statement in the order of the paper: what the full statement shows.
      *

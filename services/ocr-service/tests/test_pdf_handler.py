@@ -11,6 +11,7 @@ from PIL import Image
 
 from app.api.pdf_handler import (
     extract_images_from_pdf,
+    extract_text_pages_from_pdf,
     get_pdf_info,
     is_pdf,
     validate_pdf,
@@ -58,6 +59,22 @@ def test_extract_images_supports_page_ranges():
     assert isinstance(images[0], np.ndarray)
     assert images[0].ndim == 3
     assert images[0].shape[2] == 3
+
+
+def test_extract_text_pages_keeps_selectable_text_and_page_coordinates():
+    document = fitz.open()
+    page = document.new_page(width=300, height=400)
+    page.insert_text((50, 70), "1) Determine the velocity")
+    content = document.tobytes()
+    document.close()
+
+    pages = extract_text_pages_from_pdf(content)
+
+    assert len(pages) == 1
+    assert pages[0]["width"] == 300
+    assert pages[0]["height"] == 400
+    assert pages[0]["lines"][0]["text"] == "1) Determine the velocity"
+    assert pages[0]["lines"][0]["bbox"][0] == 50
 
 
 def test_validate_pdf_accepts_valid_document():

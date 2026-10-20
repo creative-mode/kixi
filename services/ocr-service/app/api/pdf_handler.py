@@ -83,6 +83,54 @@ def extract_images_from_pdf(
     return images
 
 
+def extract_text_pages_from_pdf(
+    pdf_content: bytes,
+    first_page: Optional[int] = None,
+    last_page: Optional[int] = None,
+) -> List[dict]:
+    """Return selectable PDF text lines with page-space bounding boxes.
+
+    A native text layer is both faster and more faithful than OCR for digitally
+    authored PDFs. The OCR image path remains authoritative for scanned pages,
+    formula regions and figures; callers can fall back per page when no usable
+    text layer exists.
+    """
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    try:
+        document = fitz.open(stream=pdf_content, filetype="pdf")
+        start = max(0, (first_page or 1) - 1)
+        end = min(len(document), last_page or len(document))
+        pages = []
+        for page_index in range(start, end):
+            page = document[page_index]
+            lines = []
+            for block in page.get_text("dict").get("blocks", []):
+                for line in block.get("lines", []):
+                    text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                    if not text:
+                        continue
+                    x0, y0, x1, y1 = line["bbox"]
+                    lines.append({
+                        "text": text,
+                        "bbox": [float(x0), float(y0), float(x1), float(y1)],
+                    })
+            rect = page.rect
+            pages.append({
+                "width": float(rect.width),
+                "height": float(rect.height),
+                "lines": lines,
+            })
+        document.close()
+        return pages
+    except Exception as exc:
+        logger.warning("Native PDF text extraction failed", error_type=type(exc).__name__)
+        return []
+
+
 def _extract_with_pymupdf(
     pdf_content: bytes,
     dpi: int = 300,

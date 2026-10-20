@@ -13,6 +13,8 @@ from app.ocr.postprocessing import (
     UnmappedContent,
     Warning,
 )
+from app.ocr.formulas import FORMULA, UNRECOGNIZED, FormulaSegment
+from app.ocr.layout import LayoutRegion
 
 
 def block(text: str, y: int, confidence: float = 0.9, page: int = 0) -> TextBlock:
@@ -63,6 +65,19 @@ def test_serialization_models_preserve_optional_fields():
     assert ImageToUpload("q1.png", "Figura", "questao_1").region == "questao_1"
 
 
+def test_question_keeps_source_ocr_separate_from_repaired_display_text():
+    processor = OCRPostprocessor(repair_text=False, filter_noise=False)
+    source_block = block("1 Determine x²", 10)
+    source_block.raw_text = "1 Determine x2"
+
+    _, questions, *_ = processor.process([source_block])
+
+    assert len(questions) == 1
+    assert questions[0].text == "Determine $x^{2}$"
+    assert questions[0].raw_text == "1 Determine x2"
+    assert questions[0].to_dict()["rawText"] == "1 Determine x2"
+
+
 def test_postprocessor_parsers_cover_scores_images_and_question_variants():
     processor = OCRPostprocessor()
 
@@ -71,6 +86,7 @@ def test_postprocessor_parsers_cover_scores_images_and_question_variants():
     assert processor._normalize_subject_name("química") == "Química"
     assert processor._normalize_subject_name("") == ""
     assert processor._normalize_subject_name("engenharia") == "Engenharia"
+
 
     metadata = ExtractedMetadata(
         exam_type=MetadataField("Prova de Exame", 0.9),
@@ -110,6 +126,119 @@ def test_postprocessor_parsers_cover_scores_images_and_question_variants():
     assert processor._detect_image_reference(r"Resolva \\sqrt{x}") == (True, "Expressão matemática complexa")
     assert processor._detect_image_reference("texto normal") == (False, None)
     assert processor._is_coordination_block("Assinatura do coordenador") is True
+
+
+def test_formula_recognition_keeps_subitem_ownership_in_json_contract():
+    question = ExtractedQuestion(
+        number="1",
+        text="Calcule o campo.",
+        text_confidence=0.91,
+        question_type=QuestionType.DISSERTATIVA,
+        question_type_confidence=0.95,
+        subitems_content=[SubitemContent(label="a", text="Use B = Bmaxe-2t", confidence=0.87)],
+    )
+
+    result = OCRPostprocessor._recognize_question_formulas(question).to_dict()
+    subitem = result["subitemsContent"][0]
+
+    assert subitem["text"] == r"Use B = $B_{max}$$e^{-2t}$"
+    assert {formula["raw"] for formula in subitem["formulas"]} == {"Bmax", "e-2t"}
+    assert {formula["raw"] for formula in result["formulas"]} >= {"Bmax", "e-2t"}
+
+
+def test_inline_and_layout_formula_detection_merges_duplicate_spans_conservatively():
+    question = ExtractedQuestion(
+        number="1",
+        text="O resultado é 8π.",
+        text_confidence=0.92,
+        question_type=QuestionType.DISSERTATIVA,
+        question_type_confidence=0.95,
+        formulas=[FormulaSegment("8π", r"8\pi", 0.9, FORMULA, layout_confidence=0.88)],
+    )
+
+    result = OCRPostprocessor._recognize_question_formulas(question)
+
+    assert len(result.formulas) == 1
+    assert result.formulas[0].ocr_confidence == 0.92
+    assert result.formulas[0].layout_confidence == 0.88
+    assert result.formulas[0].confidence <= 0.9
+
+
+def test_layout_formula_is_not_duplicated_by_its_inline_text_spans():
+    layout_formula = FormulaSegment(
+        "B = Bmaxe-2t",
+        r"B = B_{max}e^{-2t}",
+        0.86,
+        FORMULA,
+        ocr_confidence=0.78,
+        layout_confidence=0.94,
+    )
+    item = SubitemContent(
+        label="a",
+        text="B = Bmaxe-2t",
+        confidence=0.64,
+        page_index=0,
+        start_y=100,
+        end_y=120,
+    )
+    question = ExtractedQuestion(
+        number="1",
+        text="Calcule a intensidade.",
+        text_confidence=0.91,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        subitems_content=[item],
+        page_index=0,
+        start_y=80,
+        end_y=150,
+    )
+    processor = OCRPostprocessor()
+    source_block = block("B = Bmaxe-2t", 100, confidence=0.78)
+    source_block.formula_segments = [layout_formula]
+    processor._attach_formula_segments(
+        [question],
+        [source_block],
+        {0: [LayoutRegion("formula", "formula", 0.94, source_block.bbox)]},
+    )
+
+    result = OCRPostprocessor._recognize_question_formulas(question)
+
+    assert len(result.subitems_content[0].formulas) == 1
+    assert len(result.formulas) == 1
+    assert result.formulas[0].raw == "B = Bmaxe-2t"
+    assert result.formulas[0].layout_confidence == 0.94
+    assert result.formulas[0].ocr_confidence == 0.64
+    assert result.subitems_content[0].to_dict()["confidence"] == 0.64
+
+
+def test_unrecognized_layout_formula_is_attached_to_the_source_subitem():
+    item = SubitemContent(
+        label="b", text="[fórmula]", confidence=0.63,
+        page_index=0, start_y=100, end_y=150,
+    )
+    question = ExtractedQuestion(
+        number="1",
+        text="Calcule.",
+        text_confidence=0.91,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        page_index=0,
+        start_y=80,
+        end_y=160,
+        subitems_content=[item],
+    )
+    processor = OCRPostprocessor()
+
+    processor._attach_formula_segments(
+        [question], [], {0: [LayoutRegion("formula", "formula", 0.91, (50, 110, 150, 140))]}
+    )
+
+    assert len(question.subitems_content[0].formulas) == 1
+    assert question.subitems_content[0].formulas[0].kind == UNRECOGNIZED
+    assert question.formulas == question.subitems_content[0].formulas
+    result = OCRPostprocessor._recognize_question_formulas(question).to_dict()
+    assert result["subitemsContent"][0]["confidence"] == 0.63
+    assert result["subitemsContent"][0]["formulas"][0]["kind"] == UNRECOGNIZED
 
 
 def test_process_detects_header_question_and_footer_image_regions():
@@ -179,6 +308,7 @@ def test_process_keeps_lowercase_multipart_items_as_subitems():
         block("a) Calcule 2 + 2.", 50),
         block("b) Determine o valor de x.", 90),
     ]
+    blocks[1].raw_text = "a) Calcule 2+2."
 
     _, questions, *_ = processor.process(blocks)
 
@@ -197,6 +327,8 @@ def test_process_keeps_lowercase_multipart_items_as_subitems():
         "Calcule 2 + 2.",
         "Determine o valor de x.",
     ]
+    assert questions[0].subitems_content[0].raw_text == "a) Calcule 2+2."
+    assert questions[0].subitems_content[0].to_dict()["rawText"] == "a) Calcule 2+2."
 
 
 def test_process_keeps_lowercase_choice_labels_when_prompt_requires_choice():
@@ -302,3 +434,51 @@ def test_collect_unmapped_skips_a_block_already_collected_as_noise():
         "Manuscrito (tinta que não é de impressão)",
         "Texto lido sem perguntas reconhecidas",
     ]
+
+
+def test_question_continuation_across_page_break_stays_with_original_question():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("6. Determine a velocidade do móvel.", 100, page=0),
+        block("A expressão continua no início da página seguinte.", 20, page=1),
+        block("7. Calcule a distância percorrida.", 80, page=1),
+    ]
+
+    questions = processor._extract_questions(blocks, {})
+
+    assert [question.number for question in questions] == ["6", "7"]
+    assert "continua no início" in questions[0].text
+    assert questions[1].text == "Calcule a distância percorrida."
+
+
+def test_page_start_resynchronizes_on_explicit_question_number_then_is_strict():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("6. Calcule a distância.", 1, page=0),
+        block("8. Calcule a velocidade.", 20, page=1),
+        block("9) Determine a posição.", 60, page=1),
+        block("14. Calcule a aceleração.", 100, page=1),
+        block("15. Determine o tempo.", 140, page=1),
+    ]
+
+    questions = processor._extract_questions(blocks, {})
+
+    assert [question.number for question in questions] == ["6", "8", "9"]
+    assert "14. Calcule a aceleração." in questions[2].text
+    assert "15. Determine o tempo." in questions[2].text
+
+
+def test_page_start_does_not_resynchronize_from_bare_or_ambiguous_numbers():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Determine a velocidade.", 20, page=0),
+        block("2. Calcule a aceleração.", 50, page=0),
+        block("4 O móvel parte do repouso.", 20, page=1),
+        block("80 m/s é a velocidade inicial.", 50, page=1),
+        block("7.5 m é a distância indicada.", 80, page=1),
+    ]
+
+    questions = processor._extract_questions(blocks, {})
+
+    assert [question.number for question in questions] == ["1", "2"]
+    assert "4 O móvel parte" in questions[1].text

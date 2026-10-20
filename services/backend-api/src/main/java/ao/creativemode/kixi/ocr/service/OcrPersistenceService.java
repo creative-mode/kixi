@@ -10,6 +10,8 @@ import ao.creativemode.kixi.ocr.dto.OcrResponse.OcrMetadata;
 import ao.creativemode.kixi.academic.model.Class;
 import ao.creativemode.kixi.academic.model.Course;
 import ao.creativemode.kixi.exams.model.Question;
+import ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest;
+import ao.creativemode.kixi.exams.service.QuestionOcrEvidence;
 import ao.creativemode.kixi.exams.model.QuestionOption;
 import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.exams.model.Statement;
@@ -21,6 +23,7 @@ import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.academic.repository.SubjectRepository;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -50,7 +53,6 @@ public class OcrPersistenceService {
         OcrPersistenceService.class
     );
 
-    private static final double LOW_CONFIDENCE_THRESHOLD = 0.8;
     private static final double MIN_CONFIDENCE_THRESHOLD = 0.5;
 
     private final OcrServiceClient ocrServiceClient;
@@ -406,21 +408,23 @@ public class OcrPersistenceService {
             return Flux.empty();
         }
 
+        AtomicInteger orderIndex = new AtomicInteger();
         return Flux.fromIterable(extractedQuestions)
-            .index()
-            .flatMap(tuple -> {
-                long index = tuple.getT1();
-                ExtractedQuestion extracted = tuple.getT2();
-
+            .concatMap(extracted -> {
                 Question question = mapExtractedToQuestion(
                     statementId,
                     extracted,
-                    (int) index
+                    orderIndex.getAndIncrement()
                 );
 
                 return questionRepository
                     .save(question)
-                    .flatMap(savedQuestion -> {
+                    .flatMapMany(savedQuestion -> {
+                        if (isStructuredGroup(extracted)) {
+                            return createSubitems(statementId, savedQuestion, extracted.subitemsContent(), orderIndex)
+                                .startWith(savedQuestion);
+                        }
+
                         // Create options if this is a multiple choice question
                         if (
                             extracted.options() != null &&
@@ -429,11 +433,34 @@ public class OcrPersistenceService {
                             return createOptions(
                                 savedQuestion.getId(),
                                 extracted.options()
-                            ).then(Mono.just(savedQuestion));
+                            ).thenMany(Flux.just(savedQuestion));
                         }
-                        return Mono.just(savedQuestion);
+                        return Flux.just(savedQuestion);
                     });
             });
+    }
+
+    private Flux<Question> createSubitems(
+        Long statementId,
+        Question parent,
+        List<OcrResponse.SubitemContent> subitems,
+        AtomicInteger orderIndex
+    ) {
+        return Flux.fromIterable(subitems)
+            .index()
+            .concatMap(tuple -> {
+                int itemIndex = Math.toIntExact(tuple.getT1());
+                OcrResponse.SubitemContent item = tuple.getT2();
+                Question child = mapSubitemToQuestion(
+                    statementId, parent, item, itemIndex, orderIndex.getAndIncrement());
+                return questionRepository.save(child);
+            });
+    }
+
+    private static boolean isStructuredGroup(ExtractedQuestion extracted) {
+        return extracted.subitemsContent() != null
+            && !extracted.subitemsContent().isEmpty()
+            && (extracted.options() == null || extracted.options().isEmpty());
     }
 
     /**
@@ -457,25 +484,75 @@ public class OcrPersistenceService {
         }
 
         question.setOrderIndex(orderIndex);
-        question.setText(extracted.textWithSubitems());
-        question.setQuestionType(mapQuestionType(extracted.getTypeValue()));
+        boolean structuredGroup = isStructuredGroup(extracted);
+        question.setText(structuredGroup ? extracted.getTextValue() : extracted.textWithSubitems());
+        question.setQuestionType(structuredGroup ? Question.GROUP : mapQuestionType(extracted.getTypeValue()));
 
         // Cotação (score)
-        if (extracted.getCotacaoValue() != null) {
+        if (!structuredGroup && extracted.getCotacaoValue() != null) {
             question.setMaxScore(extracted.getCotacaoValue());
         }
 
         // OCR metadata
+        question.setRawText(extracted.rawText() != null ? extracted.rawText() : extracted.getTextValue());
         question.setOcrConfidence(extracted.confidence());
+        question.setOcrFormulas(QuestionOcrEvidence.encode(formulaEvidence(extracted)));
+        question.setOcrReviewed(false);
         question.setPageIndex(extracted.pageIndex());
 
-        // Mark for review if low confidence
-        question.setNeedsReview(
-            extracted.confidence() != null &&
-                extracted.confidence() < LOW_CONFIDENCE_THRESHOLD
-        );
+        question.setNeedsReview(QuestionOcrEvidence.needsReview(
+            extracted.confidence(), formulaEvidence(extracted), false));
 
         return question;
+    }
+
+    private Question mapSubitemToQuestion(
+        Long statementId,
+        Question parent,
+        OcrResponse.SubitemContent item,
+        int itemIndex,
+        int orderIndex
+    ) {
+        int parentNumber = parent.getNumber() == null ? orderIndex + 1 : parent.getNumber();
+        Question question = new Question();
+        question.setStatementId(statementId);
+        question.setNumber(Math.addExact(Math.multiplyExact(parentNumber, 100), itemIndex + 1));
+        question.setOrderIndex(orderIndex);
+        question.setParentId(parent.getId());
+        question.setLabel(item.label() == null || item.label().isBlank()
+            ? defaultSubitemLabel(itemIndex)
+            : item.label().trim());
+        question.setText(item.text());
+        question.setQuestionType(mapQuestionType(
+            item.type() == null || item.type().isBlank() ? "dissertativa" : item.type()));
+        question.setMaxScore(item.cotacao());
+        question.setRawText(item.rawText() != null ? item.rawText() : item.text());
+        question.setOcrConfidence(item.confidence());
+        question.setOcrFormulas(QuestionOcrEvidence.encode(formulaEvidence(item.formulas())));
+        question.setOcrReviewed(false);
+        question.setNeedsReview(QuestionOcrEvidence.needsReview(
+            item.confidence(), formulaEvidence(item.formulas()), false));
+        return question;
+    }
+
+    private static String defaultSubitemLabel(int index) {
+        return index < 26
+            ? String.valueOf((char) ('a' + index))
+            : (char) ('a' + index % 26) + Integer.toString(index / 26);
+    }
+
+    private static List<ManualStatementRequest.Formula> formulaEvidence(ExtractedQuestion extracted) {
+        if (extracted.formulas() == null || extracted.formulas().isEmpty()) return null;
+        return formulaEvidence(extracted.formulas());
+    }
+
+    private static List<ManualStatementRequest.Formula> formulaEvidence(List<OcrResponse.FormulaSegment> formulas) {
+        if (formulas == null || formulas.isEmpty()) return null;
+        return formulas.stream()
+            .map(formula -> new ManualStatementRequest.Formula(
+                formula.raw(), formula.latex(), formula.confidence(), formula.kind(),
+                formula.ocrConfidence(), formula.layoutConfidence()))
+            .toList();
     }
 
     /**

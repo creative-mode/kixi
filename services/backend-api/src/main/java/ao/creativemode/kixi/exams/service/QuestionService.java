@@ -159,6 +159,12 @@ public class QuestionService {
                     question.setPageIndex(data.pageIndex());
                 }
                 question.setModelAnswer(blankToNull(data.modelAnswer()));
+                if (data.ocrReviewed() != null) {
+                    question.setOcrReviewed(data.ocrReviewed());
+                    question.setNeedsReview(QuestionOcrEvidence.needsReview(
+                        question.getOcrConfidence(), QuestionOcrEvidence.decode(question.getOcrFormulas()),
+                        data.ocrReviewed()));
+                }
                 return Mono.defer(() -> questions.save(question));
             })
             .map(question -> toResponse(question, true));
@@ -323,7 +329,21 @@ public class QuestionService {
             question.getUpdatedAt(),
             staff ? question.getDeletedAt() : null,
             question.getParentId(),
-            question.getLabel()
+            question.getLabel(),
+            staff ? question.getRawText() : null,
+            staff ? question.getOcrConfidence() : null,
+            staff ? question.getOcrReviewed() : null,
+            staff ? responseFormulas(question) : null
         );
+    }
+
+    private static List<QuestionResponse.FormulaEvidence> responseFormulas(Question question) {
+        List<ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest.Formula> formulas =
+            QuestionOcrEvidence.decode(question.getOcrFormulas());
+        return formulas == null ? null : formulas.stream()
+            .map(formula -> new QuestionResponse.FormulaEvidence(
+                formula.raw(), formula.latex(), formula.confidence(), formula.kind(),
+                formula.ocrConfidence(), formula.layoutConfidence()))
+            .toList();
     }
 }
