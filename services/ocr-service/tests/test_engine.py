@@ -39,7 +39,9 @@ from app.ocr.postprocessing import (
     UnmappedContent,
     normalize_text,
     detect_language,
+    formula_prediction_key,
 )
+from app.ocr.layout import LayoutRegion
 
 
 @pytest.mark.parametrize(
@@ -54,6 +56,44 @@ from app.ocr.postprocessing import (
 def test_numbering_gap_detection_is_relative_to_the_page_start(numbers, expected_gap):
     questions = [Mock(number=number) for number in numbers]
     assert OCREngine._numbering_has_gaps(questions) is expected_gap
+
+
+def test_first_alinea_gap_triggers_fallback_only_for_colon_led_lists():
+    missed_first = Mock(text="Apresente os conhecimentos sobre:", subitems_content=[Mock(label="b")])
+    intentional_start = Mock(text="Calcule o fluxo magnético.", subitems_content=[Mock(label="c")])
+    already_complete = Mock(text="Apresente os conhecimentos sobre:", subitems_content=[Mock(label="a")])
+
+    assert OCREngine._may_have_missing_first_subitem([missed_first]) is True
+    assert OCREngine._may_have_missing_first_subitem([intentional_start]) is False
+    assert OCREngine._may_have_missing_first_subitem([already_complete]) is False
+
+
+def test_fallback_formula_read_uses_enhanced_prediction_when_raw_crop_is_unreadable():
+    primary = LayoutRegion("formula", "formula", 0.9, (170, 937, 458, 968))
+    fallback = LayoutRegion("formula", "formula", 0.88, (162, 929, 468, 977))
+    primary_key = formula_prediction_key(0, primary.bbox)
+    fallback_key = formula_prediction_key(0, fallback.bbox)
+
+    merged = OCREngine._merge_fallback_formula_predictions(
+        [primary], {primary_key: r"\vec{r}=(1-t)"},
+        [fallback], {}, 0,
+    )
+
+    assert merged == {fallback_key: r"\vec{r}=(1-t)"}
+
+
+def test_explicit_fallback_formula_read_is_not_overwritten_by_primary():
+    primary = LayoutRegion("formula", "formula", 0.9, (170, 937, 458, 968))
+    fallback = LayoutRegion("formula", "formula", 0.88, (162, 929, 468, 977))
+    primary_key = formula_prediction_key(0, primary.bbox)
+    fallback_key = formula_prediction_key(0, fallback.bbox)
+
+    merged = OCREngine._merge_fallback_formula_predictions(
+        [primary], {primary_key: r"\vec{r}=(1-t)"},
+        [fallback], {fallback_key: r"\vec{r}=(11-t)"}, 0,
+    )
+
+    assert merged[fallback_key] == r"\vec{r}=(11-t)"
 
 
 # =============================================================================

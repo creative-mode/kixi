@@ -446,7 +446,10 @@ public record OcrResponse(
     public record UnmappedContent(
         @JsonProperty("pageIndex") Integer pageIndex,
         String text,
-        Double confidence
+        Double confidence,
+        String reason,
+        List<Integer> bbox,
+        String zone
     ) {}
 
     /**

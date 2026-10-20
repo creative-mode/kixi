@@ -146,7 +146,7 @@ public class OcrImageAssociationService {
 
     /**
      * The crop of each region as a PNG data URL, by position (null where there is none), so the exam builder
-     * can show the figure with its question before anything is saved. Header and signature regions get none;
+     * can show question figures and the source footer before anything is saved. Header regions get none;
      * a crop over {@link #MAX_PREVIEW_BYTES}, or past {@link #MAX_PREVIEW_TOTAL_BYTES} in all, is left out.
      */
     public List<String> previewCrops(List<OcrResponse.ImageToUpload> regions, List<OcrUploadedFile> sourceFiles) {
@@ -159,7 +159,7 @@ public class OcrImageAssociationService {
             for (OcrResponse.ImageToUpload region : regions) {
                 String dataUrl = null;
                 Integer index = region == null ? null : region.sourceFileIndex();
-                if (region != null && region.isQuestionImage() && region.bbox() != null
+                if (region != null && (region.isQuestionImage() || region.isFooter()) && region.bbox() != null
                         && region.bbox().size() == 4 && index != null && cropContext.hasSource(index)) {
                     byte[] png = cropToPng(region, cropContext);
                     if (png != null && png.length <= MAX_PREVIEW_BYTES

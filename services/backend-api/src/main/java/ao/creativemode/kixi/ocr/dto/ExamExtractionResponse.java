@@ -37,6 +37,8 @@ public record ExamExtractionResponse(
 
     @JsonProperty("images_to_upload") List<ImageToUploadData> imagesToUpload,
 
+    @JsonProperty("unmapped_content") List<OcrResponse.UnmappedContent> unmappedContent,
+
     // Processing metadata
     @JsonProperty("request_id") String requestId,
 
@@ -100,6 +102,7 @@ public record ExamExtractionResponse(
                         crops != null && i < crops.size() ? crops.get(i) : null))
                     .toList()
                 : List.of(),
+            response.unmappedContent() != null ? response.unmappedContent() : List.of(),
             response.requestId(),
             response.processingTimeMs(),
             response.overallConfidence(),

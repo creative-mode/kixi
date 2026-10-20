@@ -34,6 +34,10 @@ _UNSAFE_TEX = re.compile(
     r"\\(?:href|url|includegraphics|htmlClass|htmlId|htmlStyle|htmlData|def|gdef|newcommand)\b",
     re.IGNORECASE,
 )
+_BARE_TEX_COMMAND = re.compile(
+    r"(?<!\\)\b[A-Za-z]*(?:boxed|overrightarrow|overline|underline|frac|sqrt|times|alpha|beta|theta|pi)\b",
+    re.IGNORECASE,
+)
 
 
 def normalize_model_latex(value: object) -> Optional[str]:
@@ -47,11 +51,25 @@ def normalize_model_latex(value: object) -> Optional[str]:
         latex = latex[2:-2].strip()
     elif latex.startswith("$") and latex.endswith("$"):
         latex = latex[1:-1].strip()
+    # FormulaNet occasionally reads the arrow and command as padded fragments,
+    # e.g. ``\\ \\ \\ {vec\\ r{}}``. The crop has already been classified as
+    # a printed formula; recover only this constrained vector-command shape.
+    latex = re.sub(
+        r"(?:\\\s+)+\{vec\\\s*([A-Za-z])\{\}\}",
+        lambda match: rf"\vec{{{match.group(1)}}}",
+        latex,
+    )
     if not latex or len(latex) > settings.ocr_formula_max_latex_chars:
         return None
     if any(ord(char) < 32 and char not in "\t\n\r" for char in latex):
         return None
     if _UNSAFE_TEX.search(latex):
+        return None
+    # FormulaNet sometimes drops the slash or merges a command into a variable
+    # (for example ``Bboxed{...}`` or ``overrightarrow r``). Such output is
+    # syntactically printable but semantically corrupt, so it must not reach the
+    # exam statement as if it were valid LaTeX.
+    if _BARE_TEX_COMMAND.search(latex):
         return None
     depth = 0
     escaped = False
@@ -103,6 +121,41 @@ class FormulaImageRecognizer:
         if isinstance(result, dict):
             return normalize_model_latex(result.get("rec_formula"))
         return None
+
+    @staticmethod
+    def reconcile_vector_prefix(primary: Optional[str], tight_crop: Optional[str]) -> Optional[str]:
+        """Accept a tight-crop vector read when it independently resolves a crop artifact.
+
+        FormulaNet can mistake a vector arrow for ``\\imath`` or ``\\mid``, or add
+        a spurious ``\\boxed`` wrapper. Accept the tighter read only when it
+        independently recognizes the same complete expression; otherwise retain
+        the original prediction for review.
+        """
+        if not primary or not tight_crop:
+            return primary
+        primary = normalize_model_latex(primary)
+        tight_crop = normalize_model_latex(tight_crop)
+        if not primary or not tight_crop:
+            return primary
+        prefix = re.match(r"^\\imath(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", primary)
+        boxed = re.match(r"^\\boxed\{(.+)\}$", primary)
+        mid = re.match(r"^\\mid(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", primary)
+        if not (prefix or boxed or mid) or re.match(r"^\\(?:imath|boxed|mid)", tight_crop):
+            return primary
+
+        def unvectorized_signature(value: str) -> str:
+            value = re.sub(r"\\(?:overrightarrow|vec)\b", "", value)
+            value = re.sub(r"\\(?:left|right)\b", "", value)
+            return re.sub(r"\s+|[{}]", "", value)
+
+        corrected = (
+            primary[prefix.end():] if prefix
+            else boxed.group(1) if boxed
+            else primary[mid.end():]
+        )
+        if unvectorized_signature(corrected) == unvectorized_signature(tight_crop):
+            return tight_crop if boxed else corrected
+        return primary
 
     def recognize(self, crops: Sequence[np.ndarray]) -> List[Optional[str]]:
         if not crops:

@@ -12,6 +12,7 @@ from app.ocr.postprocessing import (
     TextBlock,
     UnmappedContent,
     Warning,
+    formula_prediction_key,
 )
 from app.ocr.formulas import FORMULA, UNRECOGNIZED, FormulaSegment
 from app.ocr.layout import LayoutRegion
@@ -141,7 +142,7 @@ def test_formula_recognition_keeps_subitem_ownership_in_json_contract():
     result = OCRPostprocessor._recognize_question_formulas(question).to_dict()
     subitem = result["subitemsContent"][0]
 
-    assert subitem["text"] == r"Use B = $B_{max}$$e^{-2t}$"
+    assert subitem["text"] == r"Use B = $B_{max}e^{-2t}$"
     assert {formula["raw"] for formula in subitem["formulas"]} == {"Bmax", "e-2t"}
     assert {formula["raw"] for formula in result["formulas"]} >= {"Bmax", "e-2t"}
 
@@ -271,6 +272,214 @@ def test_process_detects_header_question_and_footer_image_regions():
     assert any(image.region == "rodape" for image in images)
     assert unmapped == []
     assert isinstance(warnings, list)
+
+
+def test_content_after_cotacao_is_preserved_as_positioned_footer_not_question_text():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Determine o fluxo magnético.", 300),
+        block("Cotação: 1) 4,0V", 900),
+        block("A coordenação", 1100),
+        block("secretaria@itel.gov.ao | 222 381 640", 1200),
+    ]
+
+    _, questions, images, unmapped, _ = processor.process(
+        blocks,
+        page_dimensions={0: (1200, 1600)},
+    )
+
+    question_text = " ".join(question.text for question in questions)
+    footer = [item for item in unmapped if item.zone == "rodape"]
+    footer_image = next(image for image in images if image.region == "rodape")
+
+    assert len(questions) == 1
+    assert "A coordenação" not in question_text
+    assert "secretaria@itel.gov.ao" not in question_text
+    assert {item.text for item in footer} == {
+        "A coordenação",
+        "secretaria@itel.gov.ao | 222 381 640",
+    }
+    assert all(item.bbox for item in footer)
+    assert footer_image.bbox == (0, 1076, 1200, 1600)
+
+
+def test_first_alinea_merged_into_question_line_is_split_when_followed_by_b():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Apresente os teus conhecimentos sobre: A) Fenómenos electromagnéticos;", 100),
+        block("b) Movimento sob força constante;", 140),
+        block("c) Lançamento de um projéctil.", 180),
+    ]
+
+    _, questions, *_ = processor.process(blocks)
+
+    assert len(questions) == 1
+    assert questions[0].text == "Apresente os teus conhecimentos sobre:"
+    assert [(item.label, item.text) for item in questions[0].subitems_content] == [
+        ("a", "Fenómenos electromagnéticos;"),
+        ("b", "Movimento sob força constante;"),
+        ("c", "Lançamento de um projéctil."),
+    ]
+    assert "A) Fenómenos electromagnéticos;" in questions[0].raw_text
+
+
+def test_inline_first_alinea_is_recovered_from_stem_when_b_and_c_were_parsed_separately():
+    question = ExtractedQuestion(
+        number="1",
+        text="Apresente os teus conhecimentos sobre: A) Fenómenos electromagnéticos;",
+        text_confidence=0.9,
+        question_type=QuestionType.UNKNOWN,
+        question_type_confidence=0.0,
+        subitems_content=[
+            SubitemContent(label="b", text="Movimento sob força constante;", page_index=0, start_y=140),
+            SubitemContent(label="c", text="Lançamento de um projéctil.", page_index=0, start_y=180),
+        ],
+        page_index=0,
+        start_y=100,
+        end_y=180,
+    )
+
+    OCRPostprocessor._recover_inline_first_alinea([question])
+
+    assert question.text == "Apresente os teus conhecimentos sobre:"
+    assert [(item.label, item.text) for item in question.subitems_content] == [
+        ("a", "Fenómenos electromagnéticos;"),
+        ("b", "Movimento sob força constante;"),
+        ("c", "Lançamento de um projéctil."),
+    ]
+
+
+def test_duplicate_subitem_labels_are_reassigned_without_changing_unique_source_labels():
+    question = ExtractedQuestion(
+        number="4",
+        text="Determine",
+        text_confidence=0.9,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        subitems_content=[
+            SubitemContent(label="a", text="first"),
+            SubitemContent(label="a", text="second"),
+            SubitemContent(label="b", text="third"),
+            SubitemContent(label="c", text="fourth"),
+            SubitemContent(label="b", text="fifth"),
+        ],
+    )
+    unique_question = ExtractedQuestion(
+        number="2",
+        text="Calcule",
+        text_confidence=0.9,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+        subitems_content=[SubitemContent(label="c", text="first"), SubitemContent(label="d", text="second")],
+    )
+
+    OCRPostprocessor._ensure_unique_subitem_labels([question, unique_question])
+
+    assert [item.label for item in question.subitems_content] == ["a", "b", "c", "d", "e"]
+    assert question.subitems == ["a)", "b)", "c)", "d)", "e)"]
+    assert [item.label for item in unique_question.subitems_content] == ["c", "d"]
+
+
+def test_duplicate_roman_section_keeps_only_the_first_complete_occurrence():
+    question = ExtractedQuestion(
+        number="4",
+        text="V) Primeiro. VII) Para t=3: a) ângulo. VIII) Represente. VIII) Represente.",
+        text_confidence=0.9,
+        question_type=QuestionType.COMPOSTA,
+        question_type_confidence=0.9,
+    )
+
+    OCRPostprocessor._deduplicate_roman_sections([question])
+
+    assert question.text == "V) Primeiro. VII) Para t=3: a) ângulo. VIII) Represente."
+
+
+def test_multiple_choice_option_a_is_not_split_as_a_first_alinea():
+    processor = OCRPostprocessor()
+    blocks = [
+        block("1. Escolha a opção correta: A) Cinco", 100),
+        block("B) Dez", 140),
+    ]
+
+    _, questions, *_ = processor.process(blocks)
+
+    assert len(questions) == 1
+    assert questions[0].subitems_content == []
+    assert questions[0].text == "Escolha a opção correta: A) Cinco B) Dez"
+
+
+def test_three_unlabelled_rows_from_a_curly_brace_are_restored_as_one_group():
+    question = ExtractedQuestion(
+        number="4",
+        text="V) Para o intervalo [2; 4]s, calcule: a velocidade média. O resto da questão.",
+        text_confidence=0.97,
+        question_type=QuestionType.UNKNOWN,
+        question_type_confidence=0.0,
+        page_index=0,
+        start_y=960,
+        end_y=1200,
+    )
+    blocks = [
+        TextBlock("(o deslcamento", 0.99, (528, 997, 691, 1027)),
+        TextBlock("V) Para o intervalo [2; 4]s, calcule: a velocidade média", 0.97, (106, 1028, 740, 1055)),
+        TextBlock("(a aceleração média", 0.99, (528, 1059, 739, 1086)),
+    ]
+
+    OCRPostprocessor._structure_braced_velocity_items([question], blocks, {0: (1200, 1600)})
+
+    assert [(item.label, item.text) for item in question.subitems_content] == [
+        ("a", "o deslcamento"),
+        ("b", "a velocidade média"),
+        ("c", "a aceleração média"),
+    ]
+    assert "a velocidade média" not in question.text
+    assert "calcule:" in question.text
+    assert [item.raw_text for item in question.subitems_content] == [block.text for block in blocks]
+
+
+def test_roman_sections_after_lettered_rows_are_not_absorbed_into_the_previous_alinea():
+    question = ExtractedQuestion(
+        number="4",
+        text="V) Para o intervalo, calcule: a velocidade média. VI) A equação. Determine:",
+        text_confidence=0.97,
+        question_type=QuestionType.UNKNOWN,
+        question_type_confidence=0.0,
+        page_index=0,
+        start_y=960,
+        end_y=1200,
+        subitems_content=[
+            SubitemContent(label="a", text="O ângulo. VII) Para t=3s: parte seguinte", page_index=0, start_y=1112),
+            SubitemContent(label="b", text="O raio. VIII) Represente a trajectória", page_index=0, start_y=1148),
+        ],
+    )
+    blocks = [
+        TextBlock("(o deslocamento", 0.99, (528, 997, 691, 1027)),
+        TextBlock("V) Para o intervalo, calcule: a velocidade média", 0.97, (106, 1028, 740, 1055)),
+        TextBlock("(a aceleração média", 0.99, (528, 1059, 739, 1086)),
+    ]
+
+    OCRPostprocessor._structure_braced_velocity_items([question], blocks, {0: (1200, 1600)})
+
+    assert question.subitems_content[3].text == "O ângulo."
+    assert question.subitems_content[4].text == "O raio."
+    assert "VII) Para t=3s: parte seguinte" in question.text
+    assert "VIII) Represente a trajectória" in question.text
+
+
+def test_only_adjacent_duplicate_math_spans_are_collapsed():
+    question = ExtractedQuestion(
+        number="2",
+        text=r"B = $5 \times 10^{-3}$ T. $5\times10^{-3}T$; compare with $8\pi$ and then $5\times10^{-3}T$ later.",
+        text_confidence=0.9,
+        question_type=QuestionType.DISSERTATIVA,
+        question_type_confidence=0.9,
+    )
+
+    result = OCRPostprocessor._deduplicate_adjacent_inline_formula_text(question)
+
+    assert result.text.count("10^{-3}T") == 1
+    assert "$8\\pi$" in result.text
+    assert result.text.endswith("$5\\times10^{-3}T$ later.")
 
 
 def test_process_emits_versioned_raster_region_contract():
@@ -482,3 +691,88 @@ def test_page_start_does_not_resynchronize_from_bare_or_ambiguous_numbers():
 
     assert [question.number for question in questions] == ["1", "2"]
     assert "4 O móvel parte" in questions[1].text
+
+
+def test_wide_inline_vector_crop_replaces_ocr_math_without_duplicating_the_line():
+    processor = OCRPostprocessor()
+    latex = r"\vec{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    source = TextBlock(
+        text="4)Seja  = (1 = t)ē + (t + 1)²¯y, no SI, o vector de posição.",
+        confidence=0.78,
+        bbox=(47, 742, 834, 769),
+    )
+    region = LayoutRegion("formula", "formula", 0.82, (124, 742, 362, 768), False)
+
+    masked = processor._mask_formulas(
+        [source],
+        {0: [region]},
+        formula_predictions={formula_prediction_key(0, region.bbox): latex},
+    )
+
+    assert len(masked) == 1
+    assert f"${latex}$" in masked[0].text
+    assert "ē" not in masked[0].text and "¯y" not in masked[0].text
+    assert ", no SI, o vector de posição." in masked[0].text
+
+
+def test_small_inline_layout_box_does_not_become_a_duplicate_formula_block():
+    processor = OCRPostprocessor()
+    source = TextBlock(
+        text="VII) Para t = 3s:(a) o ângulo entre os vectores",
+        confidence=0.9,
+        bbox=(49, 914, 619, 941),
+    )
+    region = LayoutRegion("formula", "formula", 0.59, (150, 918, 208, 937), False)
+
+    masked = processor._mask_formulas(
+        [source],
+        {0: [region]},
+        formula_predictions={formula_prediction_key(0, region.bbox): r":t=3s;"},
+    )
+
+    assert masked == [source]
+
+
+def test_split_curly_brace_rows_are_structured_and_roman_tail_stays_out_of_subitems():
+    question = ExtractedQuestion(
+        number="4",
+        text=(
+            "Seja = vetor. Determine: (o deslocamento V) Para o intervalo [2; 4]s, calcule: "
+            "a velocidade média a aceleração média VI) A equação. "
+            "VII) Para t=3s: (a) o ângulo entre vectores b) 0 raio de curvatura "
+            "VIII) Represente a trajectória."
+        ),
+        text_confidence=0.95,
+        question_type=QuestionType.UNKNOWN,
+        question_type_confidence=0.0,
+        page_index=0,
+        start_y=741,
+        end_y=1000,
+        subitems_content=[SubitemContent(
+            label="b",
+            text="0 raio de curvatura VIII) Represente a trajectória.",
+            page_index=0,
+            start_y=944,
+            end_y=999,
+        )],
+    )
+    blocks = [
+        TextBlock("(o deslocamento", 0.99, (424, 798, 561, 819)),
+        TextBlock("V) Para o intervalo [2; 4]s, calcule:", 0.98, (83, 819, 404, 844)),
+        TextBlock("a velocidade média", 0.99, (419, 819, 588, 845)),
+        TextBlock("a aceleração média", 0.99, (424, 847, 586, 868)),
+        TextBlock("VII) Para t=3s: (a) o ângulo entre vectores", 0.99, (49, 914, 619, 941)),
+        TextBlock("(b) 0 raio de curvatura VIII) Represente a trajectória.", 0.99, (221, 944, 797, 999)),
+    ]
+
+    OCRPostprocessor._structure_braced_velocity_items([question], blocks, {0: (905, 1280)})
+
+    assert [(item.label, item.text) for item in question.subitems_content] == [
+        ("a", "o deslocamento"),
+        ("b", "a velocidade média"),
+        ("c", "a aceleração média"),
+    ]
+    assert "V) Para o intervalo [2; 4]s, calcule:" in question.text
+    assert "VII) Para t=3s:" in question.text
+    assert question.text.count("VIII)") == 1
+    assert all("VII)" not in item.text and "VIII)" not in item.text for item in question.subitems_content)

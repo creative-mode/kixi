@@ -184,7 +184,9 @@ def _scan(text: str) -> Tuple[str, List[FormulaSegment]]:
             if last < len(chunk) or last == 0:
                 next_chunks.append((chunk[last:], False))
         chunks = next_chunks
-    return "".join(c for c, _ in chunks), segments
+    # Patterns such as Bmax and e-2t may be recognized in separate passes even
+    # though the source prints them as one contiguous expression.
+    return "".join(c for c, _ in chunks).replace("$$", ""), segments
 
 
 def extract_inline_formulas(text: str) -> Tuple[str, List[FormulaSegment]]:

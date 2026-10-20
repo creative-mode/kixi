@@ -128,21 +128,23 @@ class OcrImageAssociationServiceTest {
     }
 
     @Test
-    void previewCropsGiveTheBuilderAPngDataUrlPerQuestionRegionAndNothingForTheHeader() {
+    void previewCropsGiveTheBuilderDataUrlsForQuestionsAndFooterButNotHeader() {
         List<OcrResponse.ImageToUpload> regions = List.of(
             new OcrResponse.ImageToUpload("h.png", "Cabeçalho", "cabecalho", 0, List.of(0, 0, 10, 4), 10, 10, 1, 0),
             new OcrResponse.ImageToUpload("q.png", "Figura", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 0, "figure", 0.9),
-            new OcrResponse.ImageToUpload("p.png", "Figura de um PDF", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 1, "figure", 0.9));
+            new OcrResponse.ImageToUpload("p.png", "Figura de um PDF", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 1, "figure", 0.9),
+            new OcrResponse.ImageToUpload("f.png", "Rodapé original", "rodape", 0, List.of(0, 5, 10, 10), 10, 10, 1, 0));
         List<OcrUploadedFile> files = List.of(
             new OcrUploadedFile("exam.png", MediaType.IMAGE_PNG, pngBytes(10, 10)),
             new OcrUploadedFile("exam.pdf", MediaType.APPLICATION_PDF, "%PDF-1.4".getBytes()));
 
         List<String> crops = service.previewCrops(regions, files);
 
-        assertThat(crops).hasSize(3);
+        assertThat(crops).hasSize(4);
         assertThat(crops.get(0)).isNull();
         assertThat(crops.get(1)).startsWith("data:image/png;base64,");
         assertThat(crops.get(2)).isNull();
+        assertThat(crops.get(3)).startsWith("data:image/png;base64,");
     }
 
     @Test

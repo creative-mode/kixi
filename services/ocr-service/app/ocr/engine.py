@@ -220,10 +220,15 @@ class OCREngine:
             and region.score >= settings.ocr_layout_min_score
         ]
         crops = []
+        tight_crops = []
         usable = []
         height, width = image.shape[:2]
         for region in candidates:
-            x1, y1, x2, y2 = (int(round(value)) for value in region.bbox)
+            raw_x1, raw_y1, raw_x2, raw_y2 = (int(round(value)) for value in region.bbox)
+            if raw_x2 <= raw_x1 or raw_y2 <= raw_y1:
+                continue
+            tight_crops.append(image[raw_y1:raw_y2, raw_x1:raw_x2].copy())
+            x1, y1, x2, y2 = raw_x1, raw_y1, raw_x2, raw_y2
             pad = max(4, int(round(min(max(1, x2 - x1), max(1, y2 - y1)) * 0.06)))
             x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
             x2, y2 = min(width, x2 + pad), min(height, y2 + pad)
@@ -232,6 +237,23 @@ class OCREngine:
             crops.append(image[y1:y2, x1:x2].copy())
             usable.append(region)
         recognized = self._formula_recognizer.recognize(crops)
+        retry_indices = [
+            index for index, latex in enumerate(recognized)
+            if latex and (
+                re.match(r"^\\imath(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", latex)
+                or re.match(r"^\\boxed\{.*\\(?:vec|overrightarrow)\{[A-Za-z]\}", latex)
+                or re.match(r"^\\mid(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", latex)
+            )
+        ]
+        if retry_indices:
+            tight_predictions = self._formula_recognizer.recognize(
+                [tight_crops[index] for index in retry_indices]
+            )
+            for index, tight_prediction in zip(retry_indices, tight_predictions):
+                recognized[index] = FormulaImageRecognizer.reconcile_vector_prefix(
+                    recognized[index],
+                    tight_prediction,
+                )
         predictions = {
             formula_prediction_key(page_index, region.bbox): latex
             for region, latex in zip(usable, recognized)
@@ -244,6 +266,58 @@ class OCREngine:
             recognized=len(predictions),
         )
         return predictions
+
+    @staticmethod
+    def _merge_fallback_formula_predictions(
+        primary_regions: Optional[List[LayoutRegion]],
+        primary_predictions: FormulaPredictions,
+        fallback_regions: Optional[List[LayoutRegion]],
+        fallback_predictions: FormulaPredictions,
+        page_index: int,
+    ) -> FormulaPredictions:
+        """Keep formula reads from the enhanced image when fallback OCR uses the raw photo.
+
+        The fallback detector is better at recovering faint prose, but its formula
+        crops can lose contrast or become clipped. Layout boxes can shift slightly
+        between the two image frames, so match them by overlap rather than exact keys.
+        An explicit fallback prediction remains authoritative; a primary prediction
+        only fills a missing result for the same printed region.
+        """
+        merged = dict(fallback_predictions)
+        primary = [
+            (region, primary_predictions.get(formula_prediction_key(page_index, region.bbox)))
+            for region in primary_regions or []
+            if region.kind == "formula" and not region.handwritten
+        ]
+        for fallback in fallback_regions or []:
+            if fallback.kind != "formula" or fallback.handwritten:
+                continue
+            fallback_key = formula_prediction_key(page_index, fallback.bbox)
+            if merged.get(fallback_key):
+                continue
+
+            best_prediction = None
+            best_overlap = 0.0
+            fx1, fy1, fx2, fy2 = fallback.bbox
+            fallback_area = max(1, (fx2 - fx1) * (fy2 - fy1))
+            for primary_region, prediction in primary:
+                if not prediction:
+                    continue
+                px1, py1, px2, py2 = primary_region.bbox
+                intersection = max(0, min(fx2, px2) - max(fx1, px1)) * max(
+                    0, min(fy2, py2) - max(fy1, py1)
+                )
+                smaller_area = min(
+                    fallback_area,
+                    max(1, (px2 - px1) * (py2 - py1)),
+                )
+                overlap = intersection / smaller_area
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_prediction = prediction
+            if best_overlap >= 0.6 and best_prediction:
+                merged[fallback_key] = best_prediction
+        return merged
 
     def initialize(self) -> None:
         """
@@ -466,6 +540,21 @@ class OCREngine:
         numbers = [int(q.number) for q in questions if str(q.number).isdigit()]
         return bool(numbers) and numbers != list(range(numbers[0], numbers[0] + len(numbers)))
 
+    @staticmethod
+    def _may_have_missing_first_subitem(questions: List[ExtractedQuestion]) -> bool:
+        """Flag an instruction ending in a colon when its extracted list begins after ``a``.
+
+        This is a focused signal for a missed first row, not an assumption that every list must begin at a.
+        Some exam questions intentionally start at c) or d), usually without a colon-led list instruction.
+        """
+        for question in questions:
+            if not question.subitems_content or not question.text.strip().endswith(":"):
+                continue
+            first = question.subitems_content[0].label.lower().strip()
+            if first in {"b", "c", "d"}:
+                return True
+        return False
+
     def _detect_layout(self, image: np.ndarray, request_id: str) -> Optional[List[LayoutRegion]]:
         """Figures, tables and formulas of the page; None when the layout was not run (disabled or failed).
 
@@ -653,8 +742,21 @@ class OCREngine:
             text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
 
             formula_started = time.perf_counter()
+            # FormulaNet is sensitive to the denoising/contrast pass: on clean,
+            # geometrically unchanged pages it can turn vector arrows into bars
+            # and split subscripts. Use original pixels while retaining the layout
+            # coordinate frame; transformed pages must use the matching processed
+            # frame to avoid cropping the wrong location.
+            formula_image = analysis_image
+            if (
+                not native_usable
+                and not preprocessing_result.sheet_cropped
+                and abs(preprocessing_result.rotation_angle) < 0.05
+                and image.shape[:2] == processed_image.shape[:2]
+            ):
+                formula_image = image
             formula_predictions = self._recognize_formula_regions(
-                analysis_image,
+                formula_image,
                 layout,
                 request_id,
                 page_index,
@@ -706,7 +808,11 @@ class OCREngine:
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
-                and (len(questions) < settings.ocr_min_questions or self._numbering_has_gaps(questions))
+                and (
+                    len(questions) < settings.ocr_min_questions
+                    or self._numbering_has_gaps(questions)
+                    or self._may_have_missing_first_subitem(questions)
+                )
             ):
                 logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
                 fallback_ocr_started = time.perf_counter()
@@ -728,7 +834,24 @@ class OCREngine:
                 parsing_ms += time.perf_counter() - fallback_parse_started
                 if len(retry[1]) > len(questions) or (
                     len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
+                ) or (
+                    len(retry[1]) == len(questions)
+                    and self._may_have_missing_first_subitem(questions)
+                    and not self._may_have_missing_first_subitem(retry[1])
                 ):
+                    retry_formula_predictions = self._merge_fallback_formula_predictions(
+                        layout,
+                        formula_predictions,
+                        retry_layout,
+                        retry_formula_predictions,
+                        page_index,
+                    )
+                    retry = interpret(
+                        retry_blocks,
+                        image,
+                        retry_layout,
+                        retry_formula_predictions,
+                    )
                     text_blocks = retry_blocks
                     layout = retry_layout
                     analysis_image = image
