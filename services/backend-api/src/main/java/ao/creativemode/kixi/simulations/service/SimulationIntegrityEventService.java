@@ -27,13 +27,16 @@ public class SimulationIntegrityEventService {
     private final SimulationRepository simulations;
     private final SimulationIntegrityEventRepository events;
     private final QuestionRepository questions;
+    private final SimulationDeadlineService deadlines;
     private final Clock clock;
 
     public SimulationIntegrityEventService(SimulationRepository simulations,
-            SimulationIntegrityEventRepository events, QuestionRepository questions, Clock clock) {
+            SimulationIntegrityEventRepository events, QuestionRepository questions,
+            SimulationDeadlineService deadlines, Clock clock) {
         this.simulations = simulations;
         this.events = events;
         this.questions = questions;
+        this.deadlines = deadlines;
         this.clock = clock;
     }
 
@@ -58,6 +61,17 @@ public class SimulationIntegrityEventService {
         if (simulation.getStatus() != SimulationStatus.IN_PROGRESS) {
             return Mono.error(ApiException.conflict("Integrity events are only accepted for an active simulation"));
         }
+        // The expiration sweep runs every minute, so a simulation can still say
+        // IN_PROGRESS after its deadline (or after the room closed). Answers already
+        // check this explicitly in SimulationAnswerService; events have to do the
+        // same, or the record would keep growing after the paper ended.
+        return deadlines.expired(simulation, deadlines.now())
+                .flatMap(expired -> Boolean.TRUE.equals(expired)
+                        ? Mono.<Void>error(ApiException.conflict("The time allowed for this simulation has expired"))
+                        : validateQuestion(simulation, request));
+    }
+
+    private Mono<Void> validateQuestion(Simulation simulation, SimulationIntegrityEventRequest request) {
         if (request.questionId() == null) return Mono.empty();
 
         return questions.findByIdAndDeletedAtIsNull(request.questionId())
