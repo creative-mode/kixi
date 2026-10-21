@@ -268,6 +268,39 @@ class CriticalExamFlowPostgresIntegrationTest {
     }
 
     @Test
+    void rejectsEventsAfterTheDeadlineEvenWhileTheSweepIsDisabled() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+        // The sweep is disabled in this context, so the status stays IN_PROGRESS:
+        // only the deadline check can refuse the event.
+        sql("UPDATE simulations SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 days' WHERE id = " + simulation);
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        Long saved = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(saved).isZero();
+    }
+
+    @Test
     void concurrentEventWritesCannotExceedPerSimulationLimit() throws Exception {
         sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
         AtomicLong simulationId = new AtomicLong();

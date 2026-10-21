@@ -30,6 +30,7 @@ class SimulationIntegrityEventServiceTest {
     private SimulationRepository simulations;
     private SimulationIntegrityEventRepository events;
     private QuestionRepository questions;
+    private SimulationDeadlineService deadlines;
     private SimulationIntegrityEventService service;
     private final LocalDateTime now = LocalDateTime.of(2026, 10, 21, 10, 0);
 
@@ -38,7 +39,10 @@ class SimulationIntegrityEventServiceTest {
         simulations = org.mockito.Mockito.mock(SimulationRepository.class);
         events = org.mockito.Mockito.mock(SimulationIntegrityEventRepository.class);
         questions = org.mockito.Mockito.mock(QuestionRepository.class);
-        service = new SimulationIntegrityEventService(simulations, events, questions,
+        deadlines = org.mockito.Mockito.mock(SimulationDeadlineService.class);
+        when(deadlines.now()).thenReturn(now);
+        when(deadlines.expired(any(), any())).thenReturn(Mono.just(false));
+        service = new SimulationIntegrityEventService(simulations, events, questions, deadlines,
                 Clock.fixed(Instant.parse("2026-10-21T10:00:00Z"), ZoneOffset.UTC));
     }
 
@@ -92,6 +96,21 @@ class SimulationIntegrityEventServiceTest {
                         && api.getStatusCode() == 409)
                 .verify();
         verify(events, never()).save(any());
+    }
+
+    @Test
+    void rejectsEventsAfterTheDeadlineEvenWhileTheSweepHasNotClosedTheSimulation() {
+        Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
+        when(simulations.lockForIntegrityEventWrite(12L, 7L)).thenReturn(Mono.just(simulation));
+        when(deadlines.expired(simulation, now)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.record(12L, 7L,
+                        new SimulationIntegrityEventRequest(SimulationIntegrityEventKind.TAB_HIDDEN, null)))
+                .expectErrorMatches(error -> error instanceof ao.creativemode.kixi.shared.exception.ApiException api
+                        && api.getStatusCode() == 409)
+                .verify();
+        verify(events, never()).save(any());
+        verify(events, never()).countBySimulationIdAndAtAfter(any(), any());
     }
 
     @Test
