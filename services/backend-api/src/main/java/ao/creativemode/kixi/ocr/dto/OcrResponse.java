@@ -226,7 +226,9 @@ public record OcrResponse(
          * ({@code $...$}) - this is the same result, structured, with the raw OCR text and a confidence. */
         List<FormulaSegment> formulas,
 
-        @JsonProperty("rawText") String rawText
+        @JsonProperty("rawText") String rawText,
+
+        @JsonProperty("groupLayout") String groupLayout
     ) {
         /** The shape before formula recognition (#262) was added. */
         public ExtractedQuestion(String number, Double confidence, List<String> subitems,
@@ -234,7 +236,7 @@ public record OcrResponse(
                 List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
                 Integer startY, Integer endY) {
             this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
-                imageDescription, pageIndex, startY, endY, List.of(), null);
+                imageDescription, pageIndex, startY, endY, List.of(), null, null);
         }
 
         /** The shape with formula evidence, before raw OCR text was added to the contract. */
@@ -243,7 +245,16 @@ public record OcrResponse(
                 List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
                 Integer startY, Integer endY, List<FormulaSegment> formulas) {
             this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
-                imageDescription, pageIndex, startY, endY, formulas, null);
+                imageDescription, pageIndex, startY, endY, formulas, null, null);
+        }
+
+        /** Compatibility constructor for the contract with raw OCR text. */
+        public ExtractedQuestion(String number, Double confidence, List<String> subitems,
+                List<SubitemContent> subitemsContent, ConfidenceField<String> text, String type, Double cotacao,
+                List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
+                Integer startY, Integer endY, List<FormulaSegment> formulas, String rawText) {
+            this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
+                imageDescription, pageIndex, startY, endY, formulas, rawText, null);
         }
 
         /**

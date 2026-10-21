@@ -437,6 +437,8 @@ def test_three_unlabelled_rows_from_a_curly_brace_are_restored_as_one_group():
     assert "a velocidade média" not in question.text
     assert "calcule:" in question.text
     assert [item.raw_text for item in question.subitems_content] == [block.text for block in blocks]
+    assert question.group_layout == "brace"
+    assert question.to_dict()["groupLayout"] == "brace"
 
 
 def test_roman_sections_after_lettered_rows_are_not_absorbed_into_the_previous_alinea():

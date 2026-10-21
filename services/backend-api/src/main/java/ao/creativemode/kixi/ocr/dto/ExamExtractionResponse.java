@@ -153,12 +153,14 @@ public record ExamExtractionResponse(
         /** Formulas recognized in the statement, alíneas or options (#262); empty when none. */
         List<FormulaData> formulas,
 
-        @JsonProperty("rawText") String rawText
+        @JsonProperty("rawText") String rawText,
+
+        @JsonProperty("groupLayout") String groupLayout
     ) {
         /** The shape before the alíneas were exposed. */
         public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
                 List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence) {
-            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence, List.of(), List.of());
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence, List.of(), List.of(), null, null);
         }
 
         /** The shape before formula recognition (#262) was exposed. */
@@ -166,7 +168,7 @@ public record ExamExtractionResponse(
                 List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
                 List<SubitemData> subitemsContent) {
             this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
-                subitemsContent, List.of(), null);
+                subitemsContent, List.of(), null, null);
         }
 
         /** Preserve the response shape with formula evidence before raw OCR was exposed. */
@@ -174,7 +176,14 @@ public record ExamExtractionResponse(
                 List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
                 List<SubitemData> subitemsContent, List<FormulaData> formulas) {
             this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
-                subitemsContent, formulas, null);
+                subitemsContent, formulas, null, null);
+        }
+
+        public QuestionData(String number, List<String> subitems, String text, String type, Double cotacao,
+                List<OptionData> options, Boolean hasImage, String imageDescription, Double confidence,
+                List<SubitemData> subitemsContent, List<FormulaData> formulas, String rawText) {
+            this(number, subitems, text, type, cotacao, options, hasImage, imageDescription, confidence,
+                subitemsContent, formulas, rawText, null);
         }
 
         /**
@@ -203,7 +212,8 @@ public record ExamExtractionResponse(
                 q.formulas() != null
                     ? q.formulas().stream().map(FormulaData::fromFormulaSegment).toList()
                     : List.of(),
-                q.rawText()
+                q.rawText(),
+                q.groupLayout()
             );
         }
 

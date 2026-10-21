@@ -427,7 +427,7 @@ class ManualStatementServiceTest {
                 item("Deve ser preocupação comprar ao melhor preço.", "true_false", 1.0),
                 item("A escolha das matérias só depois das aplicações.", "true_false", 1.0),
                 item("A escolha tem em conta o tratamento térmico.", "true_false", 1.0),
-                item("O tipo adquirido deve estar adaptado ao processo.", "true_false", 1.0))),
+                item("O tipo adquirido deve estar adaptado ao processo.", "true_false", 1.0)), null, null, null, null, "brace"),
             new ManualStatementRequest.Question("Uma empresa usa o Lote Económico...", null, null, null, List.of(
                 item("Demonstre a expressão do custo de manutenção.", "open", 2.0),
                 item("Calcule o custo anual e mensal.", "open", 3.0))));
@@ -442,6 +442,7 @@ class ManualStatementServiceTest {
 
         Question header = saved.stream().filter(q -> q.getNumber() == 2).findFirst().orElseThrow();
         assertThat(header.getQuestionType()).isEqualTo("group");
+        assertThat(header.getGroupLayout()).isEqualTo("brace");
         assertThat(header.getMaxScore()).as("a group header has no score of its own").isNull();
         assertThat(header.getParentId()).isNull();
 

@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 
 import java.util.List;
 
@@ -74,15 +75,22 @@ public record ManualStatementRequest(
         String rawText,
         @DecimalMin("0.0") @DecimalMax("1.0") Double confidence,
         Boolean reviewed,
-        @Size(max = 100) @Valid List<Formula> formulas
+        @Size(max = 100) @Valid List<Formula> formulas,
+        @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
+        String groupLayout
     ) {
         /** The shape the exam builder sent before types and alíneas existed. */
         public Question(String text, Double maxScore, List<Option> options) {
-            this(text, maxScore, options, null, null, null, null, null, null);
+            this(text, maxScore, options, null, null, null, null, null, null, null);
         }
 
         public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items) {
-            this(text, maxScore, options, type, items, null, null, null, null);
+            this(text, maxScore, options, type, items, null, null, null, null, null);
+        }
+
+        public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items,
+                String rawText, Double confidence, Boolean reviewed, List<Formula> formulas) {
+            this(text, maxScore, options, type, items, rawText, confidence, reviewed, formulas, null);
         }
     }
 

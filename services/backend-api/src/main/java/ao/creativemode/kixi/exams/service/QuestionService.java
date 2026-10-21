@@ -330,6 +330,7 @@ public class QuestionService {
             staff ? question.getDeletedAt() : null,
             question.getParentId(),
             question.getLabel(),
+            question.getGroupLayout(),
             staff ? question.getRawText() : null,
             staff ? question.getOcrConfidence() : null,
             staff ? question.getOcrReviewed() : null,

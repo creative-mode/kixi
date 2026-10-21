@@ -136,6 +136,7 @@ public record QuestionResponse(
         Long parentId,
         /** The item's label inside its group (a, b, c...); null for a top-level question. */
         String label,
+        String groupLayout,
         String rawText,
         Boolean ocrReviewed,
         List<FormulaEvidence> formulas
@@ -158,6 +159,7 @@ public record QuestionResponse(
                 options,
                 q.getParentId(),
                 q.getLabel(),
+                q.getGroupLayout(),
                 staff ? q.getRawText() : null,
                 staff ? q.getOcrReviewed() : null,
                 staff ? formulas(q) : null

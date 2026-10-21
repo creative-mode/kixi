@@ -487,6 +487,9 @@ public class OcrPersistenceService {
         boolean structuredGroup = isStructuredGroup(extracted);
         question.setText(structuredGroup ? extracted.getTextValue() : extracted.textWithSubitems());
         question.setQuestionType(structuredGroup ? Question.GROUP : mapQuestionType(extracted.getTypeValue()));
+        if (structuredGroup && "brace".equals(extracted.groupLayout())) {
+            question.setGroupLayout("brace");
+        }
 
         // Cotação (score)
         if (!structuredGroup && extracted.getCotacaoValue() != null) {

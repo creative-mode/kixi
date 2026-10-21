@@ -151,6 +151,8 @@ class ExtractedQuestion:
     # confiança de cada um.
     formulas: List[FormulaSegment] = field(default_factory=list)
     raw_text: Optional[str] = None
+    # A geometrically detected brace list is printed as a brace, not as generated a/b/c labels.
+    group_layout: Optional[str] = None
 
     @property
     def confidence(self) -> float:
@@ -179,6 +181,8 @@ class ExtractedQuestion:
             "endY": self.end_y,
             "formulas": [f.to_dict() for f in self.formulas],
         }
+        if self.group_layout is not None:
+            result["groupLayout"] = self.group_layout
 
         if self.image_description:
             result["imageDescription"] = self.image_description
@@ -949,6 +953,7 @@ class OCRPostprocessor:
                             question.text = " ".join([question.text, *promoted_sections]).strip()
                         question.subitems_content.sort(key=lambda item: (item.page_index, item.start_y))
                         question.subitems = [f"{item.label})" for item in question.subitems_content]
+                        question.group_layout = "brace"
                         break
                     if len(question.subitems_content) >= 3:
                         break
@@ -1088,6 +1093,7 @@ class OCRPostprocessor:
             question.subitems_content = remaining_items
             if promoted_sections:
                 question.text = " ".join([question.text, *promoted_sections]).strip()
+            question.group_layout = "brace"
 
     def _extract_metadata(self, blocks: List[TextBlock], full_text: str) -> ExtractedMetadata:
         """Extract document metadata from text blocks."""

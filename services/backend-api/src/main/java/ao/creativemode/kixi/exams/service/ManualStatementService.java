@@ -92,6 +92,7 @@ public class ManualStatementService {
         // The group is only the common statement: nothing to answer, so no score and no options.
         Question header = new Question(statementId, number, data.text().trim(), Question.GROUP);
         header.setOrderIndex(position.incrementAndGet());
+        header.setGroupLayout(data.groupLayout());
         applyOcrEvidence(header, data.rawText(), data.confidence(), data.reviewed(), data.formulas());
         return questionRepository.save(header).flatMap(saved -> {
             List<ManualStatementRequest.Item> items = data.items();
@@ -202,6 +203,9 @@ public class ManualStatementService {
             }
             if (Question.GROUP.equals(type) && !hasItems) {
                 throw ApiException.badRequest("A group question needs at least one item (" + where + ")");
+            }
+            if (question.groupLayout() != null && !isGroup(question)) {
+                throw ApiException.badRequest("Only a group question can define a layout (" + where + ")");
             }
             if (isGroup(question)) {
                 if (question.options() != null && !question.options().isEmpty()) {

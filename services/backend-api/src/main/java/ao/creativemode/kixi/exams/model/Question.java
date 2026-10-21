@@ -72,6 +72,10 @@ public class Question {
     @Column("label")
     private String label;
 
+    /** How children of a group are laid out on the source paper; null/lettered keeps legacy output. */
+    @Column("group_layout")
+    private String groupLayout;
+
     /**
      * Maximum score/points for this question
      */
@@ -362,6 +366,10 @@ public class Question {
     public void setLabel(String label) {
         this.label = label;
     }
+
+    public String getGroupLayout() { return groupLayout; }
+
+    public void setGroupLayout(String groupLayout) { this.groupLayout = groupLayout; }
 
     /** The question type of a group header: it holds the common statement and nothing to answer. */
     public static final String GROUP = "group";
