@@ -43,14 +43,18 @@ UNRECOGNIZED = "unrecognized"
 class FormulaSegment:
     """Um trecho de texto que o reconhecedor tratou como fórmula (ou tentou tratar).
 
-    ``raw`` é sempre o texto que o OCR leu, nunca alterado - fica como o resultado
-    auditável quando ``latex`` falha. ``latex`` é ``None`` em ``unrecognized``: nunca se
-    inventa uma fórmula a partir de texto que não se consegue reconstruir.
+    ``raw`` preserva a saída textual da fonte que reconheceu a fórmula: o OCR de texto
+    quando ele viu a região, ou a saída sanitizada do reconhecedor visual quando o OCR
+    de texto não produziu nada. O recorte da região continua a ser a evidência visual
+    autoritativa. ``latex`` é ``None`` em ``unrecognized``: nunca se inventa uma fórmula
+    a partir de texto que não se consegue reconstruir.
     """
     raw: str
     latex: Optional[str]
     confidence: float
     kind: str  # FORMULA | UNRECOGNIZED
+    ocr_confidence: Optional[float] = None
+    layout_confidence: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
         result: Dict[str, object] = {
@@ -58,6 +62,10 @@ class FormulaSegment:
             "kind": self.kind,
             "confidence": round(self.confidence, 3),
         }
+        if self.ocr_confidence is not None:
+            result["ocrConfidence"] = round(self.ocr_confidence, 3)
+        if self.layout_confidence is not None:
+            result["layoutConfidence"] = round(self.layout_confidence, 3)
         if self.latex is not None:
             result["latex"] = self.latex
         return result
@@ -176,7 +184,9 @@ def _scan(text: str) -> Tuple[str, List[FormulaSegment]]:
             if last < len(chunk) or last == 0:
                 next_chunks.append((chunk[last:], False))
         chunks = next_chunks
-    return "".join(c for c, _ in chunks), segments
+    # Patterns such as Bmax and e-2t may be recognized in separate passes even
+    # though the source prints them as one contiguous expression.
+    return "".join(c for c, _ in chunks).replace("$$", ""), segments
 
 
 def extract_inline_formulas(text: str) -> Tuple[str, List[FormulaSegment]]:

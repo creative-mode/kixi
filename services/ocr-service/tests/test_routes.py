@@ -406,14 +406,15 @@ class TestSupportedLanguagesEndpoint:
 class TestStatusEndpoint:
     """Tests for the request status endpoint."""
 
-    def test_get_status_not_implemented(self, client):
-        """Test that status endpoint returns 501 (not implemented)."""
+    def test_get_status_request_scoped_progress_is_not_trackable(self, client):
+        """A completed request has no durable job state to query."""
         response = client.get("/ocr/v1/status/req-test-123")
 
-        assert response.status_code == 501
+        assert response.status_code == 410
         data = response.json()
         assert "requestId" in data
-        assert data["status"] == "unknown"
+        assert data["status"] == "not_trackable"
+        assert "no job state is persisted" in data["message"].lower()
 
 
 # =============================================================================

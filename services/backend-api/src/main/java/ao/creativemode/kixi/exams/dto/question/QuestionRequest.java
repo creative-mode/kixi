@@ -49,5 +49,12 @@ public record QuestionRequest(
     Integer pageIndex,
 
     // No size limit: questions.model_answer is TEXT.
-    String modelAnswer
-) { }
+    String modelAnswer,
+
+    /** Explicit human acknowledgement of OCR text/formula evidence. */
+    Boolean ocrReviewed
+) {
+    public QuestionRequest(String text, String questionType, Double maxScore, Integer pageIndex, String modelAnswer) {
+        this(text, questionType, maxScore, pageIndex, modelAnswer, null);
+    }
+}

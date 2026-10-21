@@ -5,7 +5,7 @@ from app.config import settings
 
 
 def main() -> None:
-    from paddleocr import LayoutDetection, PaddleOCR
+    from paddleocr import FormulaRecognition, LayoutDetection, PaddleOCR
 
     detectors = [settings.ocr_det_model_name]
     if settings.ocr_fallback_det_model_name:
@@ -22,6 +22,8 @@ def main() -> None:
         )
     if settings.ocr_layout_enabled:
         LayoutDetection(model_name=settings.ocr_layout_model_name, device="cpu", enable_mkldnn=settings.ocr_enable_mkldnn)
+    if settings.ocr_formula_latex and settings.ocr_formula_model_enabled:
+        FormulaRecognition(model_name=settings.ocr_formula_model_name, device="cpu")
 
 
 if __name__ == "__main__":

@@ -147,6 +147,9 @@ def test_json_contract_for_the_new_types(result):
         "text": "Deve ser preocupação da organização comprar ao melhor preço possível estabelecido pelo produtor.",
         "cotacao": None,
         "type": "verdadeiro_falso",
+        "confidence": 0.941,
+        "rawText": "aDeve ser prcocupacao da organizacao comprar ao melhor prcco "
+                    "possivel estabelecido pelo produtor).",
     }
     assert q3["options"] is None
     assert questions[4].to_dict()["type"] == "composta"

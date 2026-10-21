@@ -12,6 +12,7 @@ import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
@@ -68,8 +69,7 @@ public class StatementController {
      */
     @GetMapping
     public Mono<ResponseEntity<List<StatementSummary>>> listAllActive() {
-        return readableStatements(statementService::findAllActive, statementService::findAllVisible)
-            .map(StatementSummary::from)
+        return readableStatementSummaries(statementService::findAllActive, statementService::findAllVisible)
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -80,7 +80,7 @@ public class StatementController {
     @GetMapping("/review")
     public Mono<ResponseEntity<List<StatementSummary>>> listNeedingReview() {
         return staffStatements(statementService::findNeedingReview)
-            .map(StatementSummary::from)
+            .map(statement -> StatementSummary.from(statement, true))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -91,7 +91,7 @@ public class StatementController {
     @GetMapping("/from-ocr")
     public Mono<ResponseEntity<List<StatementSummary>>> listFromOcr() {
         return staffStatements(statementService::findFromOcr)
-            .map(StatementSummary::from)
+            .map(statement -> StatementSummary.from(statement, true))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -102,7 +102,7 @@ public class StatementController {
     @GetMapping("/trash")
     public Mono<ResponseEntity<List<StatementSummary>>> listTrashed() {
         return staffStatements(statementService::findAllDeleted)
-            .map(StatementSummary::from)
+            .map(statement -> StatementSummary.from(statement, true))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -114,8 +114,8 @@ public class StatementController {
     public Mono<ResponseEntity<StatementSummary>> getById(
         @PathVariable Long id
     ) {
-        return readableStatement(() -> statementService.findById(id), () -> statementService.findByIdVisible(id))
-            .map(StatementSummary::from)
+        return reader().flatMap(reader -> readableStatement(() -> statementService.findById(id), () -> statementService.findByIdVisible(id))
+            .map(statement -> StatementSummary.from(statement, reader.staff())))
             .map(ResponseEntity::ok);
     }
 
@@ -148,10 +148,9 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> searchByTitle(
         @RequestParam String query
     ) {
-        return readableStatements(
+        return readableStatementSummaries(
                 () -> statementService.searchByTitle(query),
                 () -> statementService.searchByTitleVisible(query))
-            .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -163,10 +162,9 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> getBySchoolYear(
         @PathVariable Long schoolYearId
     ) {
-        return readableStatements(
+        return readableStatementSummaries(
                 () -> statementService.findBySchoolYear(schoolYearId),
                 () -> statementService.findBySchoolYearVisible(schoolYearId))
-            .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -178,10 +176,9 @@ public class StatementController {
     public Mono<ResponseEntity<List<StatementSummary>>> getBySubject(
         @PathVariable Long subjectId
     ) {
-        return readableStatements(
+        return readableStatementSummaries(
                 () -> statementService.findBySubject(subjectId),
                 () -> statementService.findBySubjectVisible(subjectId))
-            .map(StatementSummary::from)
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -229,16 +226,18 @@ public class StatementController {
 
     /** The staff-only lists (review, OCR, trash): the route already keeps students out. */
     private Flux<Statement> staffStatements(Supplier<Flux<Statement>> query) {
-        return reader().flatMapMany(reader -> query.get().filter(reader::sees));
+        return reader().flatMapMany(reader -> reader.staff()
+            ? query.get().filter(reader::sees)
+            : Flux.error(ApiException.forbidden("This statement list is only available to staff")));
     }
 
-    private Flux<Statement> readableStatements(
+    private Flux<StatementSummary> readableStatementSummaries(
         Supplier<Flux<Statement>> staffQuery,
         Supplier<Flux<Statement>> studentQuery
     ) {
-        return reader().flatMapMany(reader -> reader.staff()
+        return reader().flatMapMany(reader -> (reader.staff()
             ? staffQuery.get().filter(reader::sees)
-            : studentQuery.get());
+            : studentQuery.get()).map(statement -> StatementSummary.from(statement, reader.staff())));
     }
 
     private Mono<Statement> readableStatement(
@@ -384,6 +383,7 @@ public class StatementController {
     /**
      * Summary response for statement listing.
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record StatementSummary(
         Long id,
         String title,
@@ -404,6 +404,10 @@ public class StatementController {
         Long courseId
     ) {
         public static StatementSummary from(Statement statement) {
+            return from(statement, true);
+        }
+
+        public static StatementSummary from(Statement statement, boolean staff) {
             return new StatementSummary(
                 statement.getId(),
                 statement.getTitle(),
@@ -412,9 +416,9 @@ public class StatementController {
                 statement.getVariant(),
                 statement.getTotalMaxScore(),
                 statement.getVisible(),
-                statement.getNeedsReview(),
-                statement.getSource(),
-                statement.getOcrConfidence(),
+                staff ? statement.getNeedsReview() : null,
+                staff ? statement.getSource() : null,
+                staff ? statement.getOcrConfidence() : null,
                 statement.getSchoolYearId(),
                 statement.getTermId(),
                 statement.getSubjectId(),
