@@ -75,6 +75,19 @@ def test_physics_photo_preserves_question_structure_math_and_source_footer(monke
     assert "velocidade média" in children["V.b"]
     assert "aceleração média" in children["V.c"]
     assert children["VII.a"].startswith("o ângulo") and "raio" not in children["VII.a"]
+    angle_item = next(item for item in questions["4"].subitems_content if item.label == "VII.a")
+    angle_latex = " ".join(
+        formula.latex or "" for formula in angle_item.formulas if formula.kind == "formula"
+    )
+    assert r"\vec{v}" in angle_item.text and r"\vec{a}" in angle_item.text
+    assert any(vector in angle_latex for vector in (r"\vec{v}", r"\overrightarrow{v}")), (
+        f"the angle question must preserve the printed velocity vector: {angle_latex!r}; "
+        f"question formulas={[(formula.raw, formula.latex) for formula in questions['4'].formulas]!r}; "
+        f"angle raw={angle_item.raw_text!r}"
+    )
+    assert any(vector in angle_latex for vector in (r"\vec{a}", r"\overrightarrow{a}")), (
+        f"the angle question must preserve the printed acceleration vector: {angle_latex!r}"
+    )
     assert children["VII.b"] == "o raio de curvatura"
     assert "Seja $" in section_text and "Seja = $" not in section_text
     assert "dessa partícula" in section_text
@@ -141,6 +154,19 @@ def test_clean_physics_photo_recovers_vector_formula_from_original_pixels(monkey
     assert "[fórmula]" not in questions["3"].text
     assert [item.label for item in questions["4"].subitems_content] == ["V.a", "V.b", "V.c", "VII.a", "VII.b"], (
         f"question text={questions['4'].text!r}; children={[(item.label, item.text, item.raw_text) for item in questions['4'].subitems_content]!r}"
+    )
+    angle_item = next(item for item in questions["4"].subitems_content if item.label == "VII.a")
+    angle_latex = " ".join(
+        formula.latex or "" for formula in angle_item.formulas if formula.kind == "formula"
+    )
+    assert r"\vec{v}" in angle_item.text and r"\vec{a}" in angle_item.text
+    assert any(vector in angle_latex for vector in (r"\vec{v}", r"\overrightarrow{v}")), (
+        f"the angle question must preserve the printed velocity vector: {angle_latex!r}; "
+        f"angle text={angle_item.text!r}; raw={angle_item.raw_text!r}; "
+        f"question formulas={[(formula.raw, formula.latex) for formula in questions['4'].formulas]!r}"
+    )
+    assert any(vector in angle_latex for vector in (r"\vec{a}", r"\overrightarrow{a}")), (
+        f"the angle question must preserve the printed acceleration vector: {angle_latex!r}"
     )
     assert "Seja" in questions["4"].text and "Determine:" in questions["4"].text
     assert questions["4"].text.upper().count("VIII)") == 1

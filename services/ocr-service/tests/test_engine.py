@@ -45,6 +45,20 @@ from app.ocr.layout import LayoutRegion
 
 
 @pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (r"\vec{v}\;e\;\vec{a}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}\;\vec{e}\;\vec{a}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}e\\ {\vec{a}}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}\;\vec{x}\;\vec{a}", None),
+        (r"\vec{v}\;e", None),
+    ],
+)
+def test_canonical_vector_pair_accepts_only_the_expected_inline_semantics(raw, expected):
+    assert OCREngine._canonical_vector_pair(raw) == expected
+
+
+@pytest.mark.parametrize(
     "numbers,expected_gap",
     [
         (["1", "2", "3"], False),

@@ -14,7 +14,9 @@ from typing import Optional, List, Dict, Any, Tuple, Callable
 import hashlib
 import re
 import uuid
+import unicodedata
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -27,7 +29,7 @@ from app.ocr.preprocessing import (
 )
 from app.ocr.ink import is_handwriting
 from app.ocr.layout import LayoutDetector, LayoutRegion
-from app.ocr.formula_model import FormulaImageRecognizer
+from app.ocr.formula_model import FormulaImageRecognizer, normalize_model_latex
 from app.ocr.postprocessing import (
     OCRPostprocessor,
     TextBlock,
@@ -266,6 +268,119 @@ class OCREngine:
             recognized=len(predictions),
         )
         return predictions
+
+    def _recognize_inline_vector_pairs(
+        self,
+        image: np.ndarray,
+        text_blocks: List[TextBlock],
+        request_id: str,
+        page_index: int,
+    ) -> Tuple[List[LayoutRegion], FormulaPredictions]:
+        """Recover vector symbols that sit inline after a printed 'angle between vectors' phrase.
+
+        The layout model often misses the small arrows above inline symbols. The text OCR still gives us a
+        bounded line and the phrase that identifies the expected pair, so FormulaNet sees only the pixels after
+        that phrase. A result is accepted only if it independently reads exactly ``v e a`` with vector marks;
+        otherwise no symbols are synthesized.
+        """
+        if not settings.ocr_formula_latex or not settings.ocr_formula_model_enabled:
+            return [], {}
+
+        regions: List[LayoutRegion] = []
+        crops: List[np.ndarray] = []
+        height, width = image.shape[:2]
+        for block in text_blocks:
+            normalized = unicodedata.normalize("NFD", block.text.casefold())
+            normalized = re.sub(r"[\u0300-\u036f]", "", normalized)
+            phrase = re.search(r"\bangulo\b.*?\bentre\s+(?:os\s+)?(?:vectores?|vectors?)\b", normalized)
+            if not phrase or block.page_index != page_index:
+                continue
+
+            vector_marker = re.search(r"\b(?:vectores?|vectors?)\b", normalized[phrase.start():phrase.end()])
+            if not vector_marker:
+                continue
+            vector_end = phrase.start() + vector_marker.end()
+            source_length = max(1, len(block.text))
+            x1, y1, x2, y2 = (int(round(value)) for value in block.bbox)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            # Preserve the prose word and the detected line's reading order. The recognition crop gets a small
+            # left pad; the synthetic region begins after that word so replacement cannot consume "vectores".
+            replacement_index = vector_end
+            while replacement_index < len(block.text) and block.text[replacement_index].isspace():
+                replacement_index += 1
+            region_x1 = x1 + round(replacement_index / source_length * (x2 - x1))
+            vector_end_x = x1 + round(vector_end / source_length * (x2 - x1))
+            recognition_x1 = max(x1, vector_end_x - max(4, round((y2 - y1) * 0.22)))
+            recognition_x2 = min(x2, x1 + round(min(len(block.text), replacement_index + 8) / source_length * (x2 - x1)))
+            vertical_pad = max(4, round((y2 - y1) * 0.3))
+            crop_y1 = max(0, y1 - vertical_pad)
+            crop_y2 = min(height, y2 + vertical_pad)
+            recognition_x2 = max(recognition_x1 + 1, recognition_x2)
+            crop = image[crop_y1:crop_y2, recognition_x1:recognition_x2]
+            if crop.size == 0:
+                continue
+
+            crops.append(cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC))
+            regions.append(LayoutRegion(
+                kind="formula",
+                label="inline_vector_pair",
+                score=0.55,
+                bbox=(region_x1, y1, recognition_x2, y2),
+            ))
+
+        if not crops:
+            return [], {}
+
+        predictions: FormulaPredictions = {}
+        accepted_regions: List[LayoutRegion] = []
+        first_pass = self._formula_recognizer.recognize(crops)
+        unresolved = [index for index, value in enumerate(first_pass) if not self._canonical_vector_pair(value)]
+        threshold_crops = []
+        for index in unresolved:
+            crop = crops[index]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            margin = min(binary.shape[1] - 1, max(1, round(binary.shape[0] * 0.08)))
+            thresholded = cv2.cvtColor(binary[:, margin:], cv2.COLOR_GRAY2BGR)
+            threshold_crops.append(thresholded)
+        threshold_results = self._formula_recognizer.recognize(threshold_crops) if threshold_crops else []
+        thresholded = dict(zip(unresolved, threshold_results))
+        for index, (region, raw_latex) in enumerate(zip(regions, first_pass)):
+            latex = self._canonical_vector_pair(raw_latex)
+            if not latex and index in thresholded:
+                latex = self._canonical_vector_pair(thresholded[index])
+            if latex:
+                predictions[formula_prediction_key(page_index, region.bbox)] = latex
+                accepted_regions.append(region)
+
+        logger.info(
+            "Inline vector pairs recognized",
+            request_id=request_id,
+            candidates=len(regions),
+            recognized=len(predictions),
+        )
+        return accepted_regions, predictions
+
+    @staticmethod
+    def _canonical_vector_pair(raw_latex: Optional[str]) -> Optional[str]:
+        latex = normalize_model_latex(raw_latex)
+        if not latex:
+            return None
+        latex = re.sub(r"\\\\\s*", " ", latex)
+        latex = re.sub(r"\\[;,!:]\s*", " ", latex)
+        latex = re.sub(r"\{\s*(\\vec\{[va]\})\s*\}", r"\1", latex)
+        latex = re.sub(r"\s+", " ", latex).strip()
+        latex = re.sub(
+            r"(\\vec\{v\})\s*\\vec\{e\}\s*(\\vec\{a\})",
+            r"\1 e \2",
+            latex,
+            flags=re.IGNORECASE,
+        )
+        if not re.fullmatch(r"\\vec\{v\}\s*e\s*\\vec\{a\}", latex, re.IGNORECASE):
+            return None
+        return r"\vec{v}\;e\;\vec{a}"
 
     @staticmethod
     def _merge_fallback_formula_predictions(
@@ -761,6 +876,15 @@ class OCREngine:
                 request_id,
                 page_index,
             )
+            vector_regions, vector_predictions = self._recognize_inline_vector_pairs(
+                formula_image,
+                text_blocks,
+                request_id,
+                page_index,
+            )
+            if vector_regions:
+                layout = [*(layout or []), *vector_regions]
+                formula_predictions.update(vector_predictions)
             formula_recognition_ms = (time.perf_counter() - formula_started) * 1000
 
             logger.debug(
@@ -826,6 +950,15 @@ class OCREngine:
                     request_id,
                     page_index,
                 )
+                retry_vector_regions, retry_vector_predictions = self._recognize_inline_vector_pairs(
+                    image,
+                    retry_blocks,
+                    request_id,
+                    page_index,
+                )
+                if retry_vector_regions:
+                    retry_layout = [*(retry_layout or []), *retry_vector_regions]
+                    retry_formula_predictions.update(retry_vector_predictions)
                 retry_formula_ms = (time.perf_counter() - retry_formula_started) * 1000
                 formula_recognition_ms += retry_formula_ms
                 ocr_ms += max(0.0, (time.perf_counter() - fallback_ocr_started) * 1000 - retry_formula_ms)

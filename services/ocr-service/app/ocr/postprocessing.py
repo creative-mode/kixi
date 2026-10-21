@@ -1855,8 +1855,25 @@ class OCRPostprocessor:
             ]
             return candidates[-1] if candidates else None
 
-        def attach(owner: ExtractedQuestion, page_index: int, y: float, segment: FormulaSegment) -> None:
-            index = subitem_for(owner, page_index, y)
+        def attach(
+            owner: ExtractedQuestion,
+            page_index: int,
+            y: float,
+            segment: FormulaSegment,
+            inline_vector_pair: bool = False,
+        ) -> None:
+            index = None
+            if inline_vector_pair:
+                for candidate_index, item in enumerate(owner.subitems_content):
+                    normalized = unicodedata.normalize("NFD", item.text.casefold())
+                    normalized = re.sub(r"[\u0300-\u036f]", "", normalized)
+                    if item.page_index == page_index and re.search(
+                        r"\bangulo\b.*\b(?:vectores?|vectors?)\b", normalized
+                    ):
+                        index = candidate_index
+                        break
+            if index is None:
+                index = subitem_for(owner, page_index, y)
             if index is not None:
                 item = owner.subitems_content[index]
                 owner.subitems_content[index] = replace(
@@ -1875,7 +1892,9 @@ class OCRPostprocessor:
                 ]
                 if not matching:
                     inline_parent = self._inline_formula_parent(region, page_blocks, page_index)
-                    if inline_parent and inline_parent[2] < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO:
+                    if (inline_parent
+                            and inline_parent[2] < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO
+                            and region.label != "inline_vector_pair"):
                         continue
                 center_y = (region.bbox[1] + region.bbox[3]) / 2
                 owner = owner_for(page_index, center_y)
@@ -1887,7 +1906,13 @@ class OCRPostprocessor:
                 if attached:
                     attached_block_ids.update(id(block) for block in new_matching)
                     for segment in attached:
-                        attach(owner, page_index, center_y, replace(segment, layout_confidence=region.score))
+                        attach(
+                            owner,
+                            page_index,
+                            center_y,
+                            replace(segment, layout_confidence=region.score),
+                            region.label == "inline_vector_pair",
+                        )
                     continue
                 if matching and any(block.formula_segments for block in matching):
                     continue
@@ -1920,7 +1945,7 @@ class OCRPostprocessor:
                         kind="unrecognized",
                         layout_confidence=region.score,
                     )
-                attach(owner, page_index, center_y, segment)
+                attach(owner, page_index, center_y, segment, region.label == "inline_vector_pair")
 
     @staticmethod
     def _recognized_formula_segment(
@@ -2100,7 +2125,8 @@ class OCRPostprocessor:
                 inline_parent = self._inline_formula_parent(region, out, page_index)
                 if inline_parent is not None:
                     parent_index, parent, width_ratio = inline_parent
-                    if width_ratio < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO:
+                    if (width_ratio < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO
+                            and region.label != "inline_vector_pair"):
                         # Small layout boxes inside a text line are often individual
                         # symbols, interval labels, or prose fragments. The text OCR
                         # and inline-math parser retain the complete line; emitting
