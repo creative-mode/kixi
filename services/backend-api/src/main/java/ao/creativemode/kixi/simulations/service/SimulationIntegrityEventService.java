@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -36,6 +37,7 @@ public class SimulationIntegrityEventService {
         this.clock = clock;
     }
 
+    @Transactional
     public Mono<SimulationIntegrityEventResponse> record(Long simulationId, Long accountId,
             SimulationIntegrityEventRequest request) {
         if (request.kind() == SimulationIntegrityEventKind.PASTE_BLOCKED && request.questionId() == null) {
@@ -45,7 +47,7 @@ public class SimulationIntegrityEventService {
             return Mono.error(ApiException.badRequest("questionId is only accepted for PASTE_BLOCKED"));
         }
 
-        return simulations.findByIdAndAccountIdAndDeletedAtIsNull(simulationId, accountId)
+        return simulations.lockForIntegrityEventWrite(simulationId, accountId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
                 .flatMap(simulation -> validateAttempt(simulation, request)
                         .then(Mono.defer(() -> enforceRateLimit(simulationId)))

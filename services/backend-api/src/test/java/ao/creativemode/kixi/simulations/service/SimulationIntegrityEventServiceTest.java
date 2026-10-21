@@ -45,7 +45,7 @@ class SimulationIntegrityEventServiceTest {
     @Test
     void recordsOnlyTheOwnersActiveSimulationAndUsesServerTime() {
         Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
-        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(12L, 7L)).thenReturn(Mono.just(simulation));
+        when(simulations.lockForIntegrityEventWrite(12L, 7L)).thenReturn(Mono.just(simulation));
         when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1))).thenReturn(Mono.just(0L));
         when(events.save(any(SimulationIntegrityEvent.class))).thenAnswer(invocation -> {
             SimulationIntegrityEvent event = invocation.getArgument(0);
@@ -70,7 +70,7 @@ class SimulationIntegrityEventServiceTest {
         Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
         Question question = new Question();
         question.setStatementId(88L);
-        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(12L, 7L)).thenReturn(Mono.just(simulation));
+        when(simulations.lockForIntegrityEventWrite(12L, 7L)).thenReturn(Mono.just(simulation));
         when(questions.findByIdAndDeletedAtIsNull(4L)).thenReturn(Mono.just(question));
 
         StepVerifier.create(service.record(12L, 7L,
@@ -83,7 +83,7 @@ class SimulationIntegrityEventServiceTest {
 
     @Test
     void rejectsEventsAfterSimulationEnds() {
-        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(12L, 7L))
+        when(simulations.lockForIntegrityEventWrite(12L, 7L))
                 .thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
 
         StepVerifier.create(service.record(12L, 7L,
@@ -101,7 +101,7 @@ class SimulationIntegrityEventServiceTest {
                 .expectErrorMatches(error -> error instanceof ao.creativemode.kixi.shared.exception.ApiException api
                         && api.getStatusCode() == 400)
                 .verify();
-        verify(simulations, never()).findByIdAndAccountIdAndDeletedAtIsNull(any(), any());
+        verify(simulations, never()).lockForIntegrityEventWrite(any(), any());
     }
 
     @Test
@@ -111,12 +111,12 @@ class SimulationIntegrityEventServiceTest {
                 .expectErrorMatches(error -> error instanceof ao.creativemode.kixi.shared.exception.ApiException api
                         && api.getStatusCode() == 400)
                 .verify();
-        verify(simulations, never()).findByIdAndAccountIdAndDeletedAtIsNull(any(), any());
+        verify(simulations, never()).lockForIntegrityEventWrite(any(), any());
     }
 
     @Test
     void capsEventVolumePerAttempt() {
-        when(simulations.findByIdAndAccountIdAndDeletedAtIsNull(12L, 7L))
+        when(simulations.lockForIntegrityEventWrite(12L, 7L))
                 .thenReturn(Mono.just(simulation(SimulationStatus.IN_PROGRESS)));
         when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1))).thenReturn(Mono.just(120L));
 
@@ -128,9 +128,24 @@ class SimulationIntegrityEventServiceTest {
         verify(events, never()).save(any());
     }
 
+    @Test
+    void hidesAnotherOwnersSimulation() {
+        when(simulations.lockForIntegrityEventWrite(12L, 8L))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(service.record(12L, 8L,
+                        new SimulationIntegrityEventRequest(SimulationIntegrityEventKind.TAB_HIDDEN, null)))
+                .expectErrorMatches(error -> error instanceof ao.creativemode.kixi.shared.exception.ApiException api
+                        && api.getStatusCode() == 404)
+                .verify();
+        verify(events, never()).countBySimulationIdAndAtAfter(any(), any());
+        verify(events, never()).save(any());
+    }
+
     private Simulation simulation(SimulationStatus status) {
         Simulation simulation = new Simulation();
         simulation.setId(12L);
+        simulation.setAccountId(7L);
         simulation.setStatementId(77L);
         simulation.setStatus(status);
         return simulation;

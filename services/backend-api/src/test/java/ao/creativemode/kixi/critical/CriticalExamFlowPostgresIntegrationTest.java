@@ -5,6 +5,8 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import ao.creativemode.kixi.identity.service.JwtService;
@@ -15,6 +17,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -261,6 +265,52 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .map((row, metadata) -> row.get("n", Long.class))
                 .one().block(Duration.ofSeconds(10));
         assertThat(saved).isEqualTo(2L);
+    }
+
+    @Test
+    void concurrentEventWritesCannotExceedPerSimulationLimit() throws Exception {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+
+        database.sql("INSERT INTO simulation_integrity_events (simulation_id, kind, occurred_at) "
+                        + "SELECT :id, 'TAB_HIDDEN', CURRENT_TIMESTAMP FROM generate_series(1, 119)")
+                .bind("id", simulation)
+                .fetch().rowsUpdated().block(Duration.ofSeconds(10));
+
+        var first = CompletableFuture.supplyAsync(() -> postIntegrityEvent(simulation));
+        var second = CompletableFuture.supplyAsync(() -> postIntegrityEvent(simulation));
+        List<Integer> statuses = List.of(
+                first.get(20, TimeUnit.SECONDS).value(),
+                second.get(20, TimeUnit.SECONDS).value());
+
+        assertThat(statuses).containsExactlyInAnyOrder(
+                HttpStatus.CREATED.value(), HttpStatus.TOO_MANY_REQUESTS.value());
+        Long persisted = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(persisted).isEqualTo(120L);
+    }
+
+    private HttpStatusCode postIntegrityEvent(long simulationId) {
+        return bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulationId + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .returnResult(String.class)
+                .getStatus();
     }
 
     @Test
