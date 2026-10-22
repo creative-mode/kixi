@@ -177,14 +177,16 @@ public class EnrollmentService {
         if (!targetAccountId.equals(callerAccountId) && !admin && !teacher) {
             return Flux.error(ApiException.forbidden("Only ADMIN or TEACHER can list another account's enrollments"));
         }
-        return enrollments.findAllByAccountIdAndDeletedAtIsNull(targetAccountId)
-            .concatMap(enrollment -> {
-                if (admin || targetAccountId.equals(callerAccountId) || !teacher) {
-                    return Mono.just(toResponse(enrollment));
-                }
-                return teachingAssignmentService.requireAssignedToClass(callerAccountId, enrollment.getClassId())
-                    .thenReturn(toResponse(enrollment));
-            });
+        Flux<EnrollmentResponse> visible = enrollments.findAllByAccountIdAndDeletedAtIsNull(targetAccountId)
+            .filterWhen(enrollment -> admin || targetAccountId.equals(callerAccountId) || !teacher
+                ? Mono.just(true)
+                : teachingAssignmentService.hasAssignedToClass(callerAccountId, enrollment.getClassId()))
+            .map(EnrollmentService::toResponse);
+
+        if (!targetAccountId.equals(callerAccountId) && !admin && teacher) {
+            return visible.switchIfEmpty(Flux.error(ApiException.notFound("Enrollment not found")));
+        }
+        return visible;
     }
 
     /**

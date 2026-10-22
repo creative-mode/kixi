@@ -230,6 +230,15 @@ public class TeachingAssignmentService {
             .then();
     }
 
+    /** Whether the account has an active assignment in the class, without turning a negative into an error. */
+    public Mono<Boolean> hasAssignedToClass(Long accountId, Long classId) {
+        return teacherRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .flatMap(teacher -> classRepository.findByIdAndDeletedAtIsNull(classId)
+                .flatMap(klass -> assignments.existsByTeacherIdAndClassIdAndSchoolYearIdAndDeletedAtIsNull(
+                    teacher.getId(), classId, klass.getSchoolYearId())))
+            .defaultIfEmpty(false);
+    }
+
     // ── Internals ───────────────────────────────────────────────────────────
 
     /**

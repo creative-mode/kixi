@@ -352,12 +352,42 @@ class EnrollmentServiceTest {
         Enrollment enrollment = new Enrollment(43L, 7L, 2024L);
         enrollment.setId(1L);
         when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.just(enrollment));
-        when(teachingAssignmentService.requireAssignedToClass(9L, 7L)).thenReturn(Mono.empty());
+        when(teachingAssignmentService.hasAssignedToClass(9L, 7L)).thenReturn(Mono.just(true));
 
         StepVerifier.create(service.findVisible(9L, false, true, 43L))
             .expectNextMatches(response -> response.id().equals(1L))
             .verifyComplete();
-        verify(teachingAssignmentService).requireAssignedToClass(9L, 7L);
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 7L);
+    }
+
+    @Test
+    void teacherListsOnlyAssignedEnrollmentsFromAMixedAccount() {
+        Enrollment visible = new Enrollment(43L, 7L, 2024L);
+        visible.setId(1L);
+        Enrollment hidden = new Enrollment(43L, 8L, 2025L);
+        hidden.setId(2L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L))
+            .thenReturn(Flux.just(visible, hidden));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 7L)).thenReturn(Mono.just(true));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 8L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.findVisible(9L, false, true, 43L))
+            .expectNextMatches(response -> response.id().equals(1L))
+            .verifyComplete();
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 7L);
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 8L);
+    }
+
+    @Test
+    void teacherGetsNotFoundWhenNoEnrollmentIsInTheirAssignedClasses() {
+        Enrollment hidden = new Enrollment(43L, 8L, 2025L);
+        hidden.setId(2L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.just(hidden));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 8L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.findVisible(9L, false, true, 43L))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.NOT_FOUND);
     }
 
     @Test

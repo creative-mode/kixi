@@ -198,10 +198,15 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         bearer(ownerToken).get().uri("/api/v1/enrollments?accountId=" + OTHER_STUDENT)
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.length()").isEqualTo(1);
 
+        bearer(ownerToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"classId\":" + CLASS
+                        + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated();
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES ("
                 + STUDENT + ", " + OTHER_CLASS + ", " + OTHER_YEAR + ")");
         bearer(ownerToken).get().uri("/api/v1/enrollments?accountId=" + STUDENT)
-                .exchange().expectStatus().isNotFound();
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].classId").isEqualTo((int) CLASS);
 
         bearer(ownerToken).delete().uri("/api/v1/enrollments/" + one("SELECT id FROM enrollments WHERE account_id = "
                         + STUDENT + " AND class_id = " + OTHER_CLASS))
