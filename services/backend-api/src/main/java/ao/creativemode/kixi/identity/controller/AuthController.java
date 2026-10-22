@@ -187,7 +187,7 @@ public class AuthController {
             return Mono.error(ApiException.badRequest("Google OAuth2 is not configured"));
         }
         return currentAccountService.requiredAccountId()
-                .flatMap(accountId -> loginRateLimiter.checkAddress(clientAddress(exchange))
+                .flatMap(accountId -> loginRateLimiter.checkAddress("login-ip:" + clientAddress(exchange))
                         .then(loginRateLimiter.checkIdentity("google-link:" + accountId))
                         .then(Mono.defer(() -> authService.verifyPasswordForGoogleLink(accountId, request.password())))
                         .then(Mono.fromSupplier(() -> googleLinkStateService.issue(accountId)))

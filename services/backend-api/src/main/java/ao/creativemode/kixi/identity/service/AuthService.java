@@ -224,7 +224,9 @@ public class AuthService {
         }
         String email = info.email().trim().toLowerCase(Locale.ROOT);
         return accountRepository.findByGoogleSubAndDeletedAtIsNull(info.sub())
-                .filter(account -> Boolean.TRUE.equals(account.getActive()))
+                .flatMap(account -> Boolean.TRUE.equals(account.getActive())
+                        ? Mono.just(account)
+                        : Mono.error(ApiException.unauthorized("Google account is inactive")))
                 .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
                         .flatMap(existing -> {
                             if (!Boolean.TRUE.equals(existing.getActive())
@@ -245,38 +247,38 @@ public class AuthService {
     private Mono<Account> createAccountAndUserFromGoogle(String email, GoogleUserInfo info) {
         String preferredUsername = email.substring(0, email.indexOf('@'));
         String normalizedUsername = preferredUsername.substring(0, Math.min(100, preferredUsername.length()));
-        Mono<String> username = accountRepository.findByUsernameAndDeletedAtIsNull(normalizedUsername)
+        Mono<String> username = accountRepository.findByUsername(normalizedUsername)
                 .flatMap(existing -> {
                     String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
                     String base = normalizedUsername.substring(0, Math.min(89, normalizedUsername.length()));
                     return Mono.just(base + "-" + suffix);
                 })
                 .switchIfEmpty(Mono.just(normalizedUsername));
-        String passwordHash = passwordEncoder.encode(UUID.randomUUID().toString());
-        Account account = new Account();
-        account.setEmail(email);
-        account.setGoogleSub(info.sub());
-        account.setPasswordHash(passwordHash);
-        account.setEmailVerified(true);
-        account.setActive(true);
-        account.setDeletedAt(null);
 
-        return username.flatMap(candidate -> {
-            account.setUsername(candidate);
-            return roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
-                    .switchIfEmpty(Mono.error(ApiException.conflict(
-                            "Default role is not configured: " + DEFAULT_ROLE_NAME
-                    )))
-                    .flatMap(role -> accountRepository.save(account)
-                            .onErrorMap(DuplicateKeyException.class,
-                                    error -> ApiException.conflict("Google account could not be created"))
-                            .flatMap(savedAccount -> Mono.when(
-                                    accountRoleRepository.save(
-                                            new AccountRole(savedAccount.getId(), role.getId())
-                                    ),
-                                    createUserFromGoogle(savedAccount.getId(), info)
-                            ).thenReturn(savedAccount)));
-        });
+        return username.flatMap(candidate -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
+                .switchIfEmpty(Mono.error(ApiException.conflict(
+                        "Default role is not configured: " + DEFAULT_ROLE_NAME
+                )))
+                .flatMap(role -> encodePassword(UUID.randomUUID().toString())
+                        .flatMap(passwordHash -> {
+                            Account account = new Account();
+                            account.setEmail(email);
+                            account.setGoogleSub(info.sub());
+                            account.setPasswordHash(passwordHash);
+                            account.setEmailVerified(true);
+                            account.setActive(true);
+                            account.setDeletedAt(null);
+                            account.setUsername(candidate);
+                            return accountRepository.save(account)
+                                    .onErrorMap(DuplicateKeyException.class,
+                                            error -> ApiException.conflict("Google account could not be created"))
+                                    .flatMap(savedAccount -> Mono.when(
+                                            accountRoleRepository.save(
+                                                    new AccountRole(savedAccount.getId(), role.getId())
+                                            ),
+                                            createUserFromGoogle(savedAccount.getId(), info)
+                                    ).thenReturn(savedAccount));
+                        })));
     }
 
     private Mono<GoogleUserInfo> requireVerifiedGoogleIdentity(GoogleUserInfo info) {

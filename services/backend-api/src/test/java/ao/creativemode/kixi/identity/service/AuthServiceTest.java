@@ -252,7 +252,7 @@ class AuthServiceTest {
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("new@kixi.ao")).thenReturn(Mono.empty());
         when(accountRepository.findByUsernameAndDeletedAtIsNull("new@kixi.ao")).thenReturn(Mono.empty());
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("new")).thenReturn(Mono.empty());
+        when(accountRepository.findByUsername("new")).thenReturn(Mono.empty());
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
@@ -274,7 +274,7 @@ class AuthServiceTest {
                         "New User", "pic.png")));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("new.user@kixi.ao")).thenReturn(Mono.empty());
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("new.user")).thenReturn(Mono.empty());
+        when(accountRepository.findByUsername("new.user")).thenReturn(Mono.empty());
         when(passwordEncoder.encode(org.mockito.ArgumentMatchers.anyString())).thenReturn("hashed-random");
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(role(3L, "STUDENT")));
         when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> {
@@ -350,6 +350,29 @@ class AuthServiceTest {
     }
 
     @Test
+    void googleRejectsAnInactiveAccountBeforeFallingBackToEmail() {
+        Account inactive = account(1L, "inactive", "hashed");
+        inactive.setActive(false);
+        inactive.setGoogleSub("google-sub");
+        when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
+        when(googleOAuth2Client.getUserInfo("access-token"))
+                .thenReturn(Mono.just(new GoogleUserInfo("google-sub", "other@kixi.ao", true,
+                        "Inactive User", null)));
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.just(inactive));
+
+        StepVerifier.create(service.loginWithGoogle("code"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(401);
+                    assertThat(error).hasMessage("Google account is inactive");
+                })
+                .verify();
+
+        verify(accountRepository, never()).findByEmailAndDeletedAtIsNull(any());
+        verify(accountRepository, never()).save(any(Account.class));
+    }
+
+    @Test
     void explicitGoogleLinkRejectsWrongLocalPasswordBeforeUsingGoogleCode() {
         Account local = account(1L, "existing", "hashed");
         when(accountRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(local));
@@ -388,6 +411,27 @@ class AuthServiceTest {
     }
 
     @Test
+    void explicitGoogleLinkRejectsDifferentGoogleEmail() {
+        Account local = account(1L, "existing", "hashed");
+        local.setEmail("existing@kixi.ao");
+        when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
+        when(googleOAuth2Client.getUserInfo("access-token"))
+                .thenReturn(Mono.just(new GoogleUserInfo("google-sub", "other@kixi.ao", true,
+                        "Other User", null)));
+        when(accountRepository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(local));
+
+        StepVerifier.create(service.completeGoogleLink(1L, "code"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(401);
+                })
+                .verify();
+
+        verify(accountRepository, never()).findByGoogleSubAndDeletedAtIsNull("google-sub");
+        verify(accountRepository, never()).save(any(Account.class));
+    }
+
+    @Test
     void googleUsernameCollisionGetsAnUnambiguousGeneratedUsername() {
         when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
         when(googleOAuth2Client.getUserInfo("access-token"))
@@ -395,7 +439,9 @@ class AuthServiceTest {
                         "New User", null)));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("same@kixi.ao")).thenReturn(Mono.empty());
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("same")).thenReturn(Mono.just(account(8L, "same", "hash")));
+        Account deleted = account(8L, "same", "hash");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(accountRepository.findByUsername("same")).thenReturn(Mono.just(deleted));
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(role(3L, "STUDENT")));
         when(passwordEncoder.encode(any())).thenReturn("hashed-random");
         when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> {

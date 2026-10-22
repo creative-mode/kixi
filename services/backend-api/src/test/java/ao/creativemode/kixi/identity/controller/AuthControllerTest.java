@@ -151,6 +151,8 @@ class AuthControllerTest {
         assertThat(response).isNotNull();
         assertThat(response.getBody().authorizationUrl()).contains("state=nonce");
         assertThat(response.getHeaders().getFirst("Set-Cookie")).contains("signed-cookie").contains("HttpOnly");
+        verify(loginRateLimiter).checkAddress("login-ip:unknown");
+        verify(loginRateLimiter).checkIdentity("google-link:42");
         verify(authService).verifyPasswordForGoogleLink(42L, "password");
     }
 
