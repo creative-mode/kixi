@@ -91,6 +91,23 @@ def test_validate_pdf_rejects_too_many_pages():
         validate_pdf(make_pdf(page_count=2), max_pages=1)
 
 
+def test_validate_pdf_rejects_page_that_would_render_over_pixel_limit():
+    document = fitz.open()
+    document.new_page(width=50_000, height=50_000)
+    content = document.tobytes()
+    document.close()
+
+    with pytest.raises(ValueError, match="maximum rendered pixel count"):
+        validate_pdf(content)
+
+
+def test_validate_pdf_rejects_total_request_pixel_budget(monkeypatch):
+    monkeypatch.setattr("app.api.pdf_handler.settings.max_ocr_pixels_per_request", 1_000)
+
+    with pytest.raises(ValueError, match="maximum total rendered pixel count"):
+        validate_pdf(make_pdf(page_count=1))
+
+
 def test_get_pdf_info_rejects_invalid_content():
     with pytest.raises(ValueError, match="Failed to read PDF"):
         get_pdf_info(b"%PDF-invalid")

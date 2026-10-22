@@ -229,6 +229,7 @@ public class OcrImageAssociationService {
 
     private boolean isRaster(OcrUploadedFile file) {
         try {
+            OcrUploadBuffer.validateContent(file.content());
             return ImageIO.read(new ByteArrayInputStream(file.content())) != null;
         } catch (IOException | RuntimeException error) {
             return false;

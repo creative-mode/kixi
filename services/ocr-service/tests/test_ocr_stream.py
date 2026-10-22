@@ -1,10 +1,12 @@
 """Request-scoped SSE progress contract and status semantics."""
 
+import io
 import json
 from unittest.mock import MagicMock
 
 import fitz
 import numpy as np
+from PIL import Image
 from fastapi.testclient import TestClient
 
 from app.api.routes import get_ocr_engine as route_get_ocr_engine
@@ -49,7 +51,7 @@ def test_stream_reports_preparation_each_completed_page_and_final_measured_resul
     pdf.close()
     monkeypatch.setattr(
         "app.api.routes.extract_images_from_pdf",
-        lambda _content, first_page=None, last_page=None: [
+        lambda _content, first_page=None, last_page=None, max_total_pixels=None: [
             np.zeros((20, 20, 3), dtype=np.uint8)
             for _ in range((last_page or first_page or 1) - (first_page or 1) + 1)
         ],
@@ -89,6 +91,33 @@ def test_status_endpoint_explicitly_reports_no_persisted_job_state():
     assert response.status_code == 410
     assert response.json()["status"] == "not_trackable"
     assert "no job state is persisted" in response.json()["message"]
+
+
+def test_stream_rejects_multiple_images_over_request_pixel_budget(monkeypatch):
+    engine = MagicMock()
+    app.dependency_overrides[route_get_ocr_engine] = lambda: engine
+    monkeypatch.setattr(settings, "enable_auth", False)
+    monkeypatch.setattr(settings, "max_ocr_pixels_per_request", 15_000)
+
+    def image_bytes():
+        buffer = io.BytesIO()
+        Image.new("RGB", (100, 100), color="white").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    try:
+        response = TestClient(app).post(
+            "/ocr/v1/extract/stream",
+            files=[
+                ("images", ("one.png", image_bytes(), "image/png")),
+                ("images", ("two.png", image_bytes(), "image/png")),
+            ],
+        )
+    finally:
+        app.dependency_overrides.pop(route_get_ocr_engine, None)
+
+    assert response.status_code == 400
+    assert "Invalid uploaded file" in response.json()["detail"]
+    assert not engine.process_images_progress_async.called
 
 
 def test_stream_endpoint_requires_internal_service_key(monkeypatch):

@@ -16,6 +16,7 @@ import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Base64;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
@@ -30,6 +31,9 @@ import reactor.test.StepVerifier;
 
 class OcrControllerStreamTest {
 
+    private static final byte[] VALID_PNG = Base64.getDecoder().decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+
     @Test
     void exposesAuthenticatedRequestScopedSseWithNoBuffering() {
         OcrServiceClient client = mock(OcrServiceClient.class);
@@ -37,7 +41,7 @@ class OcrControllerStreamTest {
         ApiAbuseRateLimiter limiter = mock(ApiAbuseRateLimiter.class);
         when(accounts.requiredAccountId()).thenReturn(Mono.just(7L));
         when(limiter.checkUpload(7L)).thenReturn(Mono.empty());
-        FilePart file = file("exam.pdf", 100);
+        FilePart file = file("exam.png", 100);
         when(client.extractTextStreamFromUploadedFiles(anyList(), any())).thenReturn(Mono.just(
             org.springframework.http.ResponseEntity.ok(Flux.just(
                 ServerSentEvent.<String>builder("{\"page\":1}").event("progress").build()))));
@@ -90,7 +94,7 @@ class OcrControllerStreamTest {
         OcrController controller = controller(client, persistence, accounts, limiter, images);
         ObjectMapper mapper = new ObjectMapper();
 
-        StepVerifier.create(controller.extractTextStream(Flux.just(file("exam.pdf", 100)), null)
+        StepVerifier.create(controller.extractTextStream(Flux.just(file("exam.png", 100)), null)
                 .flatMapMany(response -> response.getBody()))
             .assertNext(event -> {
                 assertThat(event.event()).isEqualTo("prepared");
@@ -132,7 +136,7 @@ class OcrControllerStreamTest {
         OcrController controller = controller(client, accounts, limiter);
         ObjectMapper mapper = new ObjectMapper();
 
-        StepVerifier.create(controller.extractTextStream(Flux.just(file("exam.pdf", 100)), null)
+        StepVerifier.create(controller.extractTextStream(Flux.just(file("exam.png", 100)), null)
                 .flatMapMany(response -> response.getBody()))
             .assertNext(event -> {
                 JsonNode data = readTree(mapper, event.data());
@@ -188,7 +192,7 @@ class OcrControllerStreamTest {
         ApiAbuseRateLimiter limiter = mock(ApiAbuseRateLimiter.class);
         when(accounts.requiredAccountId()).thenReturn(Mono.just(7L));
         when(limiter.checkUpload(7L)).thenReturn(Mono.empty());
-        FilePart empty = file("empty.pdf", 0);
+        FilePart empty = file("empty.png", 0);
         when(empty.content()).thenReturn(Flux.empty());
         OcrController controller = controller(client, accounts, limiter);
 
@@ -248,8 +252,9 @@ class OcrControllerStreamTest {
         headers.setContentLength(contentLength);
         when(file.filename()).thenReturn(filename);
         when(file.headers()).thenReturn(headers);
-        when(file.content()).thenReturn(Flux.just(
-            DefaultDataBufferFactory.sharedInstance.wrap(new byte[] {1, 2, 3})));
+        when(file.content()).thenReturn(contentLength == 0
+            ? Flux.empty()
+            : Flux.just(DefaultDataBufferFactory.sharedInstance.wrap(VALID_PNG)));
         return file;
     }
 }

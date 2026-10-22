@@ -25,6 +25,8 @@ import org.springframework.http.HttpStatus;
  */
 public final class UploadSniffer {
 
+    public static final long MAX_SAFE_IMAGE_PIXELS = 40_000_000L;
+
     /** The only formats a donation takes: what a phone camera, a scanner or a PDF export produces. */
     public enum Kind {
         JPEG("image/jpeg", "jpg"),

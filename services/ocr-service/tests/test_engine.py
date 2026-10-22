@@ -12,6 +12,7 @@ from PIL import Image
 import io
 
 from tests.conftest import to_predict
+from app.config import settings
 from app.ocr.engine import (
     OCREngine,
     OCRResult,
@@ -382,6 +383,31 @@ class TestLoadImageFunctions:
         """Test loading invalid bytes raises ValueError."""
         with pytest.raises(ValueError, match="Failed to decode"):
             load_image_from_bytes(b"invalid image data")
+
+    def test_load_image_rejects_oversized_header_before_opencv_decode(self):
+        from unittest.mock import MagicMock, patch
+
+        image_header = MagicMock()
+        image_header.__enter__.return_value.size = (50_000, 50_000)
+        with patch("app.ocr.preprocessing.Image.open", return_value=image_header), \
+             patch("app.ocr.preprocessing.cv2.imdecode") as decode:
+            with pytest.raises(ValueError, match="maximum decoded pixel count"):
+                load_image_from_bytes(b"synthetic image bytes")
+
+        decode.assert_not_called()
+
+    def test_load_image_accepts_the_configured_pixel_boundary(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
+        monkeypatch.setattr(settings, "max_image_pixels", 25_000_000)
+        image_header = MagicMock()
+        image_header.__enter__.return_value.size = (5_000, 5_000)
+        with patch("app.ocr.preprocessing.Image.open", return_value=image_header), \
+             patch("app.ocr.preprocessing.cv2.imdecode", return_value=np.zeros((1, 1, 3))) as decode:
+            image = load_image_from_bytes(b"synthetic 5000x5000 image")
+
+        assert image.shape == (1, 1, 3)
+        decode.assert_called_once()
 
     def test_load_image_from_pil(self, sample_pil_image):
         """Test loading image from PIL Image."""
