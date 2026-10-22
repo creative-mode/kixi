@@ -869,7 +869,11 @@ class TestOCRIntegration:
 
     @pytest.mark.slow
     def test_real_ocr_processing(self, sample_image):
-        """Test with actual PaddleOCR (slow, requires models)."""
+        """Test with actual PaddleOCR (slow, requires models).
+
+        A real engine failure must fail this integration test. Accepting ``error``
+        here made the test green while the upload/decode pipeline was unusable.
+        """
         try:
             from paddleocr import PaddleOCR
         except ImportError:
@@ -879,7 +883,8 @@ class TestOCRIntegration:
         result = engine.process_image(sample_image)
 
         assert isinstance(result, OCRResult)
-        assert result.status in ["success", "partial", "error"]
+        assert result.status in {"success", "partial"}
+        assert result.error_message is None
 
 
 # =============================================================================
