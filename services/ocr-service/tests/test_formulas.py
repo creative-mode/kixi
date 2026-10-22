@@ -9,7 +9,13 @@ Bmax e⁻²ᵗ" e o enunciado do vector (que o OCR não consegue mesmo ler e tem
 import json
 from pathlib import Path
 
+import pytest
+
+from app.ocr.formula_model import normalize_model_latex
+from app.ocr.formula_model import FormulaImageRecognizer
 from app.ocr.formulas import FORMULA, UNRECOGNIZED, extract_inline_formulas, recognize_region
+from app.ocr.layout import LayoutRegion
+from app.ocr.postprocessing import OCRPostprocessor, TextBlock, formula_prediction_key
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -33,7 +39,7 @@ def test_a_physics_subscript_word_glued_to_a_variable_and_an_ascii_exponent():
     # "Bmaxe-2t" tal como a prova de referência traz: o índice "max" colado à variável, e
     # o expoente "-2t" sem nenhuma formatação, ambos colados entre si.
     text, segments = extract_inline_formulas("a expressão B = Bmaxe-2t, onde α é uma constante")
-    assert text == r"a expressão B = $B_{max}$$e^{-2t}$, onde $\alpha$ é uma constante"
+    assert text == r"a expressão B = $B_{max}e^{-2t}$, onde $\alpha$ é uma constante"
     raws = {s.raw for s in segments}
     assert raws == {"Bmax", "e-2t", "α"}
     assert all(s.kind == FORMULA for s in segments)
@@ -108,6 +114,92 @@ def test_recognize_region_on_empty_text_is_unrecognized_not_an_error():
     result = recognize_region("   ")
     assert result.kind == UNRECOGNIZED
     assert result.confidence == 0.0
+
+
+def test_image_model_prediction_does_not_override_conflicting_text_evidence():
+    region = LayoutRegion("formula", "formula", 0.94, (100, 100, 300, 160), False)
+    block = TextBlock("† = lixo", 0.62, (105, 105, 295, 155), page_index=0)
+    latex = r"\vec{r}(t)=(1-t)\vec{e}_x+(t+1)^2\vec{e}_y"
+
+    masked = OCRPostprocessor()._mask_formulas(
+        [block],
+        {0: [region]},
+        recognize=True,
+        formula_predictions={formula_prediction_key(0, region.bbox): latex},
+    )
+
+    assert masked[0].text == "[fórmula]"
+    assert masked[0].formula_segments[0].kind == UNRECOGNIZED
+    assert masked[0].formula_segments[0].latex is None
+    assert masked[0].formula_segments[0].raw == "† = lixo"
+    assert masked[0].formula_segments[0].confidence < 0.5
+
+
+def test_formula_model_output_with_dropped_command_slash_is_rejected():
+    assert normalize_model_latex(r"Bboxed{B=B_{m a x}e^{-2t}}") is None
+    assert normalize_model_latex(r"\ \ overrightarrow r(1-t)") is None
+
+
+def test_normalize_model_latex_repairs_padded_vector_command_from_formula_crop():
+    noisy = r"\ \ \ {vec\ r{}}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+
+    assert normalize_model_latex(noisy) == (
+        r"\vec{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    )
+
+
+@pytest.mark.parametrize("prediction", ["t=3s:\\left a\\right)", "[2:4]s_y", "t=0,"])
+def test_text_like_layout_predictions_are_not_promoted_to_equations(prediction):
+    result = OCRPostprocessor._recognized_formula_segment("", prediction, None, 0.9)
+    assert result.kind == UNRECOGNIZED
+    assert result.latex is None
+
+
+def test_compound_vector_formula_passes_the_structural_formula_gate():
+    result = OCRPostprocessor._recognized_formula_segment(
+        "",
+        r"\overrightarrow{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^2\overrightarrow{e_{y}}",
+        None,
+        0.9,
+    )
+    assert result.kind == FORMULA
+
+
+def test_vector_arrow_artifact_is_removed_only_when_tight_crop_confirms_same_expression():
+    padded = r"\imath\overrightarrow{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    tight = r"\vec{r}=(\vec{1}-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    corrected = FormulaImageRecognizer.reconcile_vector_prefix(padded, tight)
+
+    assert corrected == r"\overrightarrow{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    assert FormulaImageRecognizer.reconcile_vector_prefix(padded, r"\imath x=1") == padded
+
+
+def test_boxed_vector_artifact_is_removed_only_when_tight_crop_confirms_same_expression():
+    expression = r"\vec{r}=(1-t)\overrightarrow{e_{x}}+(t+1)^{2}\overrightarrow{e_{y}}"
+    assert FormulaImageRecognizer.reconcile_vector_prefix(
+        rf"\boxed{{{expression}}}", expression
+    ) == expression
+    assert FormulaImageRecognizer.reconcile_vector_prefix(
+        rf"\boxed{{{expression}}}", r"\vec{r}=x+y"
+    ) == rf"\boxed{{{expression}}}"
+
+
+def test_image_model_prediction_creates_a_formula_block_when_text_ocr_saw_nothing():
+    region = LayoutRegion("formula", "formula", 0.91, (80, 120, 260, 180), False)
+    latex = r"\frac{v_0^2\sin(2\theta)}{g}"
+
+    masked = OCRPostprocessor()._mask_formulas(
+        [],
+        {0: [region]},
+        recognize=True,
+        formula_predictions={formula_prediction_key(0, region.bbox): latex},
+    )
+
+    assert len(masked) == 1
+    assert masked[0].text == f"${latex}$"
+    assert masked[0].bbox == region.bbox
+    assert masked[0].formula_segments[0].raw == latex
+    assert masked[0].formula_segments[0].ocr_confidence is None
 
 
 def test_the_reference_physics_exam_keeps_its_formulas_legible():

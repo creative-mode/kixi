@@ -5,14 +5,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.http.codec.multipart.FilePart;
 
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 class OcrServiceClientTest {
@@ -78,6 +85,77 @@ class OcrServiceClientTest {
         assertThat(request.getHeader("Content-Type"))
             .startsWith("multipart/form-data;");
         assertThat(request.getBody().readUtf8()).contains("filename=\"exam.png\"");
+    }
+
+    @Test
+    void streamsMeasuredPageEventsWithoutPuttingCredentialsInTheEventBody() throws Exception {
+        server.enqueue(new MockResponse()
+            .setHeader("Content-Type", "text/event-stream")
+            .setBody("event: progress\ndata: {\"page\":1,\"pageCount\":2,\"timings\":{\"ocrMs\":12.5}}\n\n"));
+
+        FilePart file = org.mockito.Mockito.mock(FilePart.class);
+        org.mockito.Mockito.when(file.filename()).thenReturn("exam.pdf");
+        org.mockito.Mockito.when(file.headers()).thenReturn(new HttpHeaders());
+        org.mockito.Mockito.when(file.content()).thenReturn(Flux.just(
+            DefaultDataBufferFactory.sharedInstance.wrap(new byte[] {1, 2, 3})));
+
+        StepVerifier.create(client(0, "internal-ocr-key").extractTextStream(List.of(file), 234.0)
+                .flatMapMany(response -> response.getBody()))
+            .assertNext(event -> {
+                assertThat(event.event()).isEqualTo("progress");
+                assertThat(event.data()).contains("\"page\":1", "\"ocrMs\":12.5");
+                assertThat(event.data()).doesNotContain("internal-ocr-key");
+            })
+            .verifyComplete();
+
+        RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(request.getPath()).isEqualTo("/ocr/v1/extract/stream");
+        assertThat(request.getHeader("Accept")).contains(MediaType.TEXT_EVENT_STREAM_VALUE);
+        assertThat(request.getHeader("X-OCR-API-Key")).isEqualTo("internal-ocr-key");
+        assertThat(request.getHeader("X-OCR-Upload-Ms")).isEqualTo("234.0");
+    }
+
+    @Test
+    void streamsFromBufferedUploadBytesWithoutChangingTheSseEvents() throws Exception {
+        server.enqueue(new MockResponse()
+            .setHeader("Content-Type", "text/event-stream")
+            .setBody("event: prepared\ndata: {\"pages\":2}\n\nevent: progress\ndata: {\"page\":1}\n\n"));
+        OcrUploadedFile file = new OcrUploadedFile(
+            "exam.pdf", MediaType.APPLICATION_PDF, new byte[] {1, 2, 3});
+
+        StepVerifier.create(client(0, "").extractTextStreamFromUploadedFiles(List.of(file), null)
+                .flatMapMany(response -> response.getBody()))
+            .assertNext(event -> {
+                assertThat(event.event()).isEqualTo("prepared");
+                assertThat(event.data()).isEqualTo("{\"pages\":2}");
+            })
+            .assertNext(event -> {
+                assertThat(event.event()).isEqualTo("progress");
+                assertThat(event.data()).isEqualTo("{\"page\":1}");
+            })
+            .verifyComplete();
+
+        RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(request).isNotNull();
+        assertThat(request.getPath()).isEqualTo("/ocr/v1/extract/stream");
+        assertThat(request.getBody().readUtf8()).contains("filename=\"exam.pdf\"");
+    }
+
+    @Test
+    void preservesHttpStatusWhenStreamIsRejectedBeforeSseStarts() {
+        server.enqueue(new MockResponse().setResponseCode(413).setBody("upload too large"));
+        FilePart file = org.mockito.Mockito.mock(FilePart.class);
+        org.mockito.Mockito.when(file.filename()).thenReturn("exam.pdf");
+        org.mockito.Mockito.when(file.content()).thenReturn(Flux.just(
+            DefaultDataBufferFactory.sharedInstance.wrap(new byte[] {1})));
+
+        StepVerifier.create(client(0, "").extractTextStream(List.of(file))
+                .flatMapMany(response -> response.getBody()))
+            .expectErrorSatisfies(error -> {
+                assertThat(error).isInstanceOf(OcrServiceClient.OcrClientException.class);
+                assertThat(((OcrServiceClient.OcrClientException) error).getStatusCode()).isEqualTo(413);
+            })
+            .verify();
     }
 
     @Test
@@ -218,6 +296,10 @@ class OcrServiceClientTest {
 
     private OcrServiceClient client(int maxRetries) {
         return new OcrServiceClient(server.url("/").toString(), 5000, maxRetries);
+    }
+
+    private OcrServiceClient client(int maxRetries, String apiKey) {
+        return new OcrServiceClient(server.url("/").toString(), 5000, maxRetries, apiKey);
     }
 
     private MockResponse jsonResponse(String body) {

@@ -2,12 +2,15 @@ package ao.creativemode.kixi.exams.dto.statement;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 
 import java.util.List;
 
@@ -68,11 +71,26 @@ public record ManualStatementRequest(
         String type,
         /** The alíneas of a {@code group} question. Only a group has them. */
         @Valid
-        List<Item> items
+        List<Item> items,
+        String rawText,
+        @DecimalMin("0.0") @DecimalMax("1.0") Double confidence,
+        Boolean reviewed,
+        @Size(max = 100) @Valid List<Formula> formulas,
+        @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
+        String groupLayout
     ) {
         /** The shape the exam builder sent before types and alíneas existed. */
         public Question(String text, Double maxScore, List<Option> options) {
-            this(text, maxScore, options, null, null);
+            this(text, maxScore, options, null, null, null, null, null, null, null);
+        }
+
+        public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items) {
+            this(text, maxScore, options, type, items, null, null, null, null, null);
+        }
+
+        public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items,
+                String rawText, Double confidence, Boolean reviewed, List<Formula> formulas) {
+            this(text, maxScore, options, type, items, rawText, confidence, reviewed, formulas, null);
         }
     }
 
@@ -92,8 +110,30 @@ public record ManualStatementRequest(
             message = "The score must be at most 99999999.99")
         Double maxScore,
         @Valid
-        List<Option> options
-    ) {}
+        List<Option> options,
+        String rawText,
+        @DecimalMin("0.0") @DecimalMax("1.0") Double confidence,
+        Boolean reviewed,
+        @Size(max = 100) @Valid List<Formula> formulas
+    ) {
+        public Item(String label, String text, String type, Double maxScore, List<Option> options) {
+            this(label, text, type, maxScore, options, null, null, null, null);
+        }
+    }
+
+    /** OCR formula evidence is kept independently from the editable serialized text. */
+    public record Formula(
+        @NotBlank @Size(max = 4000) String raw,
+        @Size(max = 4000) String latex,
+        @DecimalMin("0.0") @DecimalMax("1.0") Double confidence,
+        @Size(max = 30) String kind,
+        @DecimalMin("0.0") @DecimalMax("1.0") Double ocrConfidence,
+        @DecimalMin("0.0") @DecimalMax("1.0") Double layoutConfidence
+    ) {
+        public Formula(String raw, String latex, Double confidence, String kind) {
+            this(raw, latex, confidence, kind, null, null);
+        }
+    }
 
     public record Option(
         @NotBlank(message = "The option label is required")

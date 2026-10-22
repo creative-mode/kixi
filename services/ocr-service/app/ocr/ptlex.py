@@ -206,19 +206,25 @@ _CONFUSABLE = {
 # O traço a mais que o motor inventa dentro de uma palavra (urma -> uma, fundarmental -> fundamental). Só o "r":
 # apagar "l", "n" ou "t" transformava verbos válidos noutras palavras ("complete" -> "compete").
 _SPURIOUS = "r"
+_MISSING_O = "o"
 
 
 def _edits1(word: str):
-    """As palavras a uma edição *típica de OCR* de ``word``: uma troca de letras parecidas ou um traço a mais.
+    """As palavras a uma edição *típica de OCR* de ``word``: troca, ``o`` perdido ou traço a mais.
 
-    Não são todas as edições possíveis de propósito. Apagar um "u" de "possua" dá "possa", uma palavra
-    melhor classificada mas errada: um verbo válido que o léxico não traz não é um erro de leitura.
+    Inserir ``o`` recupera a falha observada ``deslcamento`` → ``deslocamento``; a correção só é aplicada quando o
+    léxico aponta um candidato claramente dominante. Inserir outras vogais poderia transformar verbos válidos
+    ausentes do léxico (como ``possua``) noutra forma verbal. Apagar outras consoantes também muda palavras válidas.
     """
     for i, char in enumerate(word):
         for printed in _CONFUSABLE.get(char, ""):
             yield word[:i] + printed + word[i + 1:]
         if char in _SPURIOUS:
             yield word[:i] + word[i + 1:]
+    # Short tokens are often abbreviations (e.g. ``págs``); don't expand them into ordinary words.
+    if len(word) >= 8:
+        for i in range(len(word) + 1):
+            yield word[:i] + _MISSING_O + word[i:]
 
 
 @lru_cache(maxsize=1)

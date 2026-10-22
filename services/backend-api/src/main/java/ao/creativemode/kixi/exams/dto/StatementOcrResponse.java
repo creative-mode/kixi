@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.dto;
 
 import ao.creativemode.kixi.exams.model.Question;
 import ao.creativemode.kixi.exams.model.QuestionOption;
+import ao.creativemode.kixi.exams.service.QuestionOcrEvidence;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -91,9 +92,9 @@ public record StatementOcrResponse(
             s.getTotalMaxScore(),
             s.getVisible(),
             staff ? s.getNeedsReview() : null,
-            s.getSource(),
+            staff ? s.getSource() : null,
             staff ? s.getOcrConfidence() : null,
-            s.getOcrRequestId(),
+            staff ? s.getOcrRequestId() : null,
             s.getSchoolYearId(),
             s.getTermId(),
             s.getSubjectId(),
@@ -134,7 +135,11 @@ public record QuestionResponse(
         /** The group this question is an item of; null for a top-level question. */
         Long parentId,
         /** The item's label inside its group (a, b, c...); null for a top-level question. */
-        String label
+        String label,
+        String groupLayout,
+        String rawText,
+        Boolean ocrReviewed,
+        List<FormulaEvidence> formulas
     ) {
         public static QuestionResponse from(
             Question q,
@@ -153,9 +158,24 @@ public record QuestionResponse(
                 staff ? q.getNeedsReview() : null,
                 options,
                 q.getParentId(),
-                q.getLabel()
+                q.getLabel(),
+                q.getGroupLayout(),
+                staff ? q.getRawText() : null,
+                staff ? q.getOcrReviewed() : null,
+                staff ? formulas(q) : null
             );
         }
+
+        private static List<FormulaEvidence> formulas(Question question) {
+            List<ao.creativemode.kixi.exams.dto.statement.ManualStatementRequest.Formula> evidence =
+                QuestionOcrEvidence.decode(question.getOcrFormulas());
+            return evidence == null ? null : evidence.stream()
+                .map(formula -> new FormulaEvidence(
+                    formula.raw(), formula.latex(), formula.confidence(), formula.kind()))
+                .toList();
+        }
+
+        public record FormulaEvidence(String raw, String latex, Double confidence, String kind) {}
     }
 
     /**

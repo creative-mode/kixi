@@ -116,6 +116,21 @@ class MigrationInventoryTest {
         assertFalse(migration.contains("answer_text"));
     }
 
+    @Test
+    void ocrImageProvenanceMigrationKeepsExistingRowsCompatible() throws IOException, URISyntaxException {
+        String migration = Files.readString(migrationDirectory()
+                .resolve("V58__preserve_ocr_question_image_provenance.sql"))
+                .toLowerCase();
+
+        assertTrue(migration.contains("alter table question_images"));
+        assertTrue(migration.contains("add column if not exists ocr_kind varchar(24) null"));
+        assertTrue(migration.contains("add column if not exists ocr_page_index integer null"));
+        assertTrue(migration.contains("add column if not exists ocr_score double precision null"));
+        assertTrue(migration.contains("ocr_kind is null or ocr_kind in ('figure', 'formula', 'table')"));
+        assertTrue(migration.contains("ocr_page_index is null or ocr_page_index >= 0"));
+        assertTrue(migration.contains("ocr_score is null or (ocr_score >= 0 and ocr_score <= 1)"));
+    }
+
     private Path migrationDirectory() throws URISyntaxException {
         return Path.of(Objects.requireNonNull(
                 getClass().getClassLoader().getResource("db/migration")

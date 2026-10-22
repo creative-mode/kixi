@@ -8,6 +8,8 @@ python-multipart==0.0.9
 # not support), which makes OCR 3 to 10 times slower on CPU. paddleocr 3.3.3 is the release built against 3.2.x.
 paddlepaddle==3.2.2
 paddleocr==3.3.3
+tokenizers>=0.19,<1
+ftfy>=6.1,<7
 # OCR_PIPELINE=vl (PaddleOCR-VL, for a machine with a GPU) also needs the doc-parser extra: paddleocr[doc-parser]==3.3.3
 
 # Image processing
