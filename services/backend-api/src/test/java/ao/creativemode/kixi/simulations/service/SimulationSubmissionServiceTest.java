@@ -292,10 +292,12 @@ class SimulationSubmissionServiceTest {
 
     @Test
     void rejectsGradingAnAnswerThatWasAlreadyGraded() {
+        SimulationAnswer pending = pendingAnswer();
         SimulationAnswer graded = pendingAnswer();
         graded.setReviewStatus(SimulationAnswerStatus.GRADED);
         graded.setScoreObtained(3.0f);
-        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(graded));
+        when(answers.findByIdAndDeletedAtIsNull(30L))
+                .thenReturn(Mono.just(pending), Mono.just(graded));
         when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question(2L, 5)));
 
         StepVerifier.create(service.grade(30L, 4.5, 99L, true))

@@ -211,6 +211,8 @@ public class SimulationSubmissionService {
     @Transactional
     public Mono<SimulationAnswerResponse> grade(Long answerId, Double score,
             Long accountId, boolean admin) {
+        // Keep the pre-lock lookup so a missing answer returns its specific 404;
+        // the second lookup below is the authoritative snapshot after the lock.
         return answers.findByIdAndDeletedAtIsNull(answerId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
             .flatMap(answer -> {

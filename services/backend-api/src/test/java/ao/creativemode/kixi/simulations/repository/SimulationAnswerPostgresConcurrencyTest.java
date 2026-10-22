@@ -4,6 +4,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 
@@ -12,7 +14,6 @@ import java.time.LocalDateTime;
 
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
-import ao.creativemode.kixi.gamification.service.GamificationService;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
@@ -156,6 +157,8 @@ class SimulationAnswerPostgresConcurrencyTest {
         assertThat(value("SELECT review_status FROM simulation_answers WHERE id = " + ANSWER)).isEqualTo("GRADED");
         assertThat(value("SELECT score_obtained::text FROM simulation_answers WHERE id = " + ANSWER)).isEqualTo("2.00");
         assertThat(value("SELECT final_score::text FROM simulations WHERE id = " + SIMULATION)).isEqualTo("2.00");
+        verify(gamification, times(1)).simulationFinished(
+                any(), any(), any(), anyDouble(), anyDouble(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -368,6 +371,8 @@ class SimulationAnswerPostgresConcurrencyTest {
         }
 
         void awaitWaiting(String table, long minimumWaiters) {
+            // pg_stat_activity exposes the blocked SQL query; this is a synchronization
+            // signal for the fixture, not a direct pg_locks relation-lock assertion.
             Mono.defer(() -> database.sql(
                     "SELECT COUNT(*) FROM pg_stat_activity "
                             + "WHERE wait_event_type = 'Lock' AND state = 'active' "
@@ -377,7 +382,7 @@ class SimulationAnswerPostgresConcurrencyTest {
                     .filter(waiters -> waiters >= minimumWaiters))
                     .repeatWhenEmpty(repeats -> repeats.delayElements(Duration.ofMillis(25)).take(400))
                     .switchIfEmpty(Mono.error(new AssertionError(
-                            "The first service operation never waited for the " + table + " lock")))
+                            "No blocked SQL query was observed for " + table)))
                     .block(Duration.ofSeconds(15));
         }
 
