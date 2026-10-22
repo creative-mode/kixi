@@ -78,6 +78,62 @@ class ExamExtractionResponseTest {
     }
 
     @Test
+    void subitemConfidenceAndFormulasSurviveOcrDtoMappingAndJsonSerialization() throws Exception {
+        String json = """
+            {"status":"success","questions":[{"number":"1","type":"composta",
+             "text":{"value":"Resolva"},"rawText":"Resolva x2",
+             "subitemsContent":[{"label":"a","text":"x ao quadrado é 4","rawText":"a) x2 é 4","cotacao":2,
+               "type":"dissertativa","confidence":0.87,
+               "formulas":[{"raw":"x² = 4","latex":"x^2 = 4","confidence":0.91,"kind":"formula",
+                 "ocrConfidence":0.84,"layoutConfidence":0.93}]}]}]}
+            """;
+
+        OcrResponse ocr = mapper.readValue(json, OcrResponse.class);
+        ExamExtractionResponse exam = ExamExtractionResponse.fromOcrResponse(ocr);
+        ExamExtractionResponse.SubitemData item = exam.questions().get(0).subitemsContent().get(0);
+        var serialized = mapper.valueToTree(exam);
+
+        assertThat(ocr.questions().get(0).subitemsContent().get(0).confidence()).isEqualTo(0.87);
+        assertThat(ocr.questions().get(0).subitemsContent().get(0).formulas()).hasSize(1);
+        assertThat(ocr.questions().get(0).subitemsContent().get(0).formulas().get(0).ocrConfidence()).isEqualTo(0.84);
+        assertThat(ocr.questions().get(0).subitemsContent().get(0).formulas().get(0).layoutConfidence()).isEqualTo(0.93);
+        assertThat(item.confidence()).isEqualTo(0.87);
+        assertThat(exam.questions().get(0).rawText()).isEqualTo("Resolva x2");
+        assertThat(item.rawText()).isEqualTo("a) x2 é 4");
+        assertThat(item.formulas()).containsExactly(
+            new ExamExtractionResponse.FormulaData("x² = 4", "x^2 = 4", 0.91, "formula", 0.84, 0.93));
+        assertThat(serialized.at("/questions/0/subitems_content/0/confidence").asDouble()).isEqualTo(0.87);
+        assertThat(serialized.at("/questions/0/subitems_content/0/formulas/0/latex").asText()).isEqualTo("x^2 = 4");
+        assertThat(serialized.at("/questions/0/subitems_content/0/formulas/0/ocrConfidence").asDouble()).isEqualTo(0.84);
+        assertThat(serialized.at("/questions/0/subitems_content/0/formulas/0/layoutConfidence").asDouble()).isEqualTo(0.93);
+        assertThat(serialized.at("/questions/0/rawText").asText()).isEqualTo("Resolva x2");
+        assertThat(serialized.at("/questions/0/subitems_content/0/rawText").asText()).isEqualTo("a) x2 é 4");
+    }
+
+    @Test
+    void legacySubitemJsonAndConstructorsRemainCompatible() throws Exception {
+        String json = """
+            {"status":"success","questions":[{"number":"1","type":"composta",
+             "text":{"value":"Enunciado"},
+             "subitemsContent":[{"label":"a","text":"Primeira","cotacao":1,"type":"dissertativa"}]}]}
+            """;
+
+        OcrResponse ocr = mapper.readValue(json, OcrResponse.class);
+        ExamExtractionResponse.SubitemData mapped = ExamExtractionResponse.fromOcrResponse(ocr)
+            .questions().get(0).subitemsContent().get(0);
+        OcrResponse.SubitemContent oldSourceConstructor = new OcrResponse.SubitemContent("a", "Primeira", 1.0, "dissertativa");
+        ExamExtractionResponse.SubitemData oldResponseConstructor =
+            new ExamExtractionResponse.SubitemData("a", "Primeira", 1.0, "dissertativa");
+
+        assertThat(mapped.confidence()).isNull();
+        assertThat(mapped.formulas()).isEmpty();
+        assertThat(oldSourceConstructor.confidence()).isNull();
+        assertThat(oldSourceConstructor.formulas()).isEmpty();
+        assertThat(oldResponseConstructor.confidence()).isNull();
+        assertThat(oldResponseConstructor.formulas()).isEmpty();
+    }
+
+    @Test
     void theLegacyPathsStoreAQuestionWithItsAlineasAsPlainTextRatherThanDroppingThem() throws Exception {
         OcrResponse ocr = mapper.readValue(OGI, OcrResponse.class);
 

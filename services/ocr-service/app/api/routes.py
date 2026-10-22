@@ -6,11 +6,12 @@ Provides the main API for document processing.
 """
 
 import io
+import json
 import time
 from typing import Optional, List
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Form, Query, Request, Header
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -21,7 +22,13 @@ from app.ocr import (
     OCRResult,
     load_image_from_bytes,
 )
-from app.api.pdf_handler import extract_images_from_pdf, is_pdf, validate_pdf
+from app.api.pdf_handler import (
+    extract_images_from_pdf,
+    extract_text_pages_from_pdf,
+    get_pdf_info,
+    is_pdf,
+    validate_pdf,
+)
 from app.api.security import require_ocr_api_key
 
 import structlog
@@ -274,6 +281,7 @@ async def extract_text(
 
     # Process images
     all_images = []
+    native_text_pages = []
     source_file_indices = []
     total_upload_bytes = 0
     total_rendered_pixels = 0
@@ -459,24 +467,171 @@ async def extract_text_simple(
         )
 
 
+@router.post("/v1/extract/stream")
+async def extract_text_stream(
+    request: Request,
+    images: List[UploadFile] = File(..., description="Image files or PDFs to process"),
+    upload_ms: Optional[float] = Header(default=None, alias="X-OCR-Upload-Ms"),
+    _: None = Depends(require_ocr_api_key),
+    engine: OCREngine = Depends(get_ocr_engine),
+) -> StreamingResponse:
+    """Stream request-scoped, measured progress and the final extraction as SSE."""
+    request_id = request.state.request_id
+    request_started = time.perf_counter()
+    if not images:
+        raise HTTPException(status_code=400, detail="At least one image is required")
+    if len(images) > settings.max_images_per_request:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {settings.max_images_per_request} images allowed per request",
+        )
+
+    prepared_files = []
+    page_count = 0
+    total_upload_bytes = 0
+    preparation_started = time.perf_counter()
+    for source_file_index, upload_file in enumerate(images):
+        try:
+            content = await read_bounded_upload(
+                upload_file,
+                settings.max_upload_size_bytes - total_upload_bytes,
+            )
+            total_upload_bytes += len(content)
+            file_type = resolve_file_type(upload_file.filename, content)
+            if file_type == "pdf":
+                validate_pdf(content, max_pages=settings.max_pdf_pages)
+                file_page_count = int(get_pdf_info(content).get("page_count") or 0)
+                if file_page_count < 1:
+                    raise HTTPException(status_code=400, detail="Invalid PDF page count")
+            else:
+                file_page_count = 1
+            if page_count + file_page_count > settings.max_ocr_pages_per_request:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Maximum {settings.max_ocr_pages_per_request} pages allowed per request",
+                )
+            page_count += file_page_count
+            prepared_files.append((source_file_index, file_type, content, file_page_count))
+        except HTTPException:
+            raise
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid uploaded file")
+        except Exception as exc:
+            logger.warning(
+                "Failed to prepare streamed OCR upload",
+                request_id=request_id,
+                error_type=type(exc).__name__,
+            )
+            raise HTTPException(status_code=400, detail="Failed to process uploaded file")
+
+    if page_count == 0:
+        raise HTTPException(status_code=400, detail="No valid images could be extracted")
+
+    preparation_ms = (time.perf_counter() - preparation_started) * 1000
+    upload_ms = upload_ms if upload_ms is not None and 0 <= upload_ms <= 180_000 else None
+
+    async def events():
+        all_images = []
+        native_text_pages = []
+        source_file_indices = []
+        rasterization_ms = 0.0
+        yield _sse_event("prepared", {
+            "requestId": request_id,
+            "pageCount": page_count,
+            "timings": {
+                **({"uploadMs": round(upload_ms, 1)} if upload_ms is not None else {}),
+                "preparationMs": round(preparation_ms, 1),
+                "rasterizationMs": 0.0,
+            },
+        })
+        try:
+            global_page = 0
+            for source_file_index, file_type, content, file_page_count in prepared_files:
+                for local_page in range(1, file_page_count + 1):
+                    raster_started = time.perf_counter()
+                    if file_type == "pdf":
+                        pages = extract_images_from_pdf(
+                            content,
+                            first_page=local_page,
+                            last_page=local_page,
+                        )
+                        if len(pages) != 1:
+                            raise ValueError("PDF page rendering returned an unexpected page count")
+                        text_pages = extract_text_pages_from_pdf(
+                            content,
+                            first_page=local_page,
+                            last_page=local_page,
+                        )
+                        all_images.append(pages[0])
+                        native_text_pages.append(text_pages[0] if len(text_pages) == 1 else None)
+                    else:
+                        all_images.append(load_image_from_bytes(content))
+                        native_text_pages.append(None)
+                    source_file_indices.append(source_file_index)
+                    rasterization_ms += (time.perf_counter() - raster_started) * 1000
+                    global_page += 1
+                    yield _sse_event("rasterized", {
+                        "page": global_page,
+                        "pageCount": page_count,
+                        "timings": {"rasterizationMs": round(rasterization_ms, 1)},
+                    })
+
+            async for update in engine.process_images_progress_async(
+                all_images,
+                request_id=request_id,
+                source_file_indices=source_file_indices,
+                native_text_pages=native_text_pages,
+            ):
+                if "type" not in update:
+                    yield _sse_event("progress", update)
+                    continue
+                result = update["result"]
+                assembly_started = time.perf_counter()
+                payload = result.to_dict()
+                response_assembly_ms = (time.perf_counter() - assembly_started) * 1000
+                payload["timings"] = {
+                    **(payload.get("timings") or {}),
+                    "preparationMs": round(preparation_ms, 1),
+                    "rasterizationMs": round(rasterization_ms, 1),
+                    "responseAssemblyMs": round(response_assembly_ms, 1),
+                    "totalMs": round((time.perf_counter() - request_started) * 1000, 1),
+                }
+                yield _sse_event("result", payload)
+        except Exception as exc:
+            logger.error(
+                "Streamed OCR processing failed",
+                request_id=request_id,
+                error_type=type(exc).__name__,
+            )
+            yield _sse_event("error", {"message": "OCR processing failed"})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Request-ID": request_id,
+        },
+    )
+
+
+def _sse_event(name: str, payload: dict) -> str:
+    return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+
 @router.get("/v1/status/{request_id}")
 async def get_request_status(
     request_id: str,
 ) -> JSONResponse:
-    """
-    Get the status of a previous OCR request.
-
-    Note: This is a placeholder for future async processing support.
-    Currently, all requests are processed synchronously.
-    """
-    # Placeholder for future async job tracking
+    """Jobs are request-scoped SSE streams; no durable status is retained."""
     return JSONResponse(
         content={
             "requestId": request_id,
-            "status": "unknown",
-            "message": "Async job tracking not yet implemented. All requests are processed synchronously.",
+            "status": "not_trackable",
+            "message": "Progress is available only on POST /ocr/v1/extract/stream; no job state is persisted.",
         },
-        status_code=501,
+        status_code=410,
     )
 
 

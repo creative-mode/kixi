@@ -44,6 +44,17 @@ public class Question {
     @Column("text")
     private String text;
 
+    /** Original OCR text, kept separate from the editable/renderable text. */
+    @Column("raw_text")
+    private String rawText;
+
+    /** JSON array of OCR formula spans, including their individual confidence. */
+    @Column("ocr_formulas")
+    private String ocrFormulas;
+
+    @Column("ocr_reviewed")
+    private Boolean ocrReviewed;
+
     /**
      * Type of question: multiple_choice, short_answer, development, true_false
      */
@@ -60,6 +71,10 @@ public class Question {
     /** The item's own label inside its group: a, b, c... Null for top-level questions. */
     @Column("label")
     private String label;
+
+    /** How children of a group are laid out on the source paper; null/lettered keeps legacy output. */
+    @Column("group_layout")
+    private String groupLayout;
 
     /**
      * Maximum score/points for this question
@@ -158,6 +173,18 @@ public class Question {
     public void setText(String text) {
         this.text = text;
     }
+
+    public String getRawText() { return rawText; }
+
+    public void setRawText(String rawText) { this.rawText = rawText; }
+
+    public String getOcrFormulas() { return ocrFormulas; }
+
+    public void setOcrFormulas(String ocrFormulas) { this.ocrFormulas = ocrFormulas; }
+
+    public Boolean getOcrReviewed() { return ocrReviewed; }
+
+    public void setOcrReviewed(Boolean ocrReviewed) { this.ocrReviewed = ocrReviewed; }
 
     public String getQuestionType() {
         return questionType;
@@ -339,6 +366,10 @@ public class Question {
     public void setLabel(String label) {
         this.label = label;
     }
+
+    public String getGroupLayout() { return groupLayout; }
+
+    public void setGroupLayout(String groupLayout) { this.groupLayout = groupLayout; }
 
     /** The question type of a group header: it holds the common statement and nothing to answer. */
     public static final String GROUP = "group";

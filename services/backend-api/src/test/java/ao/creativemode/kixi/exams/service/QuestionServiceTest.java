@@ -488,6 +488,28 @@ class QuestionServiceTest {
                 .verifyComplete();
     }
 
+    @Test
+    void explicitOcrReviewAcknowledgementClearsTheQuestionReviewFlagAndKeepsEvidence() {
+        givenTheStatementIsWritable();
+        Question existing = question(QUESTION_ID, 1);
+        existing.setRawText("Determine v0");
+        existing.setOcrConfidence(0.71);
+        existing.setOcrFormulas("[{\"raw\":\"v0\",\"latex\":\"v_0\",\"confidence\":0.62,\"kind\":\"formula\"}]");
+        existing.setNeedsReview(true);
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(existing));
+        when(questions.save(existing)).thenAnswer(invocation -> Mono.just(existing));
+
+        StepVerifier.create(service.update(STATEMENT_ID, QUESTION_ID,
+                        new QuestionRequest("Enunciado revisto", null, 1.0, 0, null, true), ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.ocrReviewed()).isTrue();
+                    assertThat(response.needsReview()).isFalse();
+                    assertThat(response.rawText()).isEqualTo("Determine v0");
+                    assertThat(response.formulas()).hasSize(1);
+                })
+                .verifyComplete();
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────
 
     private void givenTheStatementIsThere() {

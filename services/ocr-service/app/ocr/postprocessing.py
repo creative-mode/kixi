@@ -15,13 +15,22 @@ Optimized for Angolan exam papers (12ª classe).
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 
 from .formulas import FORMULA, FormulaSegment, extract_inline_formulas, recognize_region
+from .formula_model import normalize_model_latex
 from .layout import LayoutRegion
 from .ptlex import Lexicon, load_lexicon, repair_text
+
+FormulaPredictionKey = Tuple[int, int, int, int, int]
+FormulaPredictions = Dict[FormulaPredictionKey, str]
+
+
+def formula_prediction_key(page_index: int, bbox: Tuple[int, int, int, int]) -> FormulaPredictionKey:
+    return (page_index, *(int(round(value)) for value in bbox))
 
 
 class QuestionType(str, Enum):
@@ -50,6 +59,12 @@ class TextBlock:
     # In blue pen: a student's working or a teacher's note, never part of the printed exam (set by the engine,
     # which is the one that sees the colours).
     handwritten: bool = False
+    formula_segments: List[FormulaSegment] = field(default_factory=list)
+    raw_text: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.raw_text is None:
+            self.raw_text = self.text
 
 
 @dataclass
@@ -88,6 +103,12 @@ class SubitemContent:
     text: str   # The content of the subitem
     cotacao: Optional[float] = None
     type: Optional[str] = None
+    confidence: Optional[float] = None
+    formulas: List[FormulaSegment] = field(default_factory=list)
+    page_index: int = -1
+    start_y: int = 0
+    end_y: int = 0
+    raw_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -97,6 +118,12 @@ class SubitemContent:
         }
         if self.type is not None:
             result["type"] = self.type
+        if self.confidence is not None:
+            result["confidence"] = round(self.confidence, 3)
+        if self.formulas:
+            result["formulas"] = [formula.to_dict() for formula in self.formulas]
+        if self.raw_text is not None:
+            result["rawText"] = self.raw_text
         return result
 
 
@@ -123,6 +150,9 @@ class ExtractedQuestion:
     # entre $...$ - esta lista é o mesmo resultado, estruturado, com o texto em bruto e a
     # confiança de cada um.
     formulas: List[FormulaSegment] = field(default_factory=list)
+    raw_text: Optional[str] = None
+    # A geometrically detected brace list is printed as a brace, not as generated a/b/c labels.
+    group_layout: Optional[str] = None
 
     @property
     def confidence(self) -> float:
@@ -142,6 +172,7 @@ class ExtractedQuestion:
             "subitems": self.subitems,
             "subitemsContent": [s.to_dict() for s in self.subitems_content] if self.subitems_content else [],
             "text": {"value": self.text, "confidence": round(self.text_confidence, 3)},
+            "rawText": self.raw_text if self.raw_text is not None else self.text,
             "type": self.question_type.value,
             "cotacao": self.cotacao,
             "hasImage": self.has_image,
@@ -150,6 +181,8 @@ class ExtractedQuestion:
             "endY": self.end_y,
             "formulas": [f.to_dict() for f in self.formulas],
         }
+        if self.group_layout is not None:
+            result["groupLayout"] = self.group_layout
 
         if self.image_description:
             result["imageDescription"] = self.image_description
@@ -234,6 +267,8 @@ class UnmappedContent:
     text: str
     confidence: float
     reason: Optional[str] = None
+    bbox: Optional[Tuple[int, int, int, int]] = None
+    zone: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -244,6 +279,10 @@ class UnmappedContent:
         }
         if self.reason:
             result["reason"] = self.reason
+        if self.bbox:
+            result["bbox"] = list(self.bbox)
+        if self.zone:
+            result["zone"] = self.zone
         return result
 
 
@@ -272,6 +311,11 @@ class _Alinea:
     """An alínea being collected (label without the parenthesis: "a", "b"...)."""
     label: str
     parts: List[str] = field(default_factory=list)
+    confidences: List[float] = field(default_factory=list)
+    page_index: int = -1
+    start_y: int = 0
+    end_y: int = 0
+    raw_parts: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -280,9 +324,12 @@ class _Draft:
     question: ExtractedQuestion
     stem_parts: List[str] = field(default_factory=list)
     alineas: List[_Alinea] = field(default_factory=list)
+    stem_confidences: List[float] = field(default_factory=list)
+    raw_text_parts: List[str] = field(default_factory=list)
 
 
 class OCRPostprocessor:
+    _INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO = 0.2
     """
     Postprocessor for OCR results - Optimized for Angolan exams.
 
@@ -520,6 +567,7 @@ class OCRPostprocessor:
         layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
         formula_images: bool = False,
         recognize_formulas: bool = True,
+        formula_predictions: Optional[FormulaPredictions] = None,
     ) -> Tuple[ExtractedMetadata, List[ExtractedQuestion], List[ImageToUpload], List[UnmappedContent], List[Warning]]:
         """
         Process OCR text blocks into structured data.
@@ -544,12 +592,19 @@ class OCRPostprocessor:
         page_limits: Dict[int, int] = {}
         if self.filter_noise:
             sorted_blocks, noise = self._split_noise(sorted_blocks)
-            # Nothing the exam says comes after its cotação line: below it there are signatures, stamps, logos and
-            # whatever a student scribbled in the free space.
+            # Content below the scoring line is outside the questions, but remains part of the source page
+            # (contacts, coordination, seals and signatures). Keep its position for a separate footer region.
             sorted_blocks, after, page_limits = self._cut_after_cotacao(sorted_blocks, page_dimensions or {})
             noise.extend(after)
+        footer_blocks = [block for block, reason in noise if reason == "Conteúdo do rodapé preservado fora das questões"]
         # Maths the text engine cannot read is garbage in the text: the layout knows where the printed formulas are.
-        sorted_blocks = self._mask_formulas(sorted_blocks, layout_regions, page_limits, recognize=recognize_formulas)
+        sorted_blocks = self._mask_formulas(
+            sorted_blocks,
+            layout_regions,
+            page_limits,
+            recognize=recognize_formulas,
+            formula_predictions=formula_predictions,
+        )
 
         # Combine all text for pattern matching
         full_text = " ".join(b.text for b in sorted_blocks)
@@ -567,14 +622,31 @@ class OCRPostprocessor:
 
         # Segment and extract questions
         questions = self._extract_questions(sorted_blocks, cotacao_map)
-        warnings.extend(self._generate_question_warnings(questions))
-        warnings.extend(self._generate_cotacao_warnings(metadata, questions))
+        self._recover_inline_first_alinea(questions)
+        self._structure_braced_velocity_items(questions, sorted_blocks, page_dimensions or {})
+        self._deduplicate_roman_sections(questions)
+        self._structure_roman_sections(questions)
+        self._ensure_unique_subitem_labels(questions)
+        if recognize_formulas:
+            self._attach_formula_segments(
+                questions,
+                sorted_blocks,
+                layout_regions or {},
+                page_limits,
+                formula_predictions=formula_predictions,
+            )
 
         # Recognize formulas inline in the already-extracted question text (#262): done last, on the
         # finished questions, so it never risks the numbering/cotação/option parsing above, which depends
         # on the exact (unmodified) text the OCR and _mask_formulas produced.
         if recognize_formulas:
-            questions = [self._recognize_question_formulas(q) for q in questions]
+            questions = [
+                self._deduplicate_adjacent_inline_formula_text(self._recognize_question_formulas(q))
+                for q in questions
+            ]
+
+        warnings.extend(self._generate_question_warnings(questions))
+        warnings.extend(self._generate_cotacao_warnings(metadata, questions))
 
         # Calculate total max score from questions or cotação map
         total_score = sum(q.cotacao for q in questions if q.cotacao is not None)
@@ -597,12 +669,431 @@ class OCRPostprocessor:
             layout_regions,
             formula_images,
             page_limits,
+            footer_blocks,
         )
 
         # Collect unmapped content
         unmapped = self._collect_unmapped(sorted_blocks, metadata, questions, noise)
 
         return metadata, questions, images_to_upload, unmapped, warnings
+
+    @staticmethod
+    def _recover_inline_first_alinea(questions: List[ExtractedQuestion]) -> None:
+        """Recover ``a)`` merged into a stem when later ``b)``/``c)`` rows prove a list.
+
+        OCR reading order can append the first alínea to the question stem even when
+        the following items were parsed separately. Requiring a following parsed
+        letter avoids reclassifying a lone multiple-choice option as an alínea.
+        """
+        for question in questions:
+            labels = {item.label.lower().rstrip(").") for item in question.subitems_content}
+            if "a" in labels or not labels.intersection({"b", "c"}):
+                continue
+            text = question.text.value if isinstance(question.text, MetadataField) else question.text
+            match = re.match(
+                r"^(?P<stem>.+?:)\s*\(?a[).:]\s*(?P<item>\S.*)$",
+                text.strip(),
+                re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            question.text = match.group("stem").rstrip()
+            question.subitems_content.append(SubitemContent(
+                label="a",
+                text=match.group("item").strip(),
+                type="dissertativa",
+                confidence=question.text_confidence,
+                page_index=question.page_index,
+                start_y=question.start_y,
+                end_y=question.start_y,
+                raw_text=f"a) {match.group('item').strip()}",
+            ))
+            question.subitems_content.sort(key=lambda item: (item.page_index, item.start_y, item.label))
+            question.subitems = [f"{item.label})" for item in question.subitems_content]
+
+    @staticmethod
+    def _ensure_unique_subitem_labels(questions: List[ExtractedQuestion]) -> None:
+        """Avoid duplicate persistence labels when OCR flattens separate lettered sections."""
+        for question in questions:
+            used: set[str] = set()
+            next_label = 0
+
+            def label_at(index: int) -> str:
+                label = ""
+                while index >= 0:
+                    label = chr(ord("a") + index % 26) + label
+                    index = index // 26 - 1
+                return label
+
+            items = []
+            for item in question.subitems_content:
+                raw_label = item.label.strip().rstrip(").")
+                qualified = re.fullmatch(r"(VIII|VII|VI|V)\.([a-z]+)", raw_label, re.IGNORECASE)
+                label = f"{qualified.group(1).upper()}.{qualified.group(2).lower()}" if qualified else raw_label.lower()
+                identity = label.lower()
+                if not label or identity in used:
+                    while label_at(next_label) in used:
+                        next_label += 1
+                    label = label_at(next_label)
+                    identity = label
+                used.add(identity)
+                next_label = max(next_label, ord(label[-1]) - ord("a") + 1) if len(label) == 1 else next_label
+                items.append(item if item.label == label else replace(item, label=label))
+            question.subitems_content = items
+            question.subitems = [f"{item.label})" for item in items]
+
+    @staticmethod
+    def _deduplicate_roman_sections(questions: List[ExtractedQuestion]) -> None:
+        """Drop repeated VII/VIII OCR sections while retaining their first full occurrence."""
+        for question in questions:
+            original = question.text.value if isinstance(question.text, MetadataField) else question.text
+            markers = list(re.finditer(r"\b(VII|VIII)\)\s*", original, re.IGNORECASE))
+            seen: set[str] = set()
+            duplicate_spans = []
+            for index, marker in enumerate(markers):
+                label = marker.group(1).upper()
+                if label not in seen:
+                    seen.add(label)
+                    continue
+                end = markers[index + 1].start() if index + 1 < len(markers) else len(original)
+                duplicate_spans.append((marker.start(), end))
+            text = original
+            for start, end in reversed(duplicate_spans):
+                text = text[:start] + text[end:]
+            if text != original:
+                if isinstance(question.text, MetadataField):
+                    question.text = MetadataField(text.strip(), question.text.confidence)
+                else:
+                    question.text = re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _structure_roman_sections(questions: List[ExtractedQuestion]) -> None:
+        """Keep Roman section headings in the statement and qualify their answer labels.
+
+        The persisted exam contract supports one level of group items, not recursive
+        groups. The original section headings therefore remain ordered in the statement,
+        while answer rows carry qualified labels (``V.a``, ``VII.b``). This preserves the
+        hierarchy without storing headings as answerable questions or changing the
+        database/API shape. Conversion is gated on all four sections and all five child
+        anchors; ambiguous OCR remains untouched for teacher review.
+        """
+        section_pattern = re.compile(r"(?<![A-Za-z0-9])(?P<label>VIII|VII|VI|V)\)\s*", re.IGNORECASE)
+        child_patterns = {
+            "displacement": re.compile(r"\bdesl[a-zç]*mento\b", re.IGNORECASE),
+            "velocity": re.compile(r"\bvelocidade\s+m[eé]dia\b", re.IGNORECASE),
+            "acceleration": re.compile(r"\bacelera[çc][ãa]o\s+m[eé]dia\b", re.IGNORECASE),
+            "angle": re.compile(r"\b[âa]ngulo\b", re.IGNORECASE),
+            "radius": re.compile(r"\braio\s+de\s+curvatura\b", re.IGNORECASE),
+        }
+
+        for question in questions:
+            text = question.text.value if isinstance(question.text, MetadataField) else question.text
+            markers = list(section_pattern.finditer(text))
+            if [marker.group("label").upper() for marker in markers] != ["V", "VI", "VII", "VIII"]:
+                continue
+
+            sections = {
+                marker.group("label").upper(): re.sub(
+                    r"\s+", " ", text[marker.end():markers[index + 1].start() if index + 1 < len(markers) else len(text)]
+                ).strip(" .;\t")
+                for index, marker in enumerate(markers)
+            }
+            if not all(sections.values()):
+                continue
+
+            unused = list(question.subitems_content)
+            recovered: Dict[str, SubitemContent] = {}
+            for name, pattern in child_patterns.items():
+                match_index = next(
+                    (
+                        index
+                        for index, item in enumerate(unused)
+                        if pattern.search(unicodedata.normalize("NFC", item.text))
+                    ),
+                    None,
+                )
+                if match_index is None:
+                    break
+                recovered[name] = unused.pop(match_index)
+            if len(recovered) != len(child_patterns) or unused:
+                continue
+
+            prefix = text[:markers[0].start()].strip()
+            prefix = re.sub(r"(?i)(\bseja)\s*=\s*(?=\$\\vec\{)", r"\1 ", prefix)
+            if not prefix:
+                continue
+            sections["VIII"] = re.sub(
+                r"\bdessapart[ií]cula\b",
+                "dessa partícula",
+                unicodedata.normalize("NFC", sections["VIII"]),
+                flags=re.IGNORECASE,
+            )
+            section_text = "\n".join(f"{label}) {sections[label]}" for label in ("V", "VI", "VII", "VIII"))
+            child_rows = [
+                replace(recovered[name], label=f"V.{label}")
+                for name, label in (("displacement", "a"), ("velocity", "b"), ("acceleration", "c"))
+            ] + [
+                replace(recovered[name], label=f"VII.{label}")
+                for name, label in (("angle", "a"), ("radius", "b"))
+            ]
+            child_rows[3] = replace(
+                child_rows[3],
+                text=re.sub(
+                    r"\s*(?:e\s+)?b\)\s*0?\s*raio\s+de\s+curvatura.*$",
+                    "",
+                    child_rows[3].text,
+                    flags=re.IGNORECASE,
+                ).strip(),
+            )
+            child_rows[3] = replace(
+                child_rows[3],
+                text=re.sub(
+                    r"^\s*0(?=\s+â?ngulo\b)",
+                    "o",
+                    unicodedata.normalize("NFC", child_rows[3].text),
+                    flags=re.IGNORECASE,
+                ),
+            )
+            child_rows[4] = replace(
+                child_rows[4],
+                text=re.split(r"\s+(?:VIII\)|cota[çc][ãa]o\s*:)", child_rows[4].text, maxsplit=1, flags=re.IGNORECASE)[0].strip(),
+            )
+            child_rows[4] = replace(
+                child_rows[4],
+                text=re.sub(r"^\s*0(?=\s+raio\b)", "o", child_rows[4].text, flags=re.IGNORECASE),
+            )
+            structured_text = f"{prefix}\n{section_text}"
+            question.text = MetadataField(structured_text, question.text.confidence) if isinstance(question.text, MetadataField) else structured_text
+            question.subitems_content = child_rows
+            question.subitems = [f"{item.label})" for item in question.subitems_content]
+
+    @staticmethod
+    def _structure_braced_velocity_items(
+        questions: List[ExtractedQuestion],
+        blocks: List[TextBlock],
+        page_dimensions: Dict[int, Tuple[int, int]],
+    ) -> None:
+        """Recover a three-row Portuguese kinematics list when OCR flattens its curly-brace layout.
+
+        The detector regularly merges the middle row into the instruction ending in ``calcule:`` while
+        keeping the first and last rows as separate, parenthesized blocks. The geometry and all three
+        textual anchors are required; this deliberately does not infer lists from words alone.
+        """
+        for question in questions:
+            initial_subitem_count = len(question.subitems_content)
+            page_blocks = sorted(
+                (block for block in blocks if block.page_index == question.page_index
+                 and question.start_y <= block.bbox[1] <= question.end_y),
+                key=lambda block: (block.bbox[1], block.bbox[0]),
+            )
+            width = page_dimensions.get(question.page_index, (0, 0))[0]
+            if not width:
+                continue
+            for index, first in enumerate(page_blocks):
+                first_match = re.match(r"^\s*\(\s*o\s+(.+?)\s*$", first.text, re.IGNORECASE)
+                if not first_match or first.bbox[0] < width * 0.35:
+                    continue
+                for middle_index in range(index + 1, min(index + 3, len(page_blocks))):
+                    middle = page_blocks[middle_index]
+                    if middle.bbox[1] - first.bbox[3] > max(72, first.bbox[3] - first.bbox[1]) * 2:
+                        break
+                    middle_match = re.search(
+                        r"\bcalcule\s*:\s*(a\s+[^.;!?]+?)\s*[.;!?]?\s*$",
+                        middle.text,
+                        re.IGNORECASE,
+                    )
+                    if not middle_match:
+                        continue
+                    for last in page_blocks[middle_index + 1:middle_index + 3]:
+                        if last.bbox[1] - middle.bbox[3] > max(72, middle.bbox[3] - middle.bbox[1]) * 2:
+                            break
+                        last_match = re.match(r"^\s*\(\s*a\s+(.+?)\s*$", last.text, re.IGNORECASE)
+                        if not last_match or abs(last.bbox[0] - first.bbox[0]) > width * 0.12:
+                            continue
+
+                        entries = [
+                            (first, f"o {first_match.group(1).strip()}"),
+                            (middle, middle_match.group(1).strip()),
+                            (last, f"a {last_match.group(1).strip()}"),
+                        ]
+                        for label, (source, text) in zip(("a", "b", "c"), entries):
+                            question.subitems_content.append(SubitemContent(
+                                label=label,
+                                text=text,
+                                type="dissertativa",
+                                confidence=source.confidence,
+                                page_index=source.page_index,
+                                start_y=source.bbox[1],
+                                end_y=source.bbox[3],
+                                raw_text=source.raw_text,
+                            ))
+
+                        stem = question.text.value if isinstance(question.text, MetadataField) else question.text
+                        for source_line in (first.text, last.text):
+                            stem = stem.replace(source_line, " ", 1)
+                        stem = stem.replace(middle_match.group(1), " ", 1)
+                        question.text = re.sub(r"\s+", " ", stem).strip()
+                        remaining_items = []
+                        promoted_sections = []
+                        existing_sections = {
+                            section.upper()
+                            for section in re.findall(r"\b(VII|VIII)\)", stem, re.IGNORECASE)
+                        }
+                        for item in question.subitems_content:
+                            section = re.search(r"\s+(VII|VIII)\)\s+(.+)$", item.text, re.IGNORECASE)
+                            if section:
+                                section_label = section.group(1).upper()
+                                if section_label not in existing_sections:
+                                    promoted_sections.append(f"{section_label}) {section.group(2)}")
+                                    existing_sections.add(section_label)
+                                item = replace(item, text=item.text[:section.start()].strip())
+                            remaining_items.append(item)
+                        question.subitems_content = remaining_items
+                        if promoted_sections:
+                            question.text = " ".join([question.text, *promoted_sections]).strip()
+                        question.subitems_content.sort(key=lambda item: (item.page_index, item.start_y))
+                        question.subitems = [f"{item.label})" for item in question.subitems_content]
+                        question.group_layout = "brace"
+                        break
+                    if len(question.subitems_content) >= 3:
+                        break
+
+            if len(question.subitems_content) < initial_subitem_count + 3:
+                OCRPostprocessor._structure_braced_velocity_items_from_split_rows(
+                    question, page_blocks, width
+                )
+
+    @staticmethod
+    def _structure_braced_velocity_items_from_split_rows(
+        question: ExtractedQuestion,
+        blocks: List[TextBlock],
+        page_width: int,
+    ) -> None:
+        """Recover the same three-row brace list when OCR separates its prompt and rows.
+
+        Some page layouts place the ``calcule:`` instruction at the left and the three
+        brace entries in a centered right column. OCR then returns four blocks: the
+        first row, prompt, velocity row, and acceleration row. Require all anchors,
+        the expected columns and a compact vertical group before changing hierarchy.
+        """
+        if not page_width:
+            return
+
+        first_candidates = []
+        for block in blocks:
+            match = re.match(r"^\s*\(?\s*o\s+(deslocamento\b.*)$", block.text, re.IGNORECASE)
+            if match and block.bbox[0] >= page_width * 0.35:
+                first_candidates.append((block, match))
+
+        for first, first_match in first_candidates:
+            first_height = max(1, first.bbox[3] - first.bbox[1])
+            prompts = [
+                block for block in blocks
+                if block.page_index == first.page_index
+                and block is not first
+                and block.bbox[0] < page_width * 0.45
+                and re.search(r"\bcalcule\s*:", block.text, re.IGNORECASE)
+                and abs(block.bbox[1] - first.bbox[1]) <= max(48, first_height * 2)
+            ]
+            if not prompts:
+                continue
+            prompt = min(prompts, key=lambda block: abs(block.bbox[1] - first.bbox[1]))
+            prompt_velocity = re.search(
+                r"\b(a\s+velocidade\s+m[eé]dia\b[^.;!?]*)\s*[.;!?]?\s*$",
+                prompt.text,
+                re.IGNORECASE,
+            )
+            velocity_options = []
+            if prompt_velocity:
+                velocity_options.append((prompt, prompt_velocity, True))
+            for block in blocks:
+                if block.page_index != first.page_index or block in (first, prompt):
+                    continue
+                match = re.match(r"^\s*\(?\s*(a\s+velocidade\s+m[eé]dia\b.*)$", block.text, re.IGNORECASE)
+                if (
+                    match
+                    and block.bbox[0] >= page_width * 0.35
+                    and abs(block.bbox[0] - first.bbox[0]) <= page_width * 0.12
+                    and abs(block.bbox[1] - prompt.bbox[1]) <= max(48, first_height * 2)
+                ):
+                    velocity_options.append((block, match, False))
+            if not velocity_options:
+                continue
+            velocity, velocity_match, velocity_in_prompt = velocity_options[0]
+            velocity_text = velocity_match.group(1).strip()
+
+            acceleration_candidates = []
+            for block in blocks:
+                if block.page_index != first.page_index or block in (first, prompt, velocity):
+                    continue
+                match = re.match(
+                    r"^\s*\(?\s*(a\s+acelera[çc][ãa]o\s+m[eé]dia\b.*)$",
+                    block.text,
+                    re.IGNORECASE,
+                )
+                if (
+                    match
+                    and block.bbox[0] >= page_width * 0.35
+                    and abs(block.bbox[0] - first.bbox[0]) <= page_width * 0.12
+                    and velocity.bbox[1] <= block.bbox[1]
+                    and block.bbox[1] - velocity.bbox[3] <= max(96, first_height * 4)
+                ):
+                    acceleration_candidates.append((block, match))
+            if not acceleration_candidates:
+                continue
+            acceleration, acceleration_match = min(
+                acceleration_candidates,
+                key=lambda pair: pair[0].bbox[1],
+            )
+
+            rows = [
+                (first, f"o {first_match.group(1).strip()}"),
+                (velocity, velocity_text),
+                (acceleration, acceleration_match.group(1).strip()),
+            ]
+            for label, (source, text) in zip(("a", "b", "c"), rows):
+                question.subitems_content.append(SubitemContent(
+                    label=label,
+                    text=text,
+                    type="dissertativa",
+                    confidence=source.confidence,
+                    page_index=source.page_index,
+                    start_y=source.bbox[1],
+                    end_y=source.bbox[3],
+                    raw_text=source.raw_text,
+                ))
+
+            stem = question.text.value if isinstance(question.text, MetadataField) else question.text
+            stem = stem.replace(first.text, " ", 1)
+            if velocity_in_prompt:
+                stem = stem.replace(velocity_match.group(1), " ", 1)
+            else:
+                stem = stem.replace(velocity.text, " ", 1)
+            stem = stem.replace(acceleration.text, " ", 1)
+            question.text = re.sub(r"\s+", " ", stem).strip()
+            question.subitems_content.sort(key=lambda item: (item.page_index, item.start_y))
+            question.subitems = [f"{item.label})" for item in question.subitems_content]
+
+            # A Roman-numbered section can share the final OCR block with an earlier
+            # parenthesized item; keep the section marker in the stem, not that item.
+            remaining_items = []
+            promoted_sections = []
+            for item in question.subitems_content:
+                section = re.search(r"\s+(VII|VIII)\)\s*(.+)$", item.text, re.IGNORECASE)
+                if section:
+                    prefix = item.text[:section.start()].strip()
+                    stem = question.text.value if isinstance(question.text, MetadataField) else question.text
+                    if prefix and prefix.casefold() not in stem.casefold():
+                        item = replace(item, text=prefix)
+                        remaining_items.append(item)
+                    if not re.search(rf"\b{section.group(1)}\)", stem, re.IGNORECASE):
+                        promoted_sections.append(f"{section.group(1)}) {section.group(2)}")
+                    continue
+                remaining_items.append(item)
+            question.subitems_content = remaining_items
+            if promoted_sections:
+                question.text = " ".join([question.text, *promoted_sections]).strip()
+            question.group_layout = "brace"
 
     def _extract_metadata(self, blocks: List[TextBlock], full_text: str) -> ExtractedMetadata:
         """Extract document metadata from text blocks."""
@@ -1188,10 +1679,54 @@ class OCRPostprocessor:
         for block in blocks:
             limit = cut.get(block.page_index)
             if limit is not None and block.bbox[1] > limit:
-                dropped.append((block, "Depois da linha de cotação: fora da prova"))
+                dropped.append((block, "Conteúdo do rodapé preservado fora das questões"))
             else:
                 kept.append(block)
         return kept, dropped, region_limit
+
+    @staticmethod
+    def _deduplicate_adjacent_inline_formula_text(question: ExtractedQuestion) -> ExtractedQuestion:
+        """Drop a repeated inline formula when OCR/layout recognition emits it twice side by side.
+
+        Only identical normalized math spans separated by punctuation/whitespace are collapsed. Repeated
+        formulas elsewhere in a sentence remain intact because they may be intentional.
+        """
+        pattern = re.compile(r"\$([^$]+)\$")
+
+        def signature(value: str) -> str:
+            value = value.lower().replace("⁻", "-").replace("³", "3").replace("²", "2")
+            value = re.sub(r"\\(?:times|cdot)", "x", value)
+            value = value.replace("\\pi", "π").replace("\\alpha", "α")
+            value = re.sub(r"\\(?:left|right)", "", value)
+            return re.sub(r"[^\wπ-]", "", value)
+
+        seen: Dict[str, int] = {}
+        removals: List[Tuple[int, int]] = []
+        for match in pattern.finditer(question.text):
+            key = signature(match.group(1))
+            if not key:
+                continue
+            previous_key = next((
+                candidate for candidate in seen
+                if candidate == key
+                or (candidate.startswith(key) and candidate[len(key):] in {"t", "v", "s", "m"})
+                or (key.startswith(candidate) and key[len(candidate):] in {"t", "v", "s", "m"})
+            ), None)
+            previous_end = seen.get(previous_key) if previous_key is not None else None
+            if previous_end is not None:
+                separator = question.text[previous_end:match.start()]
+                math_is_equivalent = previous_key == key
+                allowed_separator = r"[\s.,;:]*" if math_is_equivalent else r"[\s.,;:]*[tTvVsSmM]?[\s.,;:]*"
+                if len(separator) <= 12 and re.fullmatch(allowed_separator, separator):
+                    removals.append(match.span())
+            seen[key] = match.end()
+
+        if not removals:
+            return question
+        text = question.text
+        for start, end in reversed(removals):
+            text = text[:start] + text[end:]
+        return replace(question, text=text)
 
     @staticmethod
     def _recognize_question_formulas(question: ExtractedQuestion) -> ExtractedQuestion:
@@ -1204,15 +1739,23 @@ class OCRPostprocessor:
         segments: List[FormulaSegment] = []
 
         new_text, found = extract_inline_formulas(question.text)
-        segments.extend(found)
+        segments.extend(replace(item, ocr_confidence=question.text_confidence) for item in found)
 
         new_subitems = question.subitems_content
         if question.subitems_content:
             updated = []
             for item in question.subitems_content:
                 item_text, item_found = extract_inline_formulas(item.text)
-                segments.extend(item_found)
-                updated.append(replace(item, text=item_text) if item_found else item)
+                item_segments = [
+                    replace(formula, ocr_confidence=item.confidence)
+                    for formula in item_found
+                ]
+                segments.extend(item_segments)
+                updated.append(replace(
+                    item,
+                    text=item_text,
+                    formulas=OCRPostprocessor._merge_formula_segments(item.formulas, item_segments),
+                ) if item_found else item)
             new_subitems = updated
 
         new_options = question.options
@@ -1220,13 +1763,268 @@ class OCRPostprocessor:
             updated_opts = []
             for opt in question.options:
                 opt_text, opt_found = extract_inline_formulas(opt.option_text)
-                segments.extend(opt_found)
+                segments.extend(
+                    replace(formula, ocr_confidence=opt.confidence)
+                    for formula in opt_found
+                )
                 updated_opts.append(replace(opt, option_text=opt_text) if opt_found else opt)
             new_options = updated_opts
 
         if not segments:
             return question
-        return replace(question, text=new_text, subitems_content=new_subitems, options=new_options, formulas=segments)
+        return replace(
+            question,
+            text=new_text,
+            subitems_content=new_subitems,
+            options=new_options,
+            formulas=OCRPostprocessor._merge_formula_segments(question.formulas, segments),
+        )
+
+    @staticmethod
+    def _merge_formula_segments(
+        existing: List[FormulaSegment], incoming: List[FormulaSegment]
+    ) -> List[FormulaSegment]:
+        """Merge text and layout detections of the same formula without losing source evidence."""
+        merged = list(existing)
+        for candidate in incoming:
+            index = next((
+                i for i, current in enumerate(merged)
+                if OCRPostprocessor._same_formula_detection(current, candidate)
+            ), None)
+            if index is None:
+                merged.append(candidate)
+                continue
+            current = merged[index]
+            # Keep the layout result as the canonical segment: it can be an explicit
+            # unrecognized formula whose raw OCR must not be replaced by partial text hits.
+            canonical = candidate if (
+                current.layout_confidence is None and candidate.layout_confidence is not None
+            ) else current
+            merged[index] = replace(
+                canonical,
+                confidence=min(current.confidence, candidate.confidence),
+                ocr_confidence=min(
+                    value for value in (current.ocr_confidence, candidate.ocr_confidence)
+                    if value is not None
+                ) if current.ocr_confidence is not None or candidate.ocr_confidence is not None else None,
+                layout_confidence=min(
+                    value for value in (current.layout_confidence, candidate.layout_confidence)
+                    if value is not None
+                ) if current.layout_confidence is not None or candidate.layout_confidence is not None else None,
+            )
+        return merged
+
+    @staticmethod
+    def _same_formula_detection(left: FormulaSegment, right: FormulaSegment) -> bool:
+        """Match exact detections, or text spans contained in a layout-detected formula."""
+        if left.raw == right.raw and left.latex == right.latex and left.kind == right.kind:
+            return True
+        if left.layout_confidence is None and right.layout_confidence is None:
+            return False
+
+        def normalized(value: Optional[str]) -> str:
+            return re.sub(r"\s+", "", value or "").casefold()
+
+        left_values = {normalized(left.raw), normalized(left.latex)} - {""}
+        right_values = {normalized(right.raw), normalized(right.latex)} - {""}
+        # Requiring a multi-character span avoids treating a common single digit or
+        # symbol as the same formula merely because it occurs inside a larger one.
+        return any(
+            min(len(a), len(b)) >= 2 and (a in b or b in a)
+            for a in left_values
+            for b in right_values
+        )
+
+    def _attach_formula_segments(
+        self,
+        questions: List[ExtractedQuestion],
+        blocks: List[TextBlock],
+        layout_regions: Dict[int, List[LayoutRegion]],
+        page_limits: Optional[Dict[int, int]] = None,
+        formula_predictions: Optional[FormulaPredictions] = None,
+    ) -> None:
+        """Keep each detected formula's raw OCR, recognition confidence and source confidence on its question."""
+        ordered = sorted(questions, key=lambda question: (question.page_index, question.start_y))
+        printed = self._printed_formulas(layout_regions, page_limits)
+
+        def owner_for(page_index: int, y: float) -> Optional[ExtractedQuestion]:
+            owner = None
+            for question in ordered:
+                if (question.page_index, question.start_y) <= (page_index, y):
+                    owner = question
+            return owner
+
+        def subitem_for(owner: ExtractedQuestion, page_index: int, y: float) -> Optional[int]:
+            candidates = [
+                index for index, item in enumerate(owner.subitems_content)
+                if item.page_index == page_index and item.start_y <= y <= item.end_y
+            ]
+            return candidates[-1] if candidates else None
+
+        def attach(
+            owner: ExtractedQuestion,
+            page_index: int,
+            y: float,
+            segment: FormulaSegment,
+            inline_vector_pair: bool = False,
+        ) -> None:
+            index = None
+            if inline_vector_pair:
+                for candidate_index, item in enumerate(owner.subitems_content):
+                    normalized = unicodedata.normalize("NFD", item.text.casefold())
+                    normalized = re.sub(r"[\u0300-\u036f]", "", normalized)
+                    if item.page_index == page_index and re.search(
+                        r"\bangulo\b.*\b(?:vectores?|vectors?)\b", normalized
+                    ):
+                        index = candidate_index
+                        break
+            if index is None:
+                index = subitem_for(owner, page_index, y)
+            if index is not None:
+                item = owner.subitems_content[index]
+                owner.subitems_content[index] = replace(
+                    item,
+                    formulas=self._merge_formula_segments(item.formulas, [segment]),
+                )
+            owner.formulas = self._merge_formula_segments(owner.formulas, [segment])
+
+        for page_index, regions in printed.items():
+            page_blocks = [block for block in blocks if block.page_index == page_index]
+            attached_block_ids = set()
+            for region in regions:
+                matching = [
+                    block for block in page_blocks
+                    if self._overlap(block.bbox, region.bbox) >= 0.6 * (block.bbox[2] - block.bbox[0]) * (block.bbox[3] - block.bbox[1])
+                ]
+                if not matching:
+                    inline_parent = self._inline_formula_parent(region, page_blocks, page_index)
+                    if (inline_parent
+                            and inline_parent[2] < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO
+                            and region.label != "inline_vector_pair"):
+                        continue
+                center_y = (region.bbox[1] + region.bbox[3]) / 2
+                owner = owner_for(page_index, center_y)
+                if owner is None:
+                    continue
+
+                new_matching = [block for block in matching if id(block) not in attached_block_ids]
+                attached = [segment for block in new_matching for segment in block.formula_segments]
+                if attached:
+                    attached_block_ids.update(id(block) for block in new_matching)
+                    for segment in attached:
+                        attach(
+                            owner,
+                            page_index,
+                            center_y,
+                            replace(segment, layout_confidence=region.score),
+                            region.label == "inline_vector_pair",
+                        )
+                    continue
+                if matching and any(block.formula_segments for block in matching):
+                    continue
+
+                model_latex = (formula_predictions or {}).get(formula_prediction_key(page_index, region.bbox))
+                if matching:
+                    raw = " ".join(block.text for block in matching).strip()
+                    source_confidence = sum(block.confidence for block in matching) / len(matching)
+                    segment = self._recognized_formula_segment(
+                        raw,
+                        model_latex,
+                        source_confidence,
+                        region.score,
+                    )
+                elif model_latex:
+                    segment = FormulaSegment(
+                        raw=model_latex,
+                        latex=model_latex,
+                        confidence=min(0.79, region.score),
+                        kind=FORMULA,
+                        layout_confidence=region.score,
+                    )
+                else:
+                    # The layout model sees a printed formula, but text OCR produced no line for it.
+                    # Keep the missing raw text explicit; do not synthesize a formula.
+                    segment = FormulaSegment(
+                        raw="",
+                        latex=None,
+                        confidence=0.0,
+                        kind="unrecognized",
+                        layout_confidence=region.score,
+                    )
+                attach(owner, page_index, center_y, segment, region.label == "inline_vector_pair")
+
+    @staticmethod
+    def _recognized_formula_segment(
+        raw: str,
+        model_latex: Optional[str],
+        ocr_confidence: Optional[float],
+        layout_confidence: Optional[float],
+    ) -> FormulaSegment:
+        heuristic = recognize_region(raw)
+        model_latex = normalize_model_latex(model_latex)
+        if not model_latex:
+            return replace(
+                heuristic,
+                ocr_confidence=ocr_confidence,
+                layout_confidence=layout_confidence,
+            )
+
+        if not raw and not OCRPostprocessor._has_formula_structure(model_latex):
+            # A layout box can land on ordinary prose (for example ``t = 3 s`` or
+            # an interval label). FormulaNet has no calibrated confidence, so a
+            # printable string alone is not enough to turn that crop into math.
+            return FormulaSegment(
+                raw="",
+                latex=None,
+                confidence=min(0.3, layout_confidence or 1.0),
+                kind="unrecognized",
+                ocr_confidence=ocr_confidence,
+                layout_confidence=layout_confidence,
+            )
+
+        def comparable(value: Optional[str]) -> str:
+            normalized = re.sub(r"\s+", "", value or "")
+            return normalized.replace(r"\left", "").replace(r"\right", "")
+
+        heuristic_latex = comparable(heuristic.latex)
+        prediction_latex = comparable(model_latex)
+        agrees = heuristic.kind == FORMULA and (
+            heuristic_latex == prediction_latex
+            or prediction_latex.removesuffix("T") == heuristic_latex
+        )
+        # FormulaNet exposes no calibrated confidence. A disagreement is not
+        # evidence that its prediction is 79% correct; keep the crop for review.
+        if not agrees and raw:
+            return FormulaSegment(
+                raw=raw,
+                latex=None,
+                confidence=min(heuristic.confidence, layout_confidence or 1.0),
+                kind="unrecognized",
+                ocr_confidence=ocr_confidence,
+                layout_confidence=layout_confidence,
+            )
+        confidence = min(0.95 if agrees else 0.7, layout_confidence or 1.0)
+        return FormulaSegment(
+            # A formula can be visible to the image recognizer while the text OCR
+            # returns no block. Preserve the recognizer output as textual provenance;
+            # ``ocr_confidence=None`` and the attached crop keep that case explicit.
+            raw=raw or model_latex,
+            latex=model_latex,
+            confidence=confidence,
+            kind=FORMULA,
+            ocr_confidence=ocr_confidence,
+            layout_confidence=layout_confidence,
+        )
+
+    @staticmethod
+    def _has_formula_structure(latex: str) -> bool:
+        """Reject text-like layout crops unless the model found real math structure."""
+        if re.search(r"\\(?:vec|overrightarrow|frac|sqrt|sum|prod|int|lim|pi|alpha|beta|theta|Delta|omega)\b", latex):
+            return True
+        operator_count = len(re.findall(r"(?<!\\)[=+*/-]|\\(?:times|div|cdot|pm|leq|geq|neq)\b", latex))
+        has_power = bool(re.search(r"\^\s*(?:\{[^{}]+\}|[A-Za-z0-9])", latex))
+        has_indexed_equation = "=" in latex and bool(re.search(r"_[{A-Za-z0-9]", latex))
+        return operator_count >= 2 or (has_power and operator_count >= 1) or has_indexed_equation
 
     def _printed_formulas(
         self,
@@ -1250,6 +2048,7 @@ class OCRPostprocessor:
         layout_regions: Optional[Dict[int, List[LayoutRegion]]],
         page_limits: Optional[Dict[int, int]] = None,
         recognize: bool = True,
+        formula_predictions: Optional[FormulaPredictions] = None,
     ) -> List[TextBlock]:
         """Replace a printed formula's text with its recognized LaTeX (#262), delimited («$...$»), or with the
         «[fórmula]» marker when nothing could be read from it with confidence - keeping the label before it («c)»).
@@ -1295,13 +2094,134 @@ class OCRPostprocessor:
             seen.add(key)
             prefix = self._LABEL_PREFIX.match(block.text.strip())
             lead = prefix.group(0).strip() + " " if prefix else ""
-            recognized = recognize_region(group_text[key]) if recognize else None
+            region = formulas[key[0]][key[1]]
+            model_latex = (formula_predictions or {}).get(formula_prediction_key(key[0], region.bbox))
+            group_blocks = [candidate for candidate, candidate_key in zip(blocks, homes) if candidate_key == key]
+            source_confidence = sum(candidate.confidence for candidate in group_blocks) / len(group_blocks)
+            recognized = (
+                self._recognized_formula_segment(
+                    group_text[key],
+                    model_latex,
+                    source_confidence,
+                    region.score,
+                )
+                if recognize else None
+            )
             if recognized is not None and recognized.kind == FORMULA and recognized.latex:
                 text = f"{lead}${recognized.latex}$"
             else:
                 text = f"{lead}[fórmula]"
-            out.append(replace(block, text=text))
-        return out
+            segments = []
+            if recognized is not None:
+                segments.append(recognized)
+            raw_text = " ".join(
+                candidate.raw_text if candidate.raw_text is not None else candidate.text
+                for candidate, candidate_key in zip(blocks, homes)
+                if candidate_key == key
+            )
+            out.append(replace(block, text=text, formula_segments=segments, raw_text=raw_text))
+
+        next_line_index = max((block.line_index for block in blocks), default=0) + 1
+        for page_index, regions in formulas.items():
+            for region_index, region in enumerate(regions):
+                key = (page_index, region_index)
+                if key in seen:
+                    continue
+                model_latex = (formula_predictions or {}).get(formula_prediction_key(page_index, region.bbox))
+                inline_parent = self._inline_formula_parent(region, out, page_index)
+                if inline_parent is not None:
+                    parent_index, parent, width_ratio = inline_parent
+                    if (width_ratio < self._INLINE_FORMULA_MIN_BLOCK_WIDTH_RATIO
+                            and region.label != "inline_vector_pair"):
+                        # Small layout boxes inside a text line are often individual
+                        # symbols, interval labels, or prose fragments. The text OCR
+                        # and inline-math parser retain the complete line; emitting
+                        # these boxes as separate formula blocks duplicates or corrupts it.
+                        continue
+                    recognized = self._recognized_formula_segment(
+                        "", model_latex, parent.confidence, region.score
+                    ) if recognize else None
+                    if recognized is not None and recognized.kind == FORMULA and recognized.latex:
+                        updated_text = self._replace_inline_formula_span(parent, region, recognized.latex)
+                        if updated_text is not None:
+                            out[parent_index] = replace(
+                                parent,
+                                text=updated_text,
+                                formula_segments=[*parent.formula_segments, recognized],
+                            )
+                            seen.add(key)
+                            continue
+                recognized = (
+                    self._recognized_formula_segment("", model_latex, None, region.score)
+                    if recognize else None
+                )
+                text = f"${recognized.latex}$" if recognized and recognized.latex else "[fórmula]"
+                out.append(TextBlock(
+                    text=text,
+                    confidence=0.0,
+                    bbox=tuple(int(round(value)) for value in region.bbox),
+                    page_index=page_index,
+                    line_index=next_line_index,
+                    formula_segments=[recognized] if recognized is not None else [],
+                    raw_text="",
+                ))
+                next_line_index += 1
+        return self._reading_order(out)
+
+    @classmethod
+    def _inline_formula_parent(
+        cls,
+        region: LayoutRegion,
+        blocks: List[TextBlock],
+        page_index: int,
+    ) -> Optional[Tuple[int, TextBlock, float]]:
+        """Find a text line that geometrically contains an inline formula crop."""
+        x1, y1, x2, y2 = region.bbox
+        candidates = []
+        for index, block in enumerate(blocks):
+            if block.page_index != page_index:
+                continue
+            bx1, by1, bx2, by2 = block.bbox
+            block_width = max(1, bx2 - bx1)
+            if x1 < bx1 or x2 > bx2 or (y1 + y2) / 2 < by1 or (y1 + y2) / 2 > by2:
+                continue
+            ratio = max(0, x2 - x1) / block_width
+            candidates.append((ratio, index, block))
+        if not candidates:
+            return None
+        ratio, index, block = max(candidates, key=lambda candidate: candidate[0])
+        return index, block, ratio
+
+    @staticmethod
+    def _replace_inline_formula_span(
+        block: TextBlock,
+        region: LayoutRegion,
+        latex: str,
+    ) -> Optional[str]:
+        """Replace the OCR text aligned to a wide inline math crop, preserving prose."""
+        x1, _, x2, _ = region.bbox
+        bx1, _, bx2, _ = block.bbox
+        width = max(1, bx2 - bx1)
+        length = len(block.text)
+        start = min(length, max(0, round((x1 - bx1) / width * length)))
+        end = min(length, max(start + 1, round((x2 - bx1) / width * length)))
+        text = block.text
+        while start < end and text[start].isspace():
+            start += 1
+        # Expand to the adjacent math token, but do not consume a preceding word.
+        while start > 0 and not text[start - 1].isspace() and text[start - 1] not in "(:,;":
+            start -= 1
+        # Layout boxes can be narrower than the OCR span for a superscript/vector.
+        # Extend only to a nearby clause delimiter so surrounding prose stays intact.
+        delimiter = re.search(r"[,;.]", text[end: end + 48])
+        if delimiter:
+            end += delimiter.start()
+        else:
+            while end < length and not text[end].isspace():
+                end += 1
+        if start >= end or not text[start:end].strip():
+            return None
+        return f"{text[:start]}${latex}${text[end:]}"
 
     @staticmethod
     def _far_right_of(block: TextBlock, lines: List[TextBlock], page_width: int) -> bool:
@@ -1362,11 +2282,21 @@ class OCRPostprocessor:
         def close() -> None:
             nonlocal draft
             if draft is not None:
+                if draft.stem_confidences:
+                    draft.question.text_confidence = sum(draft.stem_confidences) / len(draft.stem_confidences)
                 questions.append(self._build_question(draft, cotacao_map))
                 draft = None
 
         last_number = 0
-        for block in blocks:
+        current_page: Optional[int] = None
+        page_start_available = True
+        page_is_document_start = True
+        for block_index, block in enumerate(blocks):
+            if block.page_index != current_page:
+                page_is_document_start = current_page is None
+                current_page = block.page_index
+                page_start_available = True
+
             text = block.text.strip()
             if not text:
                 continue
@@ -1375,11 +2305,27 @@ class OCRPostprocessor:
             if self._is_coordination_block(text):
                 continue
 
-            question_info = self._detect_question_number(text, expected=last_number + 1)
+            expected_number = last_number + 1
+            question_info = self._detect_question_number(text, expected=expected_number)
+
+            # A new page may begin in the middle of an exam's numbering. Re-sync only on
+            # an explicit printed label; bare numbers remain ambiguous and cannot re-sync
+            # the page after a skipped question.
+            if page_start_available:
+                explicit = self._detect_question_number(text)
+                if explicit is not None and explicit[0] > last_number:
+                    question_info = explicit
+                elif question_info is None:
+                    # Bare numbers are accepted in the document's first page for
+                    # compatibility. At later page breaks, the expected bare number remains
+                    # valid; a non-sequential bare number cannot anchor the new page.
+                    question_info = None
+
             if question_info is not None:
                 close()
                 q_num, remainder = question_info
                 last_number = q_num
+                page_start_available = False
                 question = ExtractedQuestion(
                     number=str(q_num),
                     text="",
@@ -1392,13 +2338,38 @@ class OCRPostprocessor:
                 )
                 # "1) Quanto é 2 + 2? A)3 B)4 C)5 D)6": the options may share the line with the stem.
                 inline_here = self._split_inline_options(remainder, 0) if remainder else None
+                inline_alinea = None
                 if inline_here is not None:
                     remainder = inline_here[0]
                     question.options = [
                         ExtractedOption(option_label=label, option_text=option_text, confidence=block.confidence)
                         for label, option_text in inline_here[1]
                     ]
-                draft = _Draft(question=question, stem_parts=[remainder] if remainder else [])
+                elif remainder:
+                    inline_alinea = self._split_inline_initial_alinea(
+                        remainder,
+                        blocks[block_index + 1 :],
+                        block.page_index,
+                    )
+                    if inline_alinea is not None:
+                        remainder = inline_alinea[0]
+                draft = _Draft(
+                    question=question,
+                    stem_parts=[remainder] if remainder else [],
+                    stem_confidences=[block.confidence],
+                    raw_text_parts=[block.raw_text if block.raw_text is not None else block.text],
+                )
+                if inline_alinea is not None:
+                    _, item_text, item_raw = inline_alinea
+                    draft.alineas.append(_Alinea(
+                        label="a",
+                        parts=[item_text],
+                        confidences=[block.confidence],
+                        page_index=block.page_index,
+                        start_y=block.bbox[1],
+                        end_y=block.bbox[3],
+                        raw_parts=[item_raw],
+                    ))
                 has_image, image_desc = self._detect_image_reference(text)
                 if has_image:
                     question.has_image = True
@@ -1408,12 +2379,16 @@ class OCRPostprocessor:
             if draft is None:
                 continue
 
+            source_text = block.raw_text if block.raw_text is not None else block.text
+            if source_text:
+                draft.raw_text_parts.append(source_text)
+
             question = draft.question
             inline = None if draft.alineas else self._split_inline_options(text, len(question.options or []))
             if inline is not None:
                 lead, found = inline
                 if lead:
-                    self._append_part(draft, lead)
+                    self._append_part(draft, lead, block.confidence, block)
                 if question.options is None:
                     question.options = []
                 question.options.extend(
@@ -1425,7 +2400,15 @@ class OCRPostprocessor:
             alinea = self._detect_alinea(text, draft, cotacao_map)
             if alinea is not None:
                 label, remainder = alinea
-                draft.alineas.append(_Alinea(label=label, parts=[remainder] if remainder else []))
+                draft.alineas.append(_Alinea(
+                    label=label,
+                    parts=[remainder] if remainder else [],
+                    confidences=[block.confidence],
+                    page_index=block.page_index,
+                    start_y=block.bbox[1],
+                    end_y=block.bbox[3],
+                    raw_parts=[source_text],
+                ))
             elif self._is_option_block(text):
                 option = self._detect_option(text)
                 if option:
@@ -1437,9 +2420,9 @@ class OCRPostprocessor:
                         confidence=block.confidence,
                     ))
                 else:
-                    self._append_part(draft, text)
+                    self._append_part(draft, text, block.confidence, block)
             else:
-                self._append_part(draft, text)
+                self._append_part(draft, text, block.confidence, block)
 
             question.end_y = max(question.end_y, block.bbox[3])
             has_image, image_desc = self._detect_image_reference(text)
@@ -1449,6 +2432,44 @@ class OCRPostprocessor:
 
         close()
         return questions
+
+    def _split_inline_initial_alinea(
+        self,
+        remainder: str,
+        following_blocks: List[TextBlock],
+        page_index: int,
+    ) -> Optional[Tuple[str, str, str]]:
+        """Split an OCR-merged first alínea from a list-introduction stem.
+
+        OCR sometimes merges ``...sobre: a) ...`` into the question-number line.
+        Only split it when the stem ends in a colon, the next OCR block starts the
+        following ``b)`` item, and the prompt is not a multiple-choice instruction.
+        This avoids treating a lone ``A)`` answer option as a multipart item.
+        """
+        match = re.match(
+            r"^(?P<stem>.+?:)\s*\(?(?P<label>[aA])\)?[.):]\s*(?P<item>\S.*)$",
+            remainder.strip(),
+        )
+        if match is None:
+            return None
+
+        prompt = match.group("stem").lower()
+        if any(keyword in prompt for keyword in self.QUESTION_TYPE_KEYWORDS[QuestionType.MULTIPLA_ESCOLHA]):
+            return None
+
+        next_item = next((
+            candidate
+            for candidate in following_blocks[:3]
+            if candidate.page_index == page_index and candidate.text.strip()
+        ), None)
+        if next_item is None or self._detect_subitem_with_text(next_item.text) is None:
+            return None
+        label, _ = self._detect_subitem_with_text(next_item.text) or ("", "")
+        if label.lower() != "b)":
+            return None
+
+        item_raw = remainder[match.start("label") :].strip()
+        return match.group("stem").rstrip(), match.group("item").strip(), item_raw
 
     _UNIT_END = re.compile(r"\(\s*\d+(?:[.,]\d+)?\s*valores?\s*\)\s*\.?\s*$", re.IGNORECASE)
 
@@ -1579,11 +2600,27 @@ class OCRPostprocessor:
         return text[:chosen[0].start()].strip(), found
 
     @staticmethod
-    def _append_part(draft: "_Draft", text: str) -> None:
+    def _append_part(
+        draft: "_Draft",
+        text: str,
+        confidence: Optional[float] = None,
+        block: Optional[TextBlock] = None,
+    ) -> None:
         if draft.alineas:
-            draft.alineas[-1].parts.append(text)
+            alinea = draft.alineas[-1]
+            alinea.parts.append(text)
+            if block is not None:
+                source_text = block.raw_text if block.raw_text is not None else block.text
+                if source_text:
+                    alinea.raw_parts.append(source_text)
+            if confidence is not None:
+                alinea.confidences.append(confidence)
+            if block is not None and block.page_index == alinea.page_index:
+                alinea.end_y = max(alinea.end_y, block.bbox[3])
         else:
             draft.stem_parts.append(text)
+            if confidence is not None:
+                draft.stem_confidences.append(confidence)
 
     def _detect_alinea(
         self,
@@ -1665,6 +2702,10 @@ class OCRPostprocessor:
                 except ValueError:
                     continue
                 remainder = text[match.end():].strip()
+                # A compact hyphenated expression such as ``4-2(-2)^2`` is more
+                # likely arithmetic than a numbered stem; do not let it anchor a page.
+                if match.group(0).endswith("-") and remainder[:1].isdigit():
+                    continue
                 # Whole words: "classifique" is not the "classe" of a header line.
                 if remainder and re.search(
                     r"\b(?:classe|class|ano\s+lectivo|ano\s+letivo|dura[çc][ãa]o)\b", remainder, re.IGNORECASE
@@ -1710,7 +2751,7 @@ class OCRPostprocessor:
                     option_label=chr(ord("A") + i),
                     # a lone "X" after an option is the mark of the answer the teacher ticked, not part of it
                     option_text=re.sub(r"\s+[xX×]$", "", sub.text).strip(),
-                    confidence=question.text_confidence,
+                    confidence=sub.confidence if sub.confidence is not None else question.text_confidence,
                 )
                 for i, sub in enumerate(subs)
             ]
@@ -1755,6 +2796,7 @@ class OCRPostprocessor:
 
         question.subitems = [f"{sub.label})" for sub in subs]
         question.subitems_content = subs
+        question.raw_text = " ".join(part for part in draft.raw_text_parts if part).strip()
         self._finalize_question(question, cotacao_map)
         return question
 
@@ -1794,7 +2836,20 @@ class OCRPostprocessor:
             # Before the general cleaning: that one would strip "2 valores" and leave an empty "()" behind.
             raw = self._remove_inline_cotacao(raw)
         text = self._clean_text(raw)
-        return SubitemContent(label=alinea.label, text=self._clean_footer_garbage(text), cotacao=cotacao)
+        confidence = (
+            sum(alinea.confidences) / len(alinea.confidences)
+            if alinea.confidences else None
+        )
+        return SubitemContent(
+            label=alinea.label,
+            text=self._clean_footer_garbage(text),
+            cotacao=cotacao,
+            confidence=confidence,
+            page_index=alinea.page_index,
+            start_y=alinea.start_y,
+            end_y=alinea.end_y,
+            raw_text=" ".join(part for part in alinea.raw_parts if part).strip(),
+        )
 
     def _is_true_false(self, stem: str, subs: List[SubitemContent]) -> bool:
         """V/F when the statement says so, or when most alíneas end in an empty "( )" to be ticked."""
@@ -2127,6 +3182,7 @@ class OCRPostprocessor:
         layout_regions: Optional[Dict[int, List[LayoutRegion]]] = None,
         formula_images: bool = False,
         page_limits: Optional[Dict[int, int]] = None,
+        footer_blocks: Optional[List[TextBlock]] = None,
     ) -> List[ImageToUpload]:
         """Detect regions that should be uploaded as images.
 
@@ -2217,26 +3273,45 @@ class OCRPostprocessor:
                         source_file_index=source_file_index(question.page_index),
                     ))
 
-        # Check for coordination/signature at footer
-        for pattern in self.PATTERNS["coordination"]:
-            if re.search(pattern, full_text.lower()):
-                page_index = max((b.page_index for b in blocks), default=0)
-                footer_blocks = [b for b in blocks if b.page_index == page_index][-5:]
-                footer_start = min((b.bbox[1] for b in footer_blocks), default=0)
-                footer_end = max((b.bbox[3] for b in footer_blocks), default=footer_start)
-                bbox = region_bbox(page_index, footer_start, footer_end)
-                source_width, source_height = dimensions(page_index)
-                images.append(ImageToUpload(
-                    suggested_filename=f"{base_name}-assinatura-coordenacao.png",
-                    description="Assinatura da coordenação no rodapé da prova com texto A COORDENAÇÃO",
-                    region="rodape",
-                    bbox=bbox,
-                    page_index=page_index,
-                    source_width=source_width,
-                    source_height=source_height,
-                    source_file_index=source_file_index(page_index),
-                ))
-                break
+        # Preserve the original footer as one full-width crop. OCR text from that area is separately returned
+        # as zoned unmapped content; it must never be appended to the last question.
+        page_index = max((b.page_index for b in footer_blocks or []), default=-1)
+        footer_page_blocks = [b for b in footer_blocks or [] if b.page_index == page_index]
+        if footer_page_blocks:
+            footer_start = min(b.bbox[1] for b in footer_page_blocks)
+            source_width, source_height = dimensions(page_index)
+            bbox = (0, max(0, footer_start - 24), source_width or 1, source_height or max(b.bbox[3] for b in footer_page_blocks))
+            images.append(ImageToUpload(
+                suggested_filename=f"{base_name}-rodape-original.png",
+                description="Rodapé original preservado fora das questões",
+                region="rodape",
+                bbox=bbox,
+                page_index=page_index,
+                source_width=source_width,
+                source_height=source_height,
+                source_file_index=source_file_index(page_index),
+            ))
+        else:
+            # Legacy/fallback path for scans without a cotação line or without known page dimensions.
+            for pattern in self.PATTERNS["coordination"]:
+                if re.search(pattern, full_text.lower()):
+                    page_index = max((b.page_index for b in blocks), default=0)
+                    signature_blocks = [b for b in blocks if b.page_index == page_index]
+                    footer_start = min((b.bbox[1] for b in signature_blocks[-5:]), default=0)
+                    _, source_height = dimensions(page_index)
+                    bbox = region_bbox(page_index, footer_start, source_height or max((b.bbox[3] for b in signature_blocks), default=footer_start))
+                    source_width, source_height = dimensions(page_index)
+                    images.append(ImageToUpload(
+                        suggested_filename=f"{base_name}-assinatura-coordenacao.png",
+                        description="Assinatura da coordenação no rodapé da prova",
+                        region="rodape",
+                        bbox=bbox,
+                        page_index=page_index,
+                        source_width=source_width,
+                        source_height=source_height,
+                        source_file_index=source_file_index(page_index),
+                    ))
+                    break
 
         return images
 
@@ -2314,8 +3389,8 @@ class OCRPostprocessor:
                     continue  # the signature and the logos of the footer
                 if (page_limits or {}).get(page_index) is not None and y1 >= page_limits[page_index]:
                     continue  # below the cotação line: the stamp, the signature, scribbles in the free space
-                inside = sum(self._overlap(b.bbox, region.bbox) for b in page_blocks)
-                if region.kind == "figure" and area and inside > 0.5 * area:
+                text_cover = max((self._overlap(b.bbox, region.bbox) for b in page_blocks), default=0)
+                if region.kind == "figure" and area and text_cover > 0.5 * area:
                     continue  # mostly text: the layout model took a paragraph for a picture
                 if region.kind == "formula" and (not formula_images or region.handwritten or region.score < 0.5):
                     continue  # formulas are cropped on request, and never the ones in a student's pen
@@ -2428,7 +3503,10 @@ class OCRPostprocessor:
         instructions and the first question (a quoted introduction, for instance)."""
         unmapped: List[UnmappedContent] = []
         for block, reason in (noise or []):
-            unmapped.append(UnmappedContent(block.page_index, block.text.strip(), block.confidence, reason))
+            zone = "rodape" if reason == "Conteúdo do rodapé preservado fora das questões" else None
+            unmapped.append(UnmappedContent(
+                block.page_index, block.text.strip(), block.confidence, reason, block.bbox, zone,
+            ))
 
         if not questions:
             # Nothing was structured. Keep what the OCR read in the response so the caller still
@@ -2513,6 +3591,22 @@ class OCRPostprocessor:
                     field=f"question_{question.number}",
                     confidence=question.question_type_confidence,
                 ))
+
+            for index, formula in enumerate(question.formulas, start=1):
+                if formula.kind == "unrecognized":
+                    warnings.append(Warning(
+                        code="UNRECOGNIZED_FORMULA",
+                        field=f"question_{question.number}_formula_{index}",
+                        confidence=formula.confidence,
+                        message="A fórmula foi detectada, mas o texto OCR não permite reconstruí-la com confiança.",
+                    ))
+                elif formula.confidence < self.low_confidence_threshold:
+                    warnings.append(Warning(
+                        code="LOW_CONFIDENCE_FORMULA",
+                        field=f"question_{question.number}_formula_{index}",
+                        confidence=formula.confidence,
+                        message="A fórmula reconhecida precisa de revisão.",
+                    ))
 
         return warnings
 

@@ -6,13 +6,17 @@ formulas) that the postprocessor ties to the questions. PaddleOCR-VL is availabl
 """
 
 import asyncio
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
-from typing import Optional, List, Dict, Any, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Optional, List, Dict, Any, Tuple, Callable
 import hashlib
+import re
 import uuid
+import unicodedata
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -25,6 +29,7 @@ from app.ocr.preprocessing import (
 )
 from app.ocr.ink import is_handwriting
 from app.ocr.layout import LayoutDetector, LayoutRegion
+from app.ocr.formula_model import FormulaImageRecognizer, normalize_model_latex
 from app.ocr.postprocessing import (
     OCRPostprocessor,
     TextBlock,
@@ -34,6 +39,8 @@ from app.ocr.postprocessing import (
     UnmappedContent,
     Warning,
     detect_language,
+    formula_prediction_key,
+    FormulaPredictions,
 )
 
 import structlog
@@ -64,6 +71,18 @@ class DocumentInfo:
 
 
 @dataclass
+class PageOcrContext:
+    """Internal OCR evidence needed to structure multi-page questions as one document."""
+    page_index: int
+    source_file_index: int
+    text_blocks: List[TextBlock]
+    layout_regions: Optional[List[LayoutRegion]]
+    width: int
+    height: int
+    formula_predictions: FormulaPredictions = field(default_factory=dict)
+
+
+@dataclass
 class OCRResult:
     """Complete OCR extraction result."""
     status: str  # "success", "partial", "error"
@@ -81,6 +100,8 @@ class OCRResult:
     # first page (multi-page merges keep only this one - the metadata is mainly a signal for
     # "is this submission worth a retake photo", not something every page needs separately).
     preprocessing: Optional[Dict[str, Any]] = None
+    timings: Optional[Dict[str, float]] = None
+    page_context: Optional[PageOcrContext] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -115,6 +136,7 @@ class OCRResult:
             ],
             "unmappedContent": [u.to_dict() for u in self.unmapped_content],
             "warnings": [w.to_dict() for w in self.warnings],
+            **({"timings": self.timings} if self.timings else {}),
             **({"errorMessage": self.error_message} if self.error_message else {}),
         }
 
@@ -165,6 +187,7 @@ class OCREngine:
         self._fallback_ocr = None
         self._vl = None
         self._layout = LayoutDetector(use_gpu=use_gpu, enable_mkldnn=settings.ocr_enable_mkldnn)
+        self._formula_recognizer = FormulaImageRecognizer()
         self._initialized = False
         self._executor = ThreadPoolExecutor(max_workers=settings.workers)
 
@@ -183,6 +206,233 @@ class OCREngine:
         self.postprocessor = OCRPostprocessor(
             min_confidence_threshold=settings.min_confidence_threshold,
         )
+
+    def _recognize_formula_regions(
+        self,
+        image: np.ndarray,
+        regions: Optional[List[LayoutRegion]],
+        request_id: str,
+        page_index: int,
+    ) -> FormulaPredictions:
+        if not settings.ocr_formula_latex or not settings.ocr_formula_model_enabled or not regions:
+            return {}
+        candidates = [
+            region for region in regions
+            if region.kind == "formula" and not region.handwritten
+            and region.score >= settings.ocr_layout_min_score
+        ]
+        crops = []
+        tight_crops = []
+        usable = []
+        height, width = image.shape[:2]
+        for region in candidates:
+            raw_x1, raw_y1, raw_x2, raw_y2 = (int(round(value)) for value in region.bbox)
+            if raw_x2 <= raw_x1 or raw_y2 <= raw_y1:
+                continue
+            tight_crops.append(image[raw_y1:raw_y2, raw_x1:raw_x2].copy())
+            x1, y1, x2, y2 = raw_x1, raw_y1, raw_x2, raw_y2
+            pad = max(4, int(round(min(max(1, x2 - x1), max(1, y2 - y1)) * 0.06)))
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(width, x2 + pad), min(height, y2 + pad)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crops.append(image[y1:y2, x1:x2].copy())
+            usable.append(region)
+        recognized = self._formula_recognizer.recognize(crops)
+        retry_indices = [
+            index for index, latex in enumerate(recognized)
+            if latex and (
+                re.match(r"^\\imath(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", latex)
+                or re.match(r"^\\boxed\{.*\\(?:vec|overrightarrow)\{[A-Za-z]\}", latex)
+                or re.match(r"^\\mid(?=\\(?:vec|overrightarrow)\{[A-Za-z]\})", latex)
+            )
+        ]
+        if retry_indices:
+            tight_predictions = self._formula_recognizer.recognize(
+                [tight_crops[index] for index in retry_indices]
+            )
+            for index, tight_prediction in zip(retry_indices, tight_predictions):
+                recognized[index] = FormulaImageRecognizer.reconcile_vector_prefix(
+                    recognized[index],
+                    tight_prediction,
+                )
+        predictions = {
+            formula_prediction_key(page_index, region.bbox): latex
+            for region, latex in zip(usable, recognized)
+            if latex
+        }
+        logger.info(
+            "Formula regions recognized",
+            request_id=request_id,
+            candidates=len(usable),
+            recognized=len(predictions),
+        )
+        return predictions
+
+    def _recognize_inline_vector_pairs(
+        self,
+        image: np.ndarray,
+        text_blocks: List[TextBlock],
+        request_id: str,
+        page_index: int,
+    ) -> Tuple[List[LayoutRegion], FormulaPredictions]:
+        """Recover vector symbols that sit inline after a printed 'angle between vectors' phrase.
+
+        The layout model often misses the small arrows above inline symbols. The text OCR still gives us a
+        bounded line and the phrase that identifies the expected pair, so FormulaNet sees only the pixels after
+        that phrase. A result is accepted only if it independently reads exactly ``v e a`` with vector marks;
+        otherwise no symbols are synthesized.
+        """
+        if not settings.ocr_formula_latex or not settings.ocr_formula_model_enabled:
+            return [], {}
+
+        regions: List[LayoutRegion] = []
+        crops: List[np.ndarray] = []
+        height, width = image.shape[:2]
+        for block in text_blocks:
+            normalized = unicodedata.normalize("NFD", block.text.casefold())
+            normalized = re.sub(r"[\u0300-\u036f]", "", normalized)
+            phrase = re.search(r"\bangulo\b.*?\bentre\s+(?:os\s+)?(?:vectores?|vectors?)\b", normalized)
+            if not phrase or block.page_index != page_index:
+                continue
+
+            vector_marker = re.search(r"\b(?:vectores?|vectors?)\b", normalized[phrase.start():phrase.end()])
+            if not vector_marker:
+                continue
+            vector_end = phrase.start() + vector_marker.end()
+            source_length = max(1, len(block.text))
+            x1, y1, x2, y2 = (int(round(value)) for value in block.bbox)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            # Preserve the prose word and the detected line's reading order. The recognition crop gets a small
+            # left pad; the synthetic region begins after that word so replacement cannot consume "vectores".
+            replacement_index = vector_end
+            while replacement_index < len(block.text) and block.text[replacement_index].isspace():
+                replacement_index += 1
+            region_x1 = x1 + round(replacement_index / source_length * (x2 - x1))
+            vector_end_x = x1 + round(vector_end / source_length * (x2 - x1))
+            recognition_x1 = max(x1, vector_end_x - max(4, round((y2 - y1) * 0.22)))
+            recognition_x2 = min(x2, x1 + round(min(len(block.text), replacement_index + 8) / source_length * (x2 - x1)))
+            vertical_pad = max(4, round((y2 - y1) * 0.3))
+            crop_y1 = max(0, y1 - vertical_pad)
+            crop_y2 = min(height, y2 + vertical_pad)
+            recognition_x2 = max(recognition_x1 + 1, recognition_x2)
+            crop = image[crop_y1:crop_y2, recognition_x1:recognition_x2]
+            if crop.size == 0:
+                continue
+
+            crops.append(cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC))
+            regions.append(LayoutRegion(
+                kind="formula",
+                label="inline_vector_pair",
+                score=0.55,
+                bbox=(region_x1, y1, recognition_x2, y2),
+            ))
+
+        if not crops:
+            return [], {}
+
+        predictions: FormulaPredictions = {}
+        accepted_regions: List[LayoutRegion] = []
+        first_pass = self._formula_recognizer.recognize(crops)
+        unresolved = [index for index, value in enumerate(first_pass) if not self._canonical_vector_pair(value)]
+        threshold_crops = []
+        for index in unresolved:
+            crop = crops[index]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            margin = min(binary.shape[1] - 1, max(1, round(binary.shape[0] * 0.08)))
+            thresholded = cv2.cvtColor(binary[:, margin:], cv2.COLOR_GRAY2BGR)
+            threshold_crops.append(thresholded)
+        threshold_results = self._formula_recognizer.recognize(threshold_crops) if threshold_crops else []
+        thresholded = dict(zip(unresolved, threshold_results))
+        for index, (region, raw_latex) in enumerate(zip(regions, first_pass)):
+            latex = self._canonical_vector_pair(raw_latex)
+            if not latex and index in thresholded:
+                latex = self._canonical_vector_pair(thresholded[index])
+            if latex:
+                predictions[formula_prediction_key(page_index, region.bbox)] = latex
+                accepted_regions.append(region)
+
+        logger.info(
+            "Inline vector pairs recognized",
+            request_id=request_id,
+            candidates=len(regions),
+            recognized=len(predictions),
+        )
+        return accepted_regions, predictions
+
+    @staticmethod
+    def _canonical_vector_pair(raw_latex: Optional[str]) -> Optional[str]:
+        latex = normalize_model_latex(raw_latex)
+        if not latex:
+            return None
+        latex = re.sub(r"\\\\\s*", " ", latex)
+        latex = re.sub(r"\\[;,!:]\s*", " ", latex)
+        latex = re.sub(r"\{\s*(\\vec\{[va]\})\s*\}", r"\1", latex)
+        latex = re.sub(r"\s+", " ", latex).strip()
+        latex = re.sub(
+            r"(\\vec\{v\})\s*\\vec\{e\}\s*(\\vec\{a\})",
+            r"\1 e \2",
+            latex,
+            flags=re.IGNORECASE,
+        )
+        if not re.fullmatch(r"\\vec\{v\}\s*e\s*\\vec\{a\}", latex, re.IGNORECASE):
+            return None
+        return r"\vec{v}\;e\;\vec{a}"
+
+    @staticmethod
+    def _merge_fallback_formula_predictions(
+        primary_regions: Optional[List[LayoutRegion]],
+        primary_predictions: FormulaPredictions,
+        fallback_regions: Optional[List[LayoutRegion]],
+        fallback_predictions: FormulaPredictions,
+        page_index: int,
+    ) -> FormulaPredictions:
+        """Keep formula reads from the enhanced image when fallback OCR uses the raw photo.
+
+        The fallback detector is better at recovering faint prose, but its formula
+        crops can lose contrast or become clipped. Layout boxes can shift slightly
+        between the two image frames, so match them by overlap rather than exact keys.
+        An explicit fallback prediction remains authoritative; a primary prediction
+        only fills a missing result for the same printed region.
+        """
+        merged = dict(fallback_predictions)
+        primary = [
+            (region, primary_predictions.get(formula_prediction_key(page_index, region.bbox)))
+            for region in primary_regions or []
+            if region.kind == "formula" and not region.handwritten
+        ]
+        for fallback in fallback_regions or []:
+            if fallback.kind != "formula" or fallback.handwritten:
+                continue
+            fallback_key = formula_prediction_key(page_index, fallback.bbox)
+            if merged.get(fallback_key):
+                continue
+
+            best_prediction = None
+            best_overlap = 0.0
+            fx1, fy1, fx2, fy2 = fallback.bbox
+            fallback_area = max(1, (fx2 - fx1) * (fy2 - fy1))
+            for primary_region, prediction in primary:
+                if not prediction:
+                    continue
+                px1, py1, px2, py2 = primary_region.bbox
+                intersection = max(0, min(fx2, px2) - max(fx1, px1)) * max(
+                    0, min(fy2, py2) - max(fy1, py1)
+                )
+                smaller_area = min(
+                    fallback_area,
+                    max(1, (px2 - px1) * (py2 - py1)),
+                )
+                overlap = intersection / smaller_area
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_prediction = prediction
+            if best_overlap >= 0.6 and best_prediction:
+                merged[fallback_key] = best_prediction
+        return merged
 
     def initialize(self) -> None:
         """
@@ -401,9 +651,24 @@ class OCREngine:
 
     @staticmethod
     def _numbering_has_gaps(questions: List[ExtractedQuestion]) -> bool:
-        """Questions numbered 1, 4, 5 are missing two: the lines that carried the numbers were not read."""
+        """Detect gaps within a page without assuming its first question is numbered one."""
         numbers = [int(q.number) for q in questions if str(q.number).isdigit()]
-        return bool(numbers) and numbers != list(range(1, len(numbers) + 1))
+        return bool(numbers) and numbers != list(range(numbers[0], numbers[0] + len(numbers)))
+
+    @staticmethod
+    def _may_have_missing_first_subitem(questions: List[ExtractedQuestion]) -> bool:
+        """Flag an instruction ending in a colon when its extracted list begins after ``a``.
+
+        This is a focused signal for a missed first row, not an assumption that every list must begin at a.
+        Some exam questions intentionally start at c) or d), usually without a colon-led list instruction.
+        """
+        for question in questions:
+            if not question.subitems_content or not question.text.strip().endswith(":"):
+                continue
+            first = question.subitems_content[0].label.lower().strip()
+            if first in {"b", "c", "d"}:
+                return True
+        return False
 
     def _detect_layout(self, image: np.ndarray, request_id: str) -> Optional[List[LayoutRegion]]:
         """Figures, tables and formulas of the page; None when the layout was not run (disabled or failed).
@@ -477,6 +742,7 @@ class OCREngine:
         page_index: int = 0,
         request_id: Optional[str] = None,
         source_file_index: int = 0,
+        native_text_page: Optional[Dict[str, Any]] = None,
     ) -> OCRResult:
         """
         Process a single image and extract text with structure.
@@ -489,7 +755,7 @@ class OCREngine:
         Returns:
             OCRResult with extracted data
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
         logger.info(
@@ -501,7 +767,9 @@ class OCREngine:
 
         try:
             # Preprocess the image
+            preprocessing_started = time.perf_counter()
             preprocessing_result = self.preprocessor.preprocess(image)
+            preprocessing_ms = (time.perf_counter() - preprocessing_started) * 1000
             processed_image = preprocessing_result.image
 
             preprocessing_meta: Dict[str, Any] = {
@@ -543,13 +811,81 @@ class OCREngine:
                 ))
 
             # Run OCR: text lines, and the layout that says where the figures are
-            if settings.ocr_pipeline == "vl":
+            ocr_started = time.perf_counter()
+            native_lines = (native_text_page or {}).get("lines") or []
+            native_gap_count = sum(
+                1 for line in native_lines
+                if re.search(r"\S[ \t]{3,}\S", str(line.get("text", "")))
+            )
+            native_usable = (
+                len(native_lines) >= 3
+                and sum(len(str(line.get("text", "")).strip()) for line in native_lines) >= 80
+            )
+            if native_usable:
+                page_width = float((native_text_page or {}).get("width") or 0)
+                page_height = float((native_text_page or {}).get("height") or 0)
+                # Native text coordinates belong to the source PDF page. Keep the
+                # unmodified render as the layout/crop frame so preprocessing cannot
+                # shift formula and figure associations away from their source region.
+                analysis_image = image
+                image_height, image_width = analysis_image.shape[:2]
+                text_blocks = []
+                for line_index, line in enumerate(native_lines):
+                    try:
+                        x0, y0, x1, y1 = line["bbox"]
+                        bbox = (
+                            round(float(x0) * image_width / page_width),
+                            round(float(y0) * image_height / page_height),
+                            round(float(x1) * image_width / page_width),
+                            round(float(y1) * image_height / page_height),
+                        )
+                        text_blocks.append(TextBlock(
+                            text=str(line["text"]), confidence=0.99, bbox=bbox,
+                            page_index=page_index, line_index=line_index,
+                        ))
+                    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                        continue
+                layout = self._detect_layout(analysis_image, request_id)
+            elif settings.ocr_pipeline == "vl":
                 text_blocks, layout = self._run_vl(processed_image, page_index)
+                analysis_image = processed_image
             else:
                 raw_results = self._run_ocr(processed_image)
                 text_blocks = self._parse_ocr_results(raw_results, page_index)
                 layout = self._detect_layout(processed_image, request_id)
+                analysis_image = processed_image
             text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
+
+            formula_started = time.perf_counter()
+            # FormulaNet is sensitive to the denoising/contrast pass: on clean,
+            # geometrically unchanged pages it can turn vector arrows into bars
+            # and split subscripts. Use original pixels while retaining the layout
+            # coordinate frame; transformed pages must use the matching processed
+            # frame to avoid cropping the wrong location.
+            formula_image = analysis_image
+            if (
+                not native_usable
+                and not preprocessing_result.sheet_cropped
+                and abs(preprocessing_result.rotation_angle) < 0.05
+                and image.shape[:2] == processed_image.shape[:2]
+            ):
+                formula_image = image
+            formula_predictions = self._recognize_formula_regions(
+                formula_image,
+                layout,
+                request_id,
+                page_index,
+            )
+            vector_regions, vector_predictions = self._recognize_inline_vector_pairs(
+                formula_image,
+                text_blocks,
+                request_id,
+                page_index,
+            )
+            if vector_regions:
+                layout = [*(layout or []), *vector_regions]
+                formula_predictions.update(vector_predictions)
+            formula_recognition_ms = (time.perf_counter() - formula_started) * 1000
 
             logger.debug(
                 "OCR complete",
@@ -563,10 +899,16 @@ class OCREngine:
             # Detect language
             full_text = " ".join(b.text for b in text_blocks)
             main_language = detect_language(full_text) if full_text else self.lang
+            ocr_ms = max(0.0, (time.perf_counter() - ocr_started) * 1000 - formula_recognition_ms)
 
             # Postprocess to extract structured data. The boxes are in the preprocessed image's frame (deskew
             # can grow the canvas by a few pixels), so that is the size the crops are scaled from.
-            def interpret(blocks: List[TextBlock], frame: np.ndarray = processed_image, regions=layout):
+            def interpret(
+                blocks: List[TextBlock],
+                frame: np.ndarray = analysis_image,
+                regions=layout,
+                predictions: FormulaPredictions = formula_predictions,
+            ):
                 return self.postprocessor.process(
                     blocks,
                     page_count=1,
@@ -575,9 +917,12 @@ class OCREngine:
                     layout_regions=None if regions is None else {page_index: regions},
                     formula_images=settings.ocr_formula_images,
                     recognize_formulas=settings.ocr_formula_latex,
+                    formula_predictions=predictions,
                 )
 
+            parsing_started = time.perf_counter()
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
+            parsing_ms = time.perf_counter() - parsing_started
 
             # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
             # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
@@ -587,17 +932,63 @@ class OCREngine:
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
-                and (len(questions) < settings.ocr_min_questions or self._numbering_has_gaps(questions))
+                and (
+                    len(questions) < settings.ocr_min_questions
+                    or self._numbering_has_gaps(questions)
+                    or self._may_have_missing_first_subitem(questions)
+                )
             ):
                 logger.info("Reading again with the fallback detector", request_id=request_id, questions=len(questions))
+                fallback_ocr_started = time.perf_counter()
                 retry_blocks = self._parse_ocr_results(self._run_ocr(image, fallback=True), page_index)
                 retry_layout = self._detect_layout(image, request_id)
                 retry_blocks, retry_layout = self._mark_handwriting(image, image, retry_blocks, retry_layout)
-                retry = interpret(retry_blocks, image, retry_layout)
+                retry_formula_started = time.perf_counter()
+                retry_formula_predictions = self._recognize_formula_regions(
+                    image,
+                    retry_layout,
+                    request_id,
+                    page_index,
+                )
+                retry_vector_regions, retry_vector_predictions = self._recognize_inline_vector_pairs(
+                    image,
+                    retry_blocks,
+                    request_id,
+                    page_index,
+                )
+                if retry_vector_regions:
+                    retry_layout = [*(retry_layout or []), *retry_vector_regions]
+                    retry_formula_predictions.update(retry_vector_predictions)
+                retry_formula_ms = (time.perf_counter() - retry_formula_started) * 1000
+                formula_recognition_ms += retry_formula_ms
+                ocr_ms += max(0.0, (time.perf_counter() - fallback_ocr_started) * 1000 - retry_formula_ms)
+                fallback_parse_started = time.perf_counter()
+                retry = interpret(retry_blocks, image, retry_layout, retry_formula_predictions)
+                parsing_ms += time.perf_counter() - fallback_parse_started
                 if len(retry[1]) > len(questions) or (
                     len(retry[1]) == len(questions) and self._numbering_has_gaps(questions) and not self._numbering_has_gaps(retry[1])
+                ) or (
+                    len(retry[1]) == len(questions)
+                    and self._may_have_missing_first_subitem(questions)
+                    and not self._may_have_missing_first_subitem(retry[1])
                 ):
+                    retry_formula_predictions = self._merge_fallback_formula_predictions(
+                        layout,
+                        formula_predictions,
+                        retry_layout,
+                        retry_formula_predictions,
+                        page_index,
+                    )
+                    retry = interpret(
+                        retry_blocks,
+                        image,
+                        retry_layout,
+                        retry_formula_predictions,
+                    )
                     text_blocks = retry_blocks
+                    layout = retry_layout
+                    analysis_image = image
+                    formula_predictions = retry_formula_predictions
                     metadata, questions, images_to_upload, unmapped, warnings = retry
 
             # Calculate confidence
@@ -605,7 +996,13 @@ class OCREngine:
                 text_blocks, metadata, questions
             )
 
-            warnings = [*legibility_warnings, *warnings]
+            native_text_warnings = ([Warning(
+                code="NATIVE_TEXT_GAP",
+                field="formulas",
+                confidence=0.0,
+                message="O texto do PDF contém espaços que podem corresponder a fórmulas ou símbolos não extraídos. Confirme estes trechos com o documento original.",
+            )] if native_gap_count else [])
+            warnings = [*legibility_warnings, *native_text_warnings, *warnings]
 
             # Determine status
             error_message = None
@@ -618,12 +1015,20 @@ class OCREngine:
                     if not preprocessing_result.is_legible
                     else "No text could be extracted from the image"
                 )
+            elif not questions:
+                status = "partial"
+                warnings.append(Warning(
+                    code="NO_QUESTIONS",
+                    field="questions",
+                    confidence=overall_confidence,
+                    message="Foi lido texto, mas não foi possível estruturar questões nesta página.",
+                ))
             elif overall_confidence < 0.5:
                 status = "partial"
             else:
                 status = "success"
 
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             result = OCRResult(
                 status=status,
@@ -642,6 +1047,22 @@ class OCREngine:
                 warnings=warnings,
                 error_message=error_message,
                 preprocessing=preprocessing_meta,
+                timings={
+                    "preprocessingMs": round(preprocessing_ms, 1),
+                    "ocrMs": round(ocr_ms, 1),
+                    "formulaRecognitionMs": round(formula_recognition_ms, 1),
+                    "parsingMs": round(parsing_ms * 1000, 1),
+                    "totalMs": round((time.perf_counter() - start_time) * 1000, 1),
+                },
+                page_context=PageOcrContext(
+                    page_index=page_index,
+                    source_file_index=source_file_index,
+                    text_blocks=list(text_blocks),
+                    layout_regions=list(layout) if layout is not None else None,
+                    formula_predictions=formula_predictions,
+                    width=int(analysis_image.shape[1]),
+                    height=int(analysis_image.shape[0]),
+                ),
             )
 
             logger.info(
@@ -656,7 +1077,7 @@ class OCREngine:
             return result
 
         except Exception as e:
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             logger.error(
                 "Image processing failed",
@@ -676,6 +1097,7 @@ class OCREngine:
                 unmapped_content=[],
                 warnings=[],
                 error_message="Image processing failed",
+                timings={"totalMs": round((time.perf_counter() - start_time) * 1000, 1)},
             )
 
     async def process_image_async(
@@ -712,8 +1134,19 @@ class OCREngine:
         request_id: Optional[str] = None,
         source_file_indices: Optional[List[int]] = None,
     ) -> OCRResult:
+        return self.process_images_with_progress(images, request_id, source_file_indices)
+
+    def process_images_with_progress(
+        self,
+        images: List[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        on_page_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancelled: Optional[threading.Event] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+    ) -> OCRResult:
         """
-        Process multiple images (multi-page document).
+        Process pages sequentially and report measured completion after each page.
 
         Args:
             images: List of images as numpy arrays
@@ -722,7 +1155,7 @@ class OCREngine:
         Returns:
             Combined OCRResult with data from all pages
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
         logger.info(
@@ -753,8 +1186,20 @@ class OCREngine:
         has_tables = False
         languages = []
         read_any_text = False
+        has_partial_page = False
+        has_partial_content_page = False
+        has_unreadable_page = False
+        page_contexts: List[PageOcrContext] = []
+        page_timings: Dict[str, float] = {
+            "preprocessingMs": 0.0,
+            "ocrMs": 0.0,
+            "formulaRecognitionMs": 0.0,
+            "parsingMs": 0.0,
+        }
 
         for idx, image in enumerate(images):
+            if cancelled is not None and cancelled.is_set():
+                break
             result = self.process_image(
                 image,
                 page_index=idx,
@@ -762,12 +1207,22 @@ class OCREngine:
                 source_file_index=(source_file_indices[idx]
                                    if source_file_indices and idx < len(source_file_indices)
                                    else 0),
+                native_text_page=(native_text_pages[idx]
+                                  if native_text_pages and idx < len(native_text_pages)
+                                  else None),
             )
 
             # ``process_image`` only marks ``error`` when it saw no text blocks at all, so a
             # page that is not an error did read text, even if it became no question.
             if result.status != "error":
                 read_any_text = True
+            has_partial_page = has_partial_page or result.status == "partial"
+            has_partial_content_page = has_partial_content_page or (
+                result.status == "partial" and bool(result.questions)
+            )
+            has_unreadable_page = has_unreadable_page or result.status == "error"
+            if result.page_context is not None:
+                page_contexts.append(result.page_context)
 
             # Merge results
             all_questions.extend(result.questions)
@@ -778,10 +1233,63 @@ class OCREngine:
             if result.document.has_tables:
                 has_tables = True
             languages.append(result.document.main_language)
+            for key in page_timings:
+                page_timings[key] += float((result.timings or {}).get(key, 0))
+
+            if on_page_complete is not None:
+                on_page_complete({
+                    "page": idx + 1,
+                    "pageCount": len(images),
+                    "timings": result.timings or {},
+                })
 
             # Use metadata from first page
             if idx == 0:
                 metadata = result.metadata
+
+        # Parse the complete document after each page has been recognized. This retains streaming page
+        # progress but lets a question or alínea continue across a physical page break without dropping text.
+        combined_parsing_ms = 0.0
+        if len(page_contexts) == len(images) and page_contexts:
+            combined_started = time.perf_counter()
+            all_blocks = [block for page in page_contexts for block in page.text_blocks]
+            page_dimensions = {page.page_index: (page.width, page.height) for page in page_contexts}
+            source_indices = {page.page_index: page.source_file_index for page in page_contexts}
+            layout_regions = {
+                page.page_index: page.layout_regions
+                for page in page_contexts
+                if page.layout_regions is not None
+            }
+            formula_predictions = {
+                key: latex
+                for page in page_contexts
+                for key, latex in page.formula_predictions.items()
+            }
+            metadata, all_questions, all_images_to_upload, all_unmapped, document_warnings = self.postprocessor.process(
+                all_blocks,
+                page_count=len(images),
+                page_dimensions=page_dimensions,
+                source_file_indices=source_indices,
+                layout_regions=layout_regions,
+                formula_images=settings.ocr_formula_images,
+                recognize_formulas=settings.ocr_formula_latex,
+                formula_predictions=formula_predictions,
+            )
+            combined_parsing_ms = (time.perf_counter() - combined_started) * 1000
+            page_timings["parsingMs"] += combined_parsing_ms
+            # Keep page-local acquisition warnings (e.g. image quality and missing native PDF glyphs),
+            # while replacing per-page structural warnings with the document-level parser result.
+            page_warnings = [
+                warning for warning in all_warnings
+                if warning.code in {"image_quality", "NATIVE_TEXT_GAP"}
+            ]
+            all_warnings = []
+            seen_warnings = set()
+            for warning in [*document_warnings, *page_warnings]:
+                key = (warning.code, warning.field, warning.confidence, warning.message)
+                if key not in seen_warnings:
+                    seen_warnings.add(key)
+                    all_warnings.append(warning)
 
         # Determine main language (most common)
         main_language = max(set(languages), key=languages.count) if languages else self.lang
@@ -792,14 +1300,16 @@ class OCREngine:
         else:
             overall_confidence = 0.0
 
-        processing_time_ms = int((time.time() - start_time) * 1000)
+        processing_time_ms = int((time.perf_counter() - start_time) * 1000)
 
         # Determine status. Text the parser could not turn into questions is still a reading:
         # the caller gets it with ``partial`` (207) instead of a 500 it cannot tell apart from a
         # service failure. Only a document with no text at all is an error.
         if not all_questions and not read_any_text:
             status = "error"
-        elif not all_questions or overall_confidence < 0.5:
+        elif has_unreadable_page or has_partial_content_page or (
+            has_partial_page and len(page_contexts) < len(images)
+        ) or not all_questions or overall_confidence < 0.5:
             status = "partial"
         else:
             status = "success"
@@ -819,7 +1329,59 @@ class OCREngine:
             images_to_upload=all_images_to_upload,
             unmapped_content=all_unmapped,
             warnings=all_warnings,
+            timings={
+                **{key: round(value, 1) for key, value in page_timings.items()},
+                **({"combinedParsingMs": round(combined_parsing_ms, 1)} if combined_parsing_ms else {}),
+                "totalMs": round((time.perf_counter() - start_time) * 1000, 1),
+            },
         )
+
+    async def process_images_progress_async(
+        self,
+        images: List[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+    ):
+        """Yield a bounded, backpressured event after each completed page and then the result."""
+        loop = asyncio.get_running_loop()
+        events: asyncio.Queue = asyncio.Queue(maxsize=1)
+        cancelled = threading.Event()
+
+        def report(event: Dict[str, Any]) -> None:
+            pending = asyncio.run_coroutine_threadsafe(events.put(event), loop)
+            while not cancelled.is_set():
+                try:
+                    pending.result(timeout=0.1)
+                    return
+                except TimeoutError:
+                    continue
+                except Exception:
+                    return
+            pending.cancel()
+
+        task = loop.run_in_executor(
+            self._executor,
+            self.process_images_with_progress,
+            images,
+            request_id,
+            source_file_indices,
+            report,
+            cancelled,
+            native_text_pages,
+        )
+        try:
+            while not task.done():
+                try:
+                    yield await asyncio.wait_for(events.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+            result = await task
+            while not events.empty():
+                yield events.get_nowait()
+            yield {"type": "result", "result": result}
+        finally:
+            cancelled.set()
 
     async def process_images_async(
         self,

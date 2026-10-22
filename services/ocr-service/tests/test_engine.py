@@ -16,6 +16,7 @@ from app.config import settings
 from app.ocr.engine import (
     OCREngine,
     OCRResult,
+    PageOcrContext,
     DocumentInfo,
     get_engine,
     initialize_engine,
@@ -39,7 +40,75 @@ from app.ocr.postprocessing import (
     UnmappedContent,
     normalize_text,
     detect_language,
+    formula_prediction_key,
 )
+from app.ocr.layout import LayoutRegion
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (r"\vec{v}\;e\;\vec{a}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}\;\vec{e}\;\vec{a}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}e\\ {\vec{a}}", r"\vec{v}\;e\;\vec{a}"),
+        (r"\vec{v}\;\vec{x}\;\vec{a}", None),
+        (r"\vec{v}\;e", None),
+    ],
+)
+def test_canonical_vector_pair_accepts_only_the_expected_inline_semantics(raw, expected):
+    assert OCREngine._canonical_vector_pair(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "numbers,expected_gap",
+    [
+        (["1", "2", "3"], False),
+        (["7", "8", "9"], False),
+        (["7", "9", "10"], True),
+        (["34", "35", "37"], True),
+    ],
+)
+def test_numbering_gap_detection_is_relative_to_the_page_start(numbers, expected_gap):
+    questions = [Mock(number=number) for number in numbers]
+    assert OCREngine._numbering_has_gaps(questions) is expected_gap
+
+
+def test_first_alinea_gap_triggers_fallback_only_for_colon_led_lists():
+    missed_first = Mock(text="Apresente os conhecimentos sobre:", subitems_content=[Mock(label="b")])
+    intentional_start = Mock(text="Calcule o fluxo magnético.", subitems_content=[Mock(label="c")])
+    already_complete = Mock(text="Apresente os conhecimentos sobre:", subitems_content=[Mock(label="a")])
+
+    assert OCREngine._may_have_missing_first_subitem([missed_first]) is True
+    assert OCREngine._may_have_missing_first_subitem([intentional_start]) is False
+    assert OCREngine._may_have_missing_first_subitem([already_complete]) is False
+
+
+def test_fallback_formula_read_uses_enhanced_prediction_when_raw_crop_is_unreadable():
+    primary = LayoutRegion("formula", "formula", 0.9, (170, 937, 458, 968))
+    fallback = LayoutRegion("formula", "formula", 0.88, (162, 929, 468, 977))
+    primary_key = formula_prediction_key(0, primary.bbox)
+    fallback_key = formula_prediction_key(0, fallback.bbox)
+
+    merged = OCREngine._merge_fallback_formula_predictions(
+        [primary], {primary_key: r"\vec{r}=(1-t)"},
+        [fallback], {}, 0,
+    )
+
+    assert merged == {fallback_key: r"\vec{r}=(1-t)"}
+
+
+def test_explicit_fallback_formula_read_is_not_overwritten_by_primary():
+    primary = LayoutRegion("formula", "formula", 0.9, (170, 937, 458, 968))
+    fallback = LayoutRegion("formula", "formula", 0.88, (162, 929, 468, 977))
+    primary_key = formula_prediction_key(0, primary.bbox)
+    fallback_key = formula_prediction_key(0, fallback.bbox)
+
+    merged = OCREngine._merge_fallback_formula_predictions(
+        [primary], {primary_key: r"\vec{r}=(1-t)"},
+        [fallback], {fallback_key: r"\vec{r}=(11-t)"}, 0,
+    )
+
+    assert merged[fallback_key] == r"\vec{r}=(11-t)"
 
 
 # =============================================================================
@@ -578,6 +647,67 @@ class TestOCREngine:
         assert result.status in ["success", "partial", "error"]
         assert result.processing_time_ms >= 0
 
+    def test_searchable_pdf_text_skips_text_ocr_and_keeps_question_content(self, sample_image, monkeypatch):
+        engine = OCREngine()
+        preprocessed = PreprocessingResult(
+            image=sample_image,
+            original_size=(sample_image.shape[1], sample_image.shape[0]),
+            processed_size=(sample_image.shape[1], sample_image.shape[0]),
+            rotation_angle=0.0,
+            image_hash="native-pdf-fixture",
+            preprocessing_applied=[],
+        )
+        monkeypatch.setattr(engine.preprocessor, "preprocess", Mock(return_value=preprocessed))
+        monkeypatch.setattr(engine, "_detect_layout", Mock(return_value=None))
+        run_ocr = Mock(side_effect=AssertionError("searchable PDF text should bypass text OCR"))
+        monkeypatch.setattr(engine, "_run_ocr", run_ocr)
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_model_name", "")
+        lines = [
+            {"text": "1. Determine a velocidade da partícula para os dados apresentados.", "bbox": (20, 20, 620, 50)},
+            {"text": "Sabendo que a velocidade inicial é v0 = 2 m/s.", "bbox": (20, 70, 600, 100)},
+            {"text": "Considere aceleração constante a = 3 m/s2 e tempo t = 4 s.", "bbox": (20, 120, 620, 150)},
+        ]
+
+        result = engine.process_image(
+            sample_image,
+            native_text_page={"width": sample_image.shape[1], "height": sample_image.shape[0], "lines": lines},
+        )
+
+        run_ocr.assert_not_called()
+        assert result.status in ("success", "partial")
+        assert result.questions
+
+    def test_native_pdf_text_with_blank_formula_slots_requires_review(self, sample_image, monkeypatch):
+        engine = OCREngine()
+        preprocessed = PreprocessingResult(
+            image=sample_image,
+            original_size=(sample_image.shape[1], sample_image.shape[0]),
+            processed_size=(sample_image.shape[1], sample_image.shape[0]),
+            rotation_angle=0.0,
+            image_hash="native-pdf-formula-gap",
+            preprocessing_applied=[],
+        )
+        monkeypatch.setattr(engine.preprocessor, "preprocess", Mock(return_value=preprocessed))
+        monkeypatch.setattr(engine, "_detect_layout", Mock(return_value=None))
+        monkeypatch.setattr(engine, "_run_ocr", Mock(side_effect=AssertionError("native text should keep the fast path")))
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_model_name", "")
+        lines = [
+            {"text": "1) A velocidade inicial é      com ângulo de 30 graus.", "bbox": (20, 20, 620, 50)},
+            {"text": "A altura máxima foi de      e o alcance de      .", "bbox": (20, 70, 620, 100)},
+            {"text": "Calcule o tempo, a velocidade e a trajetória do projéctil.", "bbox": (20, 120, 620, 150)},
+        ]
+
+        result = engine.process_image(
+            sample_image,
+            native_text_page={"width": sample_image.shape[1], "height": sample_image.shape[0], "lines": lines},
+        )
+
+        assert result.status in ("success", "partial")
+        warning = next(w for w in result.warnings if w.code == "NATIVE_TEXT_GAP")
+        assert warning.field == "formulas"
+        assert "documento original" in warning.message
+        assert "velocidade" in result.questions[0].text.lower()
+
     @patch("app.ocr.engine.PaddleOCR")
     def test_process_image_with_error(self, mock_paddle, sample_image):
         """Test error handling during processing."""
@@ -629,6 +759,38 @@ class TestOCREngine:
         assert isinstance(result, OCRResult)
         assert result.document.page_count == 2
 
+    def test_multi_page_aggregation_keeps_question_continuation_on_next_page(self, sample_image):
+        engine = OCREngine()
+        engine.postprocessor = OCRPostprocessor(repair_text=False, filter_noise=False)
+        first = self._page_result("success")
+        first.page_context = PageOcrContext(
+            page_index=0,
+            source_file_index=0,
+            text_blocks=[TextBlock("1. Determine a aceleração", 0.95, (10, 20, 500, 40), 0)],
+            layout_regions=None,
+            width=600,
+            height=800,
+        )
+        second = self._page_result("partial")
+        second.page_context = PageOcrContext(
+            page_index=1,
+            source_file_index=0,
+            text_blocks=[
+                TextBlock("com base nos dados fornecidos.", 0.94, (10, 20, 500, 40), 1),
+                TextBlock("2. Calcule a velocidade.", 0.96, (10, 70, 500, 90), 1),
+            ],
+            layout_regions=None,
+            width=600,
+            height=800,
+        )
+        engine.process_image = MagicMock(side_effect=[first, second])
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-page-continuation")
+
+        assert [question.number for question in result.questions] == ["1", "2"]
+        assert "com base nos dados fornecidos." in result.questions[0].text
+        assert "com base nos dados fornecidos." in result.questions[0].raw_text
+
     @patch("app.ocr.engine.PaddleOCR")
     def test_process_empty_images_list(self, mock_paddle):
         """Test processing empty images list."""
@@ -663,6 +825,20 @@ class TestOCREngine:
         assert result.status == "partial"
         assert result.questions == []
         assert {item.text for item in result.unmapped_content} == {"Tabela de valores"}
+
+    def test_page_without_structured_questions_makes_multi_page_result_partial(self, sample_image):
+        """A high-confidence page must not hide another page where no question was structured."""
+        engine = OCREngine()
+        first = self._page_result("success", [UnmappedContent(0, "1. Questão", 0.9)])
+        first.questions = [MagicMock(confidence=0.95)]
+        second = self._page_result("partial", [UnmappedContent(1, "texto sem questão", 0.96)])
+        engine.process_image = MagicMock(side_effect=[first, second])
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-partial-page")
+
+        assert result.status == "partial"
+        assert len(result.questions) == 1
+        assert result.warnings == []
 
     def test_process_images_with_no_text_at_all_is_still_error(self, sample_image):
         """A document the OCR read nothing from keeps the error status."""

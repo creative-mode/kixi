@@ -5,9 +5,11 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -20,6 +22,12 @@ import ao.creativemode.kixi.exams.model.QuestionImage;
 import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
+import org.apache.pdfbox.io.MemoryUsageSetting;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 
@@ -28,8 +36,6 @@ import reactor.core.publisher.Mono;
 
 /**
  * Materializes OCR image regions after the questions have been persisted.
- * Only raster source uploads are eligible: PDF page rendering remains owned by
- * the OCR service and cannot be safely reconstructed from the original bytes.
  */
 @Service
 public class OcrImageAssociationService {
@@ -38,6 +44,15 @@ public class OcrImageAssociationService {
     private static final int MAX_CROP_BYTES = 10 * 1024 * 1024;
     private static final int MAX_PREVIEW_BYTES = 1536 * 1024;
     private static final int MAX_PREVIEW_TOTAL_BYTES = 8 * 1024 * 1024;
+    private static final int PDF_RENDER_DPI = 300;
+    private static final int MAX_PDF_SOURCE_BYTES = 20 * 1024 * 1024;
+    private static final int MAX_PDF_PAGES = 50;
+    private static final int MAX_PDF_PAGE_DIMENSION = 8_000;
+    private static final long MAX_PDF_PAGE_PIXELS = 20_000_000L;
+    private static final long MAX_CACHED_PDF_PAGE_PIXELS = 40_000_000L;
+    private static final long MAX_PDF_CROP_TOTAL_BYTES = 50L * 1024 * 1024;
+    private static final long PDF_MAIN_MEMORY_BYTES = 16L * 1024 * 1024;
+    private static final long PDF_STORAGE_BYTES = 128L * 1024 * 1024;
 
     private final QuestionImageRepository repository;
     private final ImageStorage storage;
@@ -64,11 +79,14 @@ public class OcrImageAssociationService {
                         Function.identity(),
                         (first, ignored) -> first));
 
-        List<RegionCandidate> candidates = regions.stream()
-                .filter(region -> region != null && region.isQuestionImage())
-                .map(region -> candidate(region, questionsByNumber, sourceFiles))
-                .flatMap(Optional::stream)
-                .toList();
+        List<RegionCandidate> candidates;
+        try (CropContext cropContext = new CropContext(sourceFiles)) {
+            candidates = regions.stream()
+                    .filter(region -> region != null && region.isQuestionImage())
+                    .map(region -> candidate(region, questionsByNumber, cropContext))
+                    .flatMap(Optional::stream)
+                    .toList();
+        }
 
         if (candidates.isEmpty()) {
             return Mono.just(List.of());
@@ -93,15 +111,15 @@ public class OcrImageAssociationService {
     private Optional<RegionCandidate> candidate(
             OcrResponse.ImageToUpload region,
             Map<Integer, Question> questionsByNumber,
-            List<OcrUploadedFile> sourceFiles) {
+            CropContext cropContext) {
         Integer questionNumber = parseQuestionNumber(region.getQuestionNumber());
         if (questionNumber == null || region.contractVersion() == null
                 || region.contractVersion() != REGION_CONTRACT_VERSION
                 || region.bbox() == null || region.bbox().size() != 4
-                || sourceFiles == null || region.sourceFileIndex() == null
-                || region.sourceFileIndex() < 0
-                || region.sourceFileIndex() >= sourceFiles.size()
-                || !isRaster(sourceFiles.get(region.sourceFileIndex()))) {
+                || (region.pageIndex() != null && region.pageIndex() < 0)
+                || (region.score() != null && (!Double.isFinite(region.score())
+                        || region.score() < 0.0 || region.score() > 1.0))
+                || region.sourceFileIndex() == null || !cropContext.hasSource(region.sourceFileIndex())) {
             return Optional.empty();
         }
 
@@ -110,21 +128,25 @@ public class OcrImageAssociationService {
             return Optional.empty();
         }
 
-        byte[] png = cropToPng(sourceFiles.get(region.sourceFileIndex()), region);
-        if (png == null || png.length == 0 || png.length > MAX_CROP_BYTES) {
+        byte[] png = cropToPng(region, cropContext);
+        if (png == null || png.length == 0 || png.length > MAX_CROP_BYTES
+                || !cropContext.reservePdfCrop(region.sourceFileIndex(), png.length)) {
             return Optional.empty();
         }
 
         return Optional.of(new RegionCandidate(
                 question,
                 region.description(),
+                region.kind(),
+                region.pageIndex(),
+                region.score(),
                 "questions/" + question.getId() + "/ocr-" + java.util.UUID.randomUUID() + ".png",
                 png));
     }
 
     /**
      * The crop of each region as a PNG data URL, by position (null where there is none), so the exam builder
-     * can show the figure with its question before anything is saved. Header and signature regions get none;
+     * can show question figures and the source footer before anything is saved. Header regions get none;
      * a crop over {@link #MAX_PREVIEW_BYTES}, or past {@link #MAX_PREVIEW_TOTAL_BYTES} in all, is left out.
      */
     public List<String> previewCrops(List<OcrResponse.ImageToUpload> regions, List<OcrUploadedFile> sourceFiles) {
@@ -132,21 +154,22 @@ public class OcrImageAssociationService {
         if (regions == null) {
             return crops;
         }
-        java.util.Map<Integer, Boolean> raster = new java.util.HashMap<>();
         long total = 0;
-        for (OcrResponse.ImageToUpload region : regions) {
-            String dataUrl = null;
-            Integer index = region == null ? null : region.sourceFileIndex();
-            if (region != null && region.isQuestionImage() && region.bbox() != null && region.bbox().size() == 4
-                    && index != null && index >= 0 && sourceFiles != null && index < sourceFiles.size()
-                    && raster.computeIfAbsent(index, i -> isRaster(sourceFiles.get(i)))) {
-                byte[] png = cropToPng(sourceFiles.get(index), region);
-                if (png != null && png.length <= MAX_PREVIEW_BYTES && total + png.length <= MAX_PREVIEW_TOTAL_BYTES) {
-                    total += png.length;
-                    dataUrl = "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(png);
+        try (CropContext cropContext = new CropContext(sourceFiles)) {
+            for (OcrResponse.ImageToUpload region : regions) {
+                String dataUrl = null;
+                Integer index = region == null ? null : region.sourceFileIndex();
+                if (region != null && (region.isQuestionImage() || region.isFooter()) && region.bbox() != null
+                        && region.bbox().size() == 4 && index != null && cropContext.hasSource(index)) {
+                    byte[] png = cropToPng(region, cropContext);
+                    if (png != null && png.length <= MAX_PREVIEW_BYTES
+                            && total + png.length <= MAX_PREVIEW_TOTAL_BYTES) {
+                        total += png.length;
+                        dataUrl = "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(png);
+                    }
                 }
+                crops.add(dataUrl);
             }
-            crops.add(dataUrl);
         }
         return crops;
     }
@@ -157,6 +180,9 @@ public class OcrImageAssociationService {
         entity.setImageUrl(stored.publicUrl());
         entity.setStorageKey(stored.key());
         entity.setCaption(candidate.description());
+        entity.setOcrKind(candidate.ocrKind());
+        entity.setOcrPageIndex(candidate.ocrPageIndex());
+        entity.setOcrScore(candidate.ocrScore());
         entity.setOrderIndex(orderIndex);
 
         return repository.save(entity)
@@ -169,10 +195,9 @@ public class OcrImageAssociationService {
                 .then();
     }
 
-    private byte[] cropToPng(OcrUploadedFile source, OcrResponse.ImageToUpload region) {
+    private byte[] cropToPng(OcrResponse.ImageToUpload region, CropContext cropContext) {
         try {
-            OcrUploadBuffer.validateContent(source.content());
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(source.content()));
+            BufferedImage image = cropContext.image(region);
             if (image == null) {
                 return null;
             }
@@ -211,6 +236,226 @@ public class OcrImageAssociationService {
         }
     }
 
+    private boolean isPdf(OcrUploadedFile file) {
+        byte[] content = file.content();
+        return content.length >= 5
+                && content[0] == '%'
+                && content[1] == 'P'
+                && content[2] == 'D'
+                && content[3] == 'F'
+                && content[4] == '-';
+    }
+
+    private final class CropContext implements AutoCloseable {
+        private final List<OcrUploadedFile> sourceFiles;
+        private final Map<Integer, Boolean> pdfSources = new HashMap<>();
+        private final Map<Integer, Boolean> rasterSources = new HashMap<>();
+        private final Map<Integer, Integer> sourcePageOffsets = new HashMap<>();
+        private PDDocument activePdfDocument;
+        private Integer activePdfSourceIndex;
+        private final Map<PageKey, BufferedImage> renderedPages = new HashMap<>();
+        private final Set<PageKey> rejectedPages = new java.util.HashSet<>();
+        private long cachedPixelCount;
+        private long retainedPdfCropBytes;
+
+        private CropContext(List<OcrUploadedFile> sourceFiles) {
+            this.sourceFiles = sourceFiles == null ? List.of() : sourceFiles;
+        }
+
+        private boolean hasSource(int sourceFileIndex) {
+            return sourceFileIndex >= 0 && sourceFileIndex < sourceFiles.size();
+        }
+
+        private boolean reservePdfCrop(int sourceFileIndex, int cropBytes) {
+            OcrUploadedFile source = sourceFiles.get(sourceFileIndex);
+            if (!pdfSources.computeIfAbsent(sourceFileIndex, ignored -> isPdf(source))) {
+                return true;
+            }
+            if (retainedPdfCropBytes + cropBytes > MAX_PDF_CROP_TOTAL_BYTES) {
+                return false;
+            }
+            retainedPdfCropBytes += cropBytes;
+            return true;
+        }
+
+        private BufferedImage image(OcrResponse.ImageToUpload region) {
+            Integer sourceIndex = region.sourceFileIndex();
+            if (sourceIndex == null || !hasSource(sourceIndex)) {
+                return null;
+            }
+
+            OcrUploadedFile source = sourceFiles.get(sourceIndex);
+            if (pdfSources.computeIfAbsent(sourceIndex, ignored -> isPdf(source))) {
+                return renderedPage(sourceIndex, region.pageIndex());
+            }
+            if (!rasterSources.computeIfAbsent(sourceIndex, ignored -> isRaster(source))) {
+                return null;
+            }
+            try {
+                return ImageIO.read(new ByteArrayInputStream(source.content()));
+            } catch (IOException | RuntimeException error) {
+                return null;
+            }
+        }
+
+        private BufferedImage renderedPage(int sourceIndex, Integer pageIndex) {
+            if (pageIndex == null || pageIndex < 0) {
+                return null;
+            }
+            int pageOffset = sourcePageOffset(sourceIndex);
+            if (pageOffset < 0 || pageIndex < pageOffset) {
+                return null;
+            }
+            int sourcePageIndex = pageIndex - pageOffset;
+            PageKey key = new PageKey(sourceIndex, sourcePageIndex);
+            BufferedImage cached = renderedPages.get(key);
+            if (cached != null) {
+                return cached;
+            }
+            if (rejectedPages.contains(key)) {
+                return null;
+            }
+
+            try {
+                PDDocument document = activePdfDocument;
+                if (document == null || activePdfSourceIndex == null || activePdfSourceIndex != sourceIndex) {
+                    closeActivePdf();
+                    OcrUploadedFile source = sourceFiles.get(sourceIndex);
+                    if (source.content().length > MAX_PDF_SOURCE_BYTES) {
+                        rejectedPages.add(key);
+                        return null;
+                    }
+                    try (ByteArrayInputStream input = new ByteArrayInputStream(source.content())) {
+                        document = PDDocument.load(
+                                input,
+                                MemoryUsageSetting.setupMixed(PDF_MAIN_MEMORY_BYTES, PDF_STORAGE_BYTES));
+                    }
+                    if (document.getNumberOfPages() > MAX_PDF_PAGES) {
+                        document.close();
+                        rejectedPages.add(key);
+                        return null;
+                    }
+                    activePdfDocument = document;
+                    activePdfSourceIndex = sourceIndex;
+                }
+
+                if (sourcePageIndex >= document.getNumberOfPages()) {
+                    rejectedPages.add(key);
+                    return null;
+                }
+
+                PDPage page = document.getPage(sourcePageIndex);
+                if (!isPageWithinRenderLimits(page)) {
+                    rejectedPages.add(key);
+                    return null;
+                }
+
+                PDFRenderer renderer = new PDFRenderer(document);
+                renderer.setSubsamplingAllowed(true);
+                BufferedImage rendered = renderer.renderImageWithDPI(sourcePageIndex, PDF_RENDER_DPI, ImageType.RGB);
+                if (rendered.getWidth() > MAX_PDF_PAGE_DIMENSION
+                        || rendered.getHeight() > MAX_PDF_PAGE_DIMENSION
+                        || (long) rendered.getWidth() * rendered.getHeight() > MAX_PDF_PAGE_PIXELS) {
+                    rejectedPages.add(key);
+                    return null;
+                }
+                long pagePixels = (long) rendered.getWidth() * rendered.getHeight();
+                if (cachedPixelCount + pagePixels <= MAX_CACHED_PDF_PAGE_PIXELS) {
+                    renderedPages.put(key, rendered);
+                    cachedPixelCount += pagePixels;
+                }
+                return rendered;
+            } catch (IOException | RuntimeException error) {
+                rejectedPages.add(key);
+                return null;
+            }
+        }
+
+        /** OCR page indexes are global across uploaded files; PDFBox indexes restart per source PDF. */
+        private int sourcePageOffset(int sourceIndex) {
+            if (sourceIndex < 0 || sourceIndex >= sourceFiles.size()) return -1;
+            Integer cached = sourcePageOffsets.get(sourceIndex);
+            if (cached != null) return cached;
+
+            int offset = 0;
+            for (int index = 0; index < sourceIndex; index++) {
+                OcrUploadedFile source = sourceFiles.get(index);
+                int count;
+                if (pdfSources.computeIfAbsent(index, ignored -> isPdf(source))) {
+                    count = pdfPageCount(source);
+                } else {
+                    count = rasterSources.computeIfAbsent(index, ignored -> isRaster(source)) ? 1 : 0;
+                }
+                if (count < 0) {
+                    sourcePageOffsets.put(sourceIndex, -1);
+                    return -1;
+                }
+                offset = Math.addExact(offset, count);
+            }
+            sourcePageOffsets.put(sourceIndex, offset);
+            return offset;
+        }
+
+        private int pdfPageCount(OcrUploadedFile source) {
+            if (source.content().length > MAX_PDF_SOURCE_BYTES) return -1;
+            try (ByteArrayInputStream input = new ByteArrayInputStream(source.content());
+                    PDDocument document = PDDocument.load(
+                            input, MemoryUsageSetting.setupMixed(PDF_MAIN_MEMORY_BYTES, PDF_STORAGE_BYTES))) {
+                return document.getNumberOfPages() <= MAX_PDF_PAGES ? document.getNumberOfPages() : -1;
+            } catch (IOException | RuntimeException error) {
+                return -1;
+            }
+        }
+
+        private boolean isPageWithinRenderLimits(PDPage page) {
+            PDRectangle cropBox = page.getCropBox();
+            double userUnit = page.getUserUnit();
+            double widthPoints = cropBox.getWidth() * userUnit;
+            double heightPoints = cropBox.getHeight() * userUnit;
+            int rotation = Math.floorMod(page.getRotation(), 360);
+            if (rotation == 90 || rotation == 270) {
+                double swap = widthPoints;
+                widthPoints = heightPoints;
+                heightPoints = swap;
+            } else if (rotation != 0 && rotation != 180) {
+                return false;
+            }
+
+            double widthPixels = Math.ceil(widthPoints * PDF_RENDER_DPI / 72.0);
+            double heightPixels = Math.ceil(heightPoints * PDF_RENDER_DPI / 72.0);
+            return Double.isFinite(widthPixels)
+                    && Double.isFinite(heightPixels)
+                    && widthPixels >= 1
+                    && heightPixels >= 1
+                    && widthPixels <= MAX_PDF_PAGE_DIMENSION
+                    && heightPixels <= MAX_PDF_PAGE_DIMENSION
+                    && widthPixels * heightPixels <= MAX_PDF_PAGE_PIXELS;
+        }
+
+        @Override
+        public void close() {
+            closeActivePdf();
+            renderedPages.clear();
+            cachedPixelCount = 0;
+        }
+
+        private void closeActivePdf() {
+            if (activePdfDocument == null) {
+                return;
+            }
+            try {
+                activePdfDocument.close();
+            } catch (IOException ignored) {
+                // Cleanup must not mask crop or persistence results.
+            }
+            activePdfDocument = null;
+            activePdfSourceIndex = null;
+        }
+    }
+
+    private record PageKey(int sourceFileIndex, int pageIndex) {
+    }
+
     private Integer parseQuestionNumber(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -232,6 +477,9 @@ public class OcrImageAssociationService {
     private record RegionCandidate(
             Question question,
             String description,
+            String ocrKind,
+            Integer ocrPageIndex,
+            Double ocrScore,
             String key,
             byte[] pngBytes) {
     }

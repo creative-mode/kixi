@@ -37,6 +37,8 @@ public final class OcrUploadBuffer {
                     }
                     int fileLimit = (int) Math.min(MAX_FILE_SIZE, remainingRequestBytes);
                     return DataBufferUtils.join(file.content(), fileLimit)
+                            .switchIfEmpty(Mono.error(ApiException.badRequest(
+                                    "Uploaded file cannot be empty")))
                             .map(buffer -> {
                                 try {
                                     byte[] content = new byte[buffer.readableByteCount()];
