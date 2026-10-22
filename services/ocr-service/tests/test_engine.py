@@ -6,10 +6,12 @@ Comprehensive tests for the OCR processing engine.
 
 import pytest
 import cv2
+import fitz
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
 from PIL import Image
 import io
+from pathlib import Path
 
 from tests.conftest import to_predict
 from app.config import settings
@@ -1070,18 +1072,50 @@ class TestOCRIntegration:
     """Integration tests that require actual PaddleOCR."""
 
     @pytest.mark.slow
-    def test_real_ocr_processing(self, sample_image):
-        """Test with actual PaddleOCR (slow, requires models)."""
-        try:
-            from paddleocr import PaddleOCR
-        except ImportError:
-            pytest.skip("PaddleOCR not installed")
+    def test_real_exam_upload_pipeline_reads_image_and_pdf(self):
+        """Exercise the real upload path with a versioned exam image and PDF.
 
-        engine = OCREngine(lang="en", use_gpu=False)
-        result = engine.process_image(sample_image)
+        The old integration test sent synthetic black bars directly to the engine
+        and accepted an empty/``error`` result. This test keeps the real fixture
+        out of the unit suite, sends both supported upload formats through
+        FastAPI, and requires structured OCR content in the response.
+        """
+        from fastapi.testclient import TestClient
+        from app.main import app
 
-        assert isinstance(result, OCRResult)
-        assert result.status in ["success", "partial", "error"]
+        fixture_path = Path(__file__).parent / "fixtures" / "ogi_12b.png"
+        image_bytes = fixture_path.read_bytes()
+
+        pdf = fitz.open()
+        # Match a 1280 px scan at 300 DPI; using 1280 pt here would make the
+        # PDF renderer expand the same page to roughly 5334 px per side.
+        page_size = 1280 * 72 / 300
+        page = pdf.new_page(width=page_size, height=page_size)
+        page.insert_image(fitz.Rect(0, 0, page_size, page_size), stream=image_bytes)
+        pdf_bytes = pdf.tobytes()
+        pdf.close()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/ocr/v1/extract",
+                files=[
+                    ("images", (fixture_path.name, image_bytes, "image/png")),
+                    ("images", ("ogi_12b.pdf", pdf_bytes, "application/pdf")),
+                ],
+            )
+
+        assert response.status_code in {200, 207}, response.text
+        payload = response.json()
+        assert payload["status"] in {"success", "partial"}
+        assert payload.get("errorMessage") is None
+        assert payload["document"]["pageCount"] == 2
+        assert payload["questions"], "real OCR returned no structured questions"
+
+        serialized = response.text.casefold()
+        assert any(
+            marker in serialized
+            for marker in ("república", "republica", "prova", "ogi", "aprovisionamento")
+        ), "real OCR returned no recognizable exam content"
 
 
 # =============================================================================
