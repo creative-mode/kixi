@@ -102,6 +102,22 @@ class MigrationInventoryTest {
     }
 
     @Test
+    void simulationIntegrityVersionedMigrationStoresOnlyAllowlistedEventsAndServerTime() throws IOException, URISyntaxException {
+        String migration = Files.readString(
+                migrationDirectory().resolve("V61__create_simulation_integrity_events.sql")).toLowerCase();
+
+        assertTrue(migration.contains("create table if not exists simulation_integrity_events"));
+        assertTrue(migration.contains("references simulations(id) on delete cascade"));
+        assertTrue(migration.contains("foreign key (question_id) references questions(id)"));
+        assertTrue(migration.contains("occurred_at timestamp with time zone not null default current_timestamp"));
+        assertTrue(migration.contains("'tab_hidden'"));
+        assertTrue(migration.contains("'paste_blocked'"));
+        assertTrue(migration.contains("'tutor_blocked'"));
+        assertTrue(migration.contains("kind = 'paste_blocked' and question_id is not null"));
+        assertFalse(migration.contains("answer_text"));
+    }
+
+    @Test
     void ocrImageProvenanceMigrationKeepsExistingRowsCompatible() throws IOException, URISyntaxException {
         String migration = Files.readString(migrationDirectory()
                 .resolve("V58__preserve_ocr_question_image_provenance.sql"))
