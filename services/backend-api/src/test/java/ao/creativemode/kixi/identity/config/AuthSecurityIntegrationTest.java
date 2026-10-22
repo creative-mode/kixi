@@ -1,7 +1,6 @@
 package ao.creativemode.kixi.identity.config;
 
 import ao.creativemode.kixi.identity.controller.AuthController;
-import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.identity.dto.auth.GoogleLinkAuthorizationRequest;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.identity.service.AuthService;

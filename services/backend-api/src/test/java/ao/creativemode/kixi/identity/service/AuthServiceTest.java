@@ -251,7 +251,7 @@ class AuthServiceTest {
                         "New User", null)));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("new@kixi.ao")).thenReturn(Mono.empty());
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("new@kixi.ao")).thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNotNull("new@kixi.ao")).thenReturn(Mono.empty());
         when(accountRepository.findByUsername("new")).thenReturn(Mono.empty());
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.empty());
 
@@ -274,6 +274,7 @@ class AuthServiceTest {
                         "New User", "pic.png")));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("new.user@kixi.ao")).thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNotNull("new.user@kixi.ao")).thenReturn(Mono.empty());
         when(accountRepository.findByUsername("new.user")).thenReturn(Mono.empty());
         when(passwordEncoder.encode(org.mockito.ArgumentMatchers.anyString())).thenReturn("hashed-random");
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(role(3L, "STUDENT")));
@@ -440,8 +441,10 @@ class AuthServiceTest {
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("same@kixi.ao")).thenReturn(Mono.empty());
         Account deleted = account(8L, "same", "hash");
+        deleted.setEmail("old@kixi.ao");
         deleted.setDeletedAt(java.time.LocalDateTime.now());
         when(accountRepository.findByUsername("same")).thenReturn(Mono.just(deleted));
+        when(accountRepository.findByEmailAndDeletedAtIsNotNull("same@kixi.ao")).thenReturn(Mono.empty());
         when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.just(role(3L, "STUDENT")));
         when(passwordEncoder.encode(any())).thenReturn("hashed-random");
         when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> {
@@ -460,6 +463,31 @@ class AuthServiceTest {
 
         verify(accountRepository, org.mockito.Mockito.times(2)).save(org.mockito.ArgumentMatchers.argThat(
                 account -> account.getUsername().startsWith("same-") && account.getUsername().length() <= 100));
+    }
+
+    @Test
+    void googleRejectsEmailOwnedBySoftDeletedAccountBeforeCreatingDuplicate() {
+        when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
+        when(googleOAuth2Client.getUserInfo("access-token"))
+                .thenReturn(Mono.just(new GoogleUserInfo("google-sub", "same@kixi.ao", true,
+                        "New User", null)));
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
+        when(accountRepository.findByEmailAndDeletedAtIsNull("same@kixi.ao")).thenReturn(Mono.empty());
+        Account deleted = account(8L, "old-user", "hash");
+        deleted.setEmail("same@kixi.ao");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(accountRepository.findByEmailAndDeletedAtIsNotNull("same@kixi.ao")).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.loginWithGoogle("code"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error).hasMessage("Google email belongs to a deleted account");
+                })
+                .verify();
+
+        verify(accountRepository, never()).save(any(Account.class));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
     }
 
     @Test

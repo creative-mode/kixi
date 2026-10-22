@@ -241,7 +241,10 @@ public class AuthService {
                                     .onErrorMap(DuplicateKeyException.class,
                                             error -> ApiException.conflict("Google identity is already linked"));
                         })
-                        .switchIfEmpty(Mono.defer(() -> createAccountAndUserFromGoogle(email, info)))));
+                        .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNotNull(email)
+                                .flatMap(deleted -> Mono.<Account>error(ApiException.conflict(
+                                        "Google email belongs to a deleted account")))
+                                .switchIfEmpty(Mono.defer(() -> createAccountAndUserFromGoogle(email, info)))))));
     }
 
     private Mono<Account> createAccountAndUserFromGoogle(String email, GoogleUserInfo info) {

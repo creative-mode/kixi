@@ -27,6 +27,9 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByEmailAndDeletedAtIsNull(String email);
 
+    /** Includes soft-deleted rows so callers can explain why a unique email cannot be reused. */
+    Mono<Account> findByEmailAndDeletedAtIsNotNull(String email);
+
     Mono<Account> findByGoogleSubAndDeletedAtIsNull(String googleSub);
 
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
