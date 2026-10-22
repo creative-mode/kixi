@@ -18,4 +18,13 @@ public interface ImageStorage {
 
     /** Converts a persisted storage reference or a legacy storage URL to a current browser URL. */
     String resolveUrl(String reference);
+
+    /**
+     * Returns whether this value is a profile/institution image reference owned by this storage.
+     * Keeping this predicate on the storage implementation prevents the JSON boundary from
+     * interpreting arbitrary text containing a path-like substring as an object key.
+     */
+    default boolean isManagedImageReference(String reference) {
+        return reference != null && reference.startsWith("storage://images/");
+    }
 }

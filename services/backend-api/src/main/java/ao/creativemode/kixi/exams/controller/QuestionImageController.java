@@ -38,7 +38,11 @@ public class QuestionImageController {
     }
 
     /**
-     * Retrieves all active question images.
+     * Retrieves the unscoped image catalog.
+     *
+     * <p>This endpoint is intentionally ADMIN-only in {@code SecurityConfig}: it has no question
+     * identifier, so a teacher or student cannot be checked against the statement access policy.
+     * Scoped reads use {@link #listByQuestion(Long)} and {@link QuestionImageReadAccessService}.</p>
      */
     @GetMapping
     public Mono<ResponseEntity<List<QuestionImageResponse>>> listAllActive() {

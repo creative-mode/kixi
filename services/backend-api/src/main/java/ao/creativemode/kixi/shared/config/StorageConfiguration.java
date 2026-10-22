@@ -46,7 +46,12 @@ public class StorageConfiguration {
         if (properties.getS3PublicEndpoint().isBlank()) {
             throw new IllegalStateException("storage.s3-public-endpoint must be configured for S3 storage");
         }
-        URI publicEndpoint = URI.create(properties.getS3PublicEndpoint());
+        URI publicEndpoint;
+        try {
+            publicEndpoint = URI.create(properties.getS3PublicEndpoint());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException("storage.s3-public-endpoint must be a valid URI", ex);
+        }
         String host = publicEndpoint.getHost();
         boolean localEndpoint = "localhost".equalsIgnoreCase(host)
                 || "127.0.0.1".equals(host)

@@ -190,6 +190,26 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void keepsTheUnscopedQuestionImageCatalogAdminOnly() {
+        client.get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
     void rejectsAnonymousSimulationReadsOnVersionedRoute() {
         client.get()
                 .uri("/api/v1/simulations")

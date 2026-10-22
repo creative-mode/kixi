@@ -21,7 +21,7 @@ public class ImageUrlJacksonConfiguration {
                     throws IOException {
                 // Profile and institution images may appear in many unrelated DTOs. Question images
                 // are resolved only by the statement-authorized QuestionImageService, never here.
-                if (!value.startsWith("storage://images/") && !value.contains("/images/")) {
+                if (!storage.isManagedImageReference(value)) {
                     generator.writeString(value);
                     return;
                 }

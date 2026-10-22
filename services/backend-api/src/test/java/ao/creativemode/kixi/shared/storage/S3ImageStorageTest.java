@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.shared.storage;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -41,6 +42,11 @@ class S3ImageStorageTest {
             assertTrue(current.contains("X-Amz-Signature="));
             assertTrue(legacy.startsWith("https://images.example.test/kixi-images/questions/14/figure.png?"));
             assertTrue(legacy.contains("X-Amz-Expires=900"));
+            assertTrue(storage.isManagedImageReference("storage://images/avatar/profile.png"));
+            assertTrue(storage.isManagedImageReference("http://minio:9000/kixi-images/images/avatar/profile.png"));
+            assertFalse(storage.isManagedImageReference("storage://questions/14/figure.png"));
+            assertFalse(storage.isManagedImageReference("http://minio:9000/kixi-images/questions/14/figure.png"));
+            assertFalse(storage.isManagedImageReference("text containing /images/not-an-object"));
         }
     }
 }

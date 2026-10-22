@@ -116,6 +116,18 @@ public class S3ImageStorage implements ImageStorage {
         return key == null ? reference : urlFor(key);
     }
 
+    @Override
+    public boolean isManagedImageReference(String reference) {
+        if (reference == null || reference.isBlank()) {
+            return false;
+        }
+        if (reference.startsWith("storage://images/")) {
+            return true;
+        }
+        String key = legacyKey(reference);
+        return key != null && key.startsWith("images/");
+    }
+
     private String legacyKey(String reference) {
         String endpoint = properties.getS3Endpoint();
         String[] bases = {
