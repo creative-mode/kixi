@@ -123,6 +123,7 @@ services:
       STORAGE_LOCAL_ROOT: ${STORAGE_LOCAL_ROOT:-/tmp/kixi/uploads}
       STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-/uploads}
       STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-http://minio:9000}
+      STORAGE_S3_PUBLIC_ENDPOINT: ${STORAGE_S3_PUBLIC_ENDPOINT:-}
       STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
       STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-kixi-images}
       STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
@@ -322,8 +323,8 @@ services:
       MINIO_ROOT_USER: ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
       MINIO_ROOT_PASSWORD: ${STORAGE_S3_SECRET_KEY:-kixi-minio-secret}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -350,7 +351,7 @@ services:
         ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
         ${STORAGE_S3_SECRET_KEY:-kixi-minio-secret}
         && mc mb --ignore-existing local/${STORAGE_S3_BUCKET:-kixi-images}
-        && mc anonymous set download local/${STORAGE_S3_BUCKET:-kixi-images}
+        && mc anonymous set none local/${STORAGE_S3_BUCKET:-kixi-images}
     networks:
       - kixi-network
 
