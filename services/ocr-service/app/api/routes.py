@@ -161,6 +161,20 @@ def resolve_file_type(filename: Optional[str], content: bytes) -> str:
     raise HTTPException(status_code=400, detail=UNSUPPORTED_FILE_TYPE)
 
 
+def image_pixel_count(content: bytes) -> int:
+    """Read image dimensions without decoding the raster into an array."""
+    try:
+        with Image.open(io.BytesIO(content)) as probe:
+            width, height = probe.size
+    except Exception as exc:
+        raise ValueError("Failed to read image dimensions") from exc
+
+    pixels = int(width) * int(height)
+    if width < 1 or height < 1 or pixels > settings.max_image_pixels:
+        raise ValueError("Image exceeds the maximum decoded pixel count")
+    return pixels
+
+
 
 def validate_file_size(content: bytes, max_size_mb: float = None) -> None:
     """Validate file size."""
@@ -489,6 +503,7 @@ async def extract_text_stream(
     prepared_files = []
     page_count = 0
     total_upload_bytes = 0
+    total_rendered_pixels = 0
     preparation_started = time.perf_counter()
     for source_file_index, upload_file in enumerate(images):
         try:
@@ -499,18 +514,27 @@ async def extract_text_stream(
             total_upload_bytes += len(content)
             file_type = resolve_file_type(upload_file.filename, content)
             if file_type == "pdf":
-                validate_pdf(content, max_pages=settings.max_pdf_pages)
+                remaining_pixels = settings.max_ocr_pixels_per_request - total_rendered_pixels
+                file_rendered_pixels = validate_pdf(
+                    content,
+                    max_pages=settings.max_pdf_pages,
+                    max_total_pixels=remaining_pixels,
+                )
                 file_page_count = int(get_pdf_info(content).get("page_count") or 0)
                 if file_page_count < 1:
                     raise HTTPException(status_code=400, detail="Invalid PDF page count")
             else:
                 file_page_count = 1
+                file_rendered_pixels = image_pixel_count(content)
+                if file_rendered_pixels > settings.max_ocr_pixels_per_request - total_rendered_pixels:
+                    raise ValueError("Request exceeds the maximum total rendered pixel count")
             if page_count + file_page_count > settings.max_ocr_pages_per_request:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Maximum {settings.max_ocr_pages_per_request} pages allowed per request",
                 )
             page_count += file_page_count
+            total_rendered_pixels += file_rendered_pixels
             prepared_files.append((source_file_index, file_type, content, file_page_count))
         except HTTPException:
             raise
@@ -535,6 +559,7 @@ async def extract_text_stream(
         native_text_pages = []
         source_file_indices = []
         rasterization_ms = 0.0
+        rasterized_pixels = 0
         yield _sse_event("prepared", {
             "requestId": request_id,
             "pageCount": page_count,
@@ -549,11 +574,13 @@ async def extract_text_stream(
             for source_file_index, file_type, content, file_page_count in prepared_files:
                 for local_page in range(1, file_page_count + 1):
                     raster_started = time.perf_counter()
+                    remaining_pixels = settings.max_ocr_pixels_per_request - rasterized_pixels
                     if file_type == "pdf":
                         pages = extract_images_from_pdf(
                             content,
                             first_page=local_page,
                             last_page=local_page,
+                            max_total_pixels=remaining_pixels,
                         )
                         if len(pages) != 1:
                             raise ValueError("PDF page rendering returned an unexpected page count")
@@ -565,8 +592,9 @@ async def extract_text_stream(
                         all_images.append(pages[0])
                         native_text_pages.append(text_pages[0] if len(text_pages) == 1 else None)
                     else:
-                        all_images.append(load_image_from_bytes(content))
+                        all_images.append(load_image_from_bytes(content, max_pixels=remaining_pixels))
                         native_text_pages.append(None)
+                    rasterized_pixels += int(all_images[-1].shape[0]) * int(all_images[-1].shape[1])
                     source_file_indices.append(source_file_index)
                     rasterization_ms += (time.perf_counter() - raster_started) * 1000
                     global_page += 1

@@ -327,16 +327,20 @@ def validate_pdf(
     pdf_content: bytes,
     max_pages: int = 50,
     max_total_pixels: Optional[int] = None,
-) -> None:
+) -> int:
     """
     Validate a PDF file for OCR processing.
 
     Args:
         pdf_content: PDF file content as bytes
         max_pages: Maximum allowed pages
+        max_total_pixels: Remaining request-wide rendered-pixel budget
 
     Raises:
         ValueError: If the PDF is invalid or exceeds limits
+
+    Returns:
+        The estimated rendered pixel count for all pages in the PDF.
     """
     if not is_pdf(pdf_content):
         raise ValueError("File is not a valid PDF")
@@ -375,6 +379,7 @@ def validate_pdf(
                 )
                 if total_pixels > request_pixel_limit:
                     raise ValueError("PDF exceeds the maximum total rendered pixel count")
+            return total_pixels
         finally:
             document.close()
 
