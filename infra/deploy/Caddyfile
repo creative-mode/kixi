@@ -56,6 +56,8 @@
 	#    tem basePath /manager e espera recebê-lo já removido. Os assets em
 	#    /_next/static são servidos a partir daqui, com cache de um ano.
 	handle_path /manager/* {
+		# reverse_proxy resets untrusted incoming X-Forwarded-* values by default;
+		# do not enable trusted_proxies for arbitrary client connections here.
 		reverse_proxy manager:3002
 	}
 

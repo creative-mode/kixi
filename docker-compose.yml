@@ -102,6 +102,9 @@ services:
       # .env value never reaches the backend and CorsProperties stays empty — which
       # blocks the frontend gateway on :3000.
       APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # Only direct peers that are allowed to assert the client address. In production,
+      # set the addresses of the gateway and frontend containers that connect to this API.
+      APP_TRUSTED_PROXY_IPS: ${APP_TRUSTED_PROXY_IPS:-}
       # First ADMIN bootstrap (optional, see .env.example): creates the first
       # administrator on startup when none exists; without them nothing happens.
       APP_BOOTSTRAP_ADMIN_USERNAME: ${APP_BOOTSTRAP_ADMIN_USERNAME:-}
@@ -109,6 +112,9 @@ services:
       APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       APP_AUTH_GOOGLE_STATE_COOKIE_SECURE: ${GOOGLE_OAUTH_STATE_COOKIE_SECURE:-true}
       OCR_SERVICE_API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
+      APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: ${APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS:-10}
+      APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_ADDRESS: ${APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_ADDRESS:-60}
+      APP_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${APP_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
       APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS:-10}
       APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS: ${APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS:-900}
       APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS:-10}

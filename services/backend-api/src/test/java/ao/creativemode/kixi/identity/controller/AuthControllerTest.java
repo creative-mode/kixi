@@ -349,6 +349,19 @@ class AuthControllerTest {
         verify(loginRateLimiter).checkAddress("login-ip:198.51.100.9");
     }
 
+    @Test
+    void aTrustedFrontendUsesOnlyTheLastForwardedHop() {
+        trustedProxies.setIps(List.of("203.0.113.7"));
+        when(authService.login(anyString(), anyString()))
+                .thenReturn(Mono.just(new LoginResponse(
+                        "token", "Bearer", Instant.now(), 1L, List.of("STUDENT"))));
+
+        controller.login(from("203.0.113.7", "198.51.100.9, 192.0.2.25"),
+                new LoginRequest("aluno", "s")).block();
+
+        verify(loginRateLimiter).checkAddress("login-ip:192.0.2.25");
+    }
+
     /** An empty header is not evidence of an address, so the peer stands. */
     @Test
     void anEmptyForwardedHeaderFallsBackToTheProxy() {
