@@ -55,7 +55,7 @@ class ExamRoomIntegrityServiceTest {
         event.setAt(LocalDateTime.of(2026, 10, 21, 9, 59));
         when(rooms.findByIdAndTeacherAccountId(5L, 9L)).thenReturn(Mono.just(room));
         when(participants.findByExamRoomId(5L)).thenReturn(Flux.just(participant));
-        when(events.findBySimulationIdInOrderByAtAscIdAsc(java.util.Set.of(12L))).thenReturn(Flux.just(event));
+        when(events.findRecentBySimulationIdIn(java.util.Set.of(12L), 1_000)).thenReturn(Flux.just(event));
 
         StepVerifier.create(service.list(5L, 9L, false))
                 .assertNext(result -> {
@@ -76,5 +76,54 @@ class ExamRoomIntegrityServiceTest {
         StepVerifier.create(service.list(5L, 10L, false))
                 .expectErrorMatches(error -> error.getMessage().contains("room owner"))
                 .verify();
+    }
+
+    @Test
+    void returnsNotFoundForAnAdminRequestToAMissingRoom() {
+        when(rooms.findById(404L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.list(404L, 1L, true))
+                .expectErrorMatches(error -> error instanceof ao.creativemode.kixi.shared.exception.ApiException api
+                        && api.getStatusCode() == 404)
+                .verify();
+    }
+
+    @Test
+    void groupsRecentEventsByEachParticipantSimulation() {
+        ExamRoom room = new ExamRoom();
+        room.setId(5L);
+        ExamRoomParticipant first = participant(7L, 12L);
+        ExamRoomParticipant second = participant(8L, 13L);
+        SimulationIntegrityEvent firstEvent = event(31L, 12L, SimulationIntegrityEventKind.TAB_HIDDEN);
+        SimulationIntegrityEvent secondEvent = event(32L, 13L, SimulationIntegrityEventKind.WINDOW_BLUR);
+
+        when(rooms.findById(5L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(5L)).thenReturn(Flux.just(first, second));
+        when(events.findRecentBySimulationIdIn(java.util.Set.of(12L, 13L), 1_000))
+                .thenReturn(Flux.just(firstEvent, secondEvent));
+
+        StepVerifier.create(service.list(5L, 1L, true))
+                .assertNext(result -> {
+                    assertThat(result.participants()).extracting("accountId").containsExactly(7L, 8L);
+                    assertThat(result.participants().get(0).events()).extracting("id").containsExactly(31L);
+                    assertThat(result.participants().get(1).events()).extracting("id").containsExactly(32L);
+                })
+                .verifyComplete();
+    }
+
+    private static ExamRoomParticipant participant(Long accountId, Long simulationId) {
+        ExamRoomParticipant participant = new ExamRoomParticipant();
+        participant.setAccountId(accountId);
+        participant.setSimulationId(simulationId);
+        return participant;
+    }
+
+    private static SimulationIntegrityEvent event(Long id, Long simulationId, SimulationIntegrityEventKind kind) {
+        SimulationIntegrityEvent event = new SimulationIntegrityEvent();
+        event.setId(id);
+        event.setSimulationId(simulationId);
+        event.setKind(kind);
+        event.setAt(LocalDateTime.of(2026, 10, 21, 9, 59));
+        return event;
     }
 }

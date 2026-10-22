@@ -24,6 +24,8 @@ import reactor.core.publisher.Mono;
 
 @Service
 public class ExamRoomIntegrityService {
+    private static final int MAX_EVENTS_PER_PARTICIPANT = 1_000;
+
     private final ExamRoomRepository rooms;
     private final ExamRoomParticipantRepository participants;
     private final SimulationIntegrityEventRepository events;
@@ -44,15 +46,22 @@ public class ExamRoomIntegrityService {
     }
 
     private Mono<ExamRoom> managedRoom(Long roomId, Long caller, boolean admin) {
-        Mono<ExamRoom> room = admin ? rooms.findById(roomId) : rooms.findByIdAndTeacherAccountId(roomId, caller);
-        return room.switchIfEmpty(Mono.error(ApiException.forbidden("Only the room owner or ADMIN can view it")));
+        if (admin) {
+            return rooms.findById(roomId)
+                    .switchIfEmpty(Mono.error(ApiException.notFound("Exam room not found")));
+        }
+        return rooms.findByIdAndTeacherAccountId(roomId, caller)
+                .switchIfEmpty(Mono.error(ApiException.forbidden("Only the room owner or ADMIN can view it")));
     }
 
     private Mono<Map<Long, List<SimulationIntegrityEvent>>> loadEvents(List<ExamRoomParticipant> rows) {
         Set<Long> simulationIds = rows.stream().map(ExamRoomParticipant::getSimulationId)
                 .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         if (simulationIds.isEmpty()) return Mono.just(Map.of());
-        return events.findBySimulationIdInOrderByAtAscIdAsc(simulationIds)
+        // The producer is bounded per attempt, but a long-running room can still accumulate
+        // a large history. Return the most recent bounded window per participant so the
+        // teacher endpoint cannot materialize an unbounded response.
+        return events.findRecentBySimulationIdIn(simulationIds, MAX_EVENTS_PER_PARTICIPANT)
                 .collectMultimap(SimulationIntegrityEvent::getSimulationId)
                 .map(grouped -> grouped.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
                         entry -> List.copyOf(entry.getValue()))));

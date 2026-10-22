@@ -25,6 +25,7 @@ import ao.creativemode.kixi.identity.config.CorsProperties;
 import ao.creativemode.kixi.identity.config.SecurityConfig;
 import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.identity.service.JwtService;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.simulations.dto.integrity.SimulationIntegrityEventResponse;
@@ -73,6 +74,27 @@ class SimulationIntegrityEventControllerTest {
 
         client.mutateWith(studentJwt()).post().uri("/api/v1/simulations/50/integrity-events")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"kind\":\"UNKNOWN\"}")
+                .exchange().expectStatus().isBadRequest();
+    }
+
+    @Test
+    void mapsOwnershipAndExpiredAttemptRejections() {
+        when(service.record(eq(50L), eq(12L), argThat(anyRequest())))
+                .thenReturn(Mono.error(ApiException.notFound("Simulation not found")))
+                .thenReturn(Mono.error(ApiException.conflict("The time allowed for this simulation has expired")));
+
+        client.mutateWith(studentJwt()).post().uri("/api/v1/simulations/50/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange().expectStatus().isNotFound();
+        client.mutateWith(studentJwt()).post().uri("/api/v1/simulations/50/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange().expectStatus().isEqualTo(409);
+    }
+
+    @Test
+    void rejectsMissingKindBeforeCallingTheService() {
+        client.mutateWith(studentJwt()).post().uri("/api/v1/simulations/50/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
                 .exchange().expectStatus().isBadRequest();
     }
 
