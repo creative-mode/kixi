@@ -319,6 +319,11 @@ public class StatementService {
     public Mono<Statement> approveReview(Long id, Long accountId, boolean admin) {
         return findById(id)
             .flatMap(statement -> requireCanEdit(statement, accountId, admin))
+            .flatMap(statement -> questionRepository.existsQuestionsNeedingReview(statement.getId())
+                .flatMap(needsReview -> needsReview
+                    ? Mono.error(ApiException.unprocessableEntity(
+                        "Review every low-confidence OCR question and formula before approving the statement"))
+                    : Mono.just(statement)))
             .flatMap(statement -> answerKeyComplete(statement).thenReturn(statement))
             .flatMap(statement -> requireTheScoresToAddUp(statement).thenReturn(statement))
             .flatMap(statement -> {
@@ -403,8 +408,21 @@ public class StatementService {
         return findById(id)
             .flatMap(statement -> requireCanEdit(statement, accountId, admin))
             .flatMap(statement -> {
-                statement.setVisible(visible);
-                return statementRepository.save(statement);
+                if (visible && Boolean.TRUE.equals(statement.getNeedsReview())) {
+                    return Mono.error(ApiException.unprocessableEntity(
+                        "Approve the statement review before publishing it"));
+                }
+                Mono<Void> validation = visible
+                    ? questionRepository.existsQuestionsNeedingReview(statement.getId())
+                        .flatMap(needsReview -> needsReview
+                            ? Mono.error(ApiException.unprocessableEntity(
+                                "Review every low-confidence OCR question and formula before publishing the statement"))
+                            : answerKeyComplete(statement).then(Mono.defer(() -> requireTheScoresToAddUp(statement))))
+                    : Mono.empty();
+                return validation.then(Mono.defer(() -> {
+                    statement.setVisible(visible);
+                    return statementRepository.save(statement);
+                }));
             });
     }
 

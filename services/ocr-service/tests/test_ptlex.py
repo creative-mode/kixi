@@ -43,6 +43,10 @@ def test_one_letter_ocr_slips_are_fixed(raw, expected, lex):
     assert fix(f"é {raw} grande", lex).startswith(f"é {expected}")
 
 
+def test_a_lost_vowel_is_restored_when_the_lexicon_has_one_clear_candidate(lex):
+    assert fix("o deslcamento", lex) == "o deslocamento"
+
+
 def test_words_already_in_the_lexicon_are_never_changed(lex):
     assert fix("Esta é a nossa casa e o pai pode ir", lex) == "Esta é a nossa casa e o pai pode ir"
 

@@ -14,6 +14,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.imageio.ImageIO;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.config.StorageProperties;
 import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageRequest;
@@ -113,11 +115,55 @@ class QuestionImageServiceTest {
 
     @Test
     void findAllActiveMapsEveryEntityToResponse() {
-        when(repository.findAllByDeletedAtIsNull()).thenReturn(Flux.just(image(1L, "cap-1")));
+        QuestionImage entity = image(1L, "cap-1");
+        entity.setOcrKind("figure");
+        entity.setOcrPageIndex(2);
+        entity.setOcrScore(0.87);
+        when(repository.findAllByDeletedAtIsNull()).thenReturn(Flux.just(entity));
 
         StepVerifier.create(service.findAllActive())
-                .assertNext(response -> assertThat(response.caption()).isEqualTo("cap-1"))
+                .assertNext(response -> {
+                    assertThat(response.caption()).isEqualTo("cap-1");
+                    assertThat(response.ocrKind()).isEqualTo("figure");
+                    assertThat(response.ocrPageIndex()).isEqualTo(2);
+                    assertThat(response.ocrScore()).isEqualTo(0.87);
+                    try {
+                        String json = new ObjectMapper().writeValueAsString(response);
+                        assertThat(json).contains(
+                                "\"ocrKind\":\"figure\"",
+                                "\"ocrPageIndex\":2",
+                                "\"ocrScore\":0.87");
+                    } catch (JsonProcessingException error) {
+                        throw new AssertionError("Question image response must serialize", error);
+                    }
+                })
                 .verifyComplete();
+    }
+
+    @Test
+    void manuallyUploadedImagesKeepNullOcrProvenance() {
+        FilePart file = filePart(MediaType.IMAGE_PNG, "figure.png", 3L);
+        StoredObject stored = new StoredObject("questions/7/manual.png", "/uploads/questions/7/manual.png");
+        AtomicReference<QuestionImage> persisted = new AtomicReference<>();
+        when(storage.put(anyString(), any(), any())).thenReturn(Mono.just(stored));
+        when(repository.save(any(QuestionImage.class))).thenAnswer(invocation -> {
+            QuestionImage entity = invocation.getArgument(0);
+            persisted.set(entity);
+            return Mono.just(entity);
+        });
+
+        StepVerifier.create(service.createWithFile(
+                        new QuestionImageRequest(7L, "Figura", 0), Mono.just(file)))
+                .assertNext(response -> {
+                    assertThat(response.ocrKind()).isNull();
+                    assertThat(response.ocrPageIndex()).isNull();
+                    assertThat(response.ocrScore()).isNull();
+                })
+                .verifyComplete();
+
+        assertThat(persisted.get().getOcrKind()).isNull();
+        assertThat(persisted.get().getOcrPageIndex()).isNull();
+        assertThat(persisted.get().getOcrScore()).isNull();
     }
 
     @Test
