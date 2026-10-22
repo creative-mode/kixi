@@ -70,6 +70,12 @@ public interface TeachingAssignmentRepository extends ReactiveCrudRepository<Tea
         Long schoolYearId
     );
 
+    Mono<Boolean> existsByTeacherIdAndClassIdAndSchoolYearIdAndDeletedAtIsNull(
+        Long teacherId,
+        Long classId,
+        Long schoolYearId
+    );
+
     /** Active assignments in any of the classes, for the read models that group by class (#253). */
     @Query("SELECT * FROM teaching_assignments WHERE class_id IN (:classIds) AND deleted_at IS NULL")
     Flux<TeachingAssignment> findAllActiveByClassIds(java.util.Collection<Long> classIds);
