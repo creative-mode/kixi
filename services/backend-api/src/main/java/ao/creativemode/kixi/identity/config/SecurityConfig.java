@@ -42,6 +42,10 @@ public class SecurityConfig {
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
                 .authorizeExchange(exchange -> exchange
+                        // The controller also resolves the current account, but keep this
+                        // security boundary explicit before the broad public auth matcher.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/auth/google/link/authorize")
+                        .authenticated()
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
                         // As figuras das questões que o armazenamento local guarda: o aluno e o professor vêem-nas no

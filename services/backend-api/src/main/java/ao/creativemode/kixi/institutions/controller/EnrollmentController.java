@@ -46,8 +46,8 @@ public class EnrollmentController {
      *
      * <p>An ADMIN without {@code ?accountId=} gets every enrollment (#146): the
      * manager's enrollments screen manages the whole platform, and listing only
-     * the administrator's own left it empty. A TEACHER keeps the old behaviour
-     * until it is decided what part of the school they should see.
+     * the administrator's own left it empty. A TEACHER may request another
+     * account's enrollments only when assigned to each enrollment's class.
      */
     @GetMapping
     public Mono<ResponseEntity<List<EnrollmentResponse>>> list(
@@ -55,11 +55,11 @@ public class EnrollmentController {
     ) {
         return Mono.zip(
                 currentAccountService.requiredAccountId(),
-                currentAccountService.hasAnyRole("ADMIN", "TEACHER"),
-                currentAccountService.hasAnyRole("ADMIN"))
-            .flatMap(tuple -> (accountId == null && tuple.getT3()
+                currentAccountService.hasAnyRole("ADMIN"),
+                currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> (accountId == null && tuple.getT2()
                     ? service.findAllActive()
-                    : service.findVisible(tuple.getT1(), tuple.getT2(), accountId))
+                    : service.findVisible(tuple.getT1(), tuple.getT2(), tuple.getT3(), accountId))
                 .collectList())
             .map(ResponseEntity::ok);
     }
@@ -73,9 +73,12 @@ public class EnrollmentController {
             @Valid @RequestBody EnrollRequest request,
             UriComponentsBuilder uriBuilder
     ) {
-        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
+        return Mono.zip(
+                currentAccountService.requiredAccountId(),
+                currentAccountService.hasAnyRole("ADMIN"),
+                currentAccountService.hasAnyRole("TEACHER"))
             .flatMap(tuple -> rateLimiter.checkEnrollment(tuple.getT1()).thenReturn(tuple))
-            .flatMap(tuple -> service.enroll(tuple.getT1(), tuple.getT2(), request))
+            .flatMap(tuple -> service.enroll(tuple.getT1(), tuple.getT2(), tuple.getT3(), request))
             .map(enrollment -> {
                 URI location = uriBuilder
                         .path("/api/v1/enrollments/{id}")
@@ -87,8 +90,11 @@ public class EnrollmentController {
 
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> cancel(@PathVariable Long id) {
-        return Mono.zip(currentAccountService.requiredAccountId(), currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> service.cancel(tuple.getT1(), tuple.getT2(), id))
+        return Mono.zip(
+                currentAccountService.requiredAccountId(),
+                currentAccountService.hasAnyRole("ADMIN"),
+                currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> service.cancel(tuple.getT1(), tuple.getT2(), tuple.getT3(), id))
             .thenReturn(ResponseEntity.noContent().build());
     }
 }

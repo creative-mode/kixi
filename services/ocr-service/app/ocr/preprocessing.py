@@ -15,6 +15,7 @@ Provides utilities for image preprocessing to improve OCR accuracy:
 import io
 import time
 import hashlib
+import warnings
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
@@ -544,7 +545,7 @@ class ImagePreprocessor:
         return image, scale
 
 
-def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
+def load_image_from_bytes(image_bytes: bytes, max_pixels: Optional[int] = None) -> np.ndarray:
     """
     Load an image from bytes.
 
@@ -557,6 +558,22 @@ def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
     Raises:
         ValueError: If the image cannot be decoded
     """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(image_bytes)) as header:
+                width, height = header.size
+                pixel_limit = min(
+                    settings.max_image_pixels,
+                    settings.max_image_pixels if max_pixels is None else max_pixels,
+                )
+                if width < 1 or height < 1 or width * height > pixel_limit:
+                    raise ValueError("Image exceeds the maximum decoded pixel count")
+    except Image.DecompressionBombError as error:
+        raise ValueError("Image exceeds the maximum decoded pixel count") from error
+    except (OSError, Image.DecompressionBombWarning) as error:
+        raise ValueError("Failed to decode image from bytes") from error
+
     nparr = np.frombuffer(image_bytes, np.uint8)
     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 

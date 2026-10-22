@@ -61,6 +61,16 @@ class UploadSnifferTest {
     }
 
     @Test
+    void aFiveThousandPixelRasterAtTheConfiguredBoundaryIsAccepted() {
+        assertThat(UploadSniffer.requireSafe(
+                UploadSniffer.Kind.PNG,
+                pngClaiming(5_000, 5_000),
+                UploadSniffer.MAX_SAFE_IMAGE_PIXELS,
+                1))
+                .isNull();
+    }
+
+    @Test
     void aWebpThatDeclaresMoreThanTheCeilingIsRefused() {
         assertThatThrownBy(() -> UploadSniffer.requireSafe(UploadSniffer.Kind.WEBP, webp(16_000, 16_000), 100_000_000L, 40))
                 .isInstanceOf(ApiException.class);
