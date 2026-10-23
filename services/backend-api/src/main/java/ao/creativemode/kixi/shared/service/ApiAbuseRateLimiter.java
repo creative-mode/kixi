@@ -81,6 +81,15 @@ public class ApiAbuseRateLimiter {
                 properties.getEnrollmentMaxAttempts(), properties.getEnrollmentWindowSeconds(), "enrollment");
     }
 
+    /**
+     * Guards the public searches (#406). One account searching schools, colleagues or teachers
+     * shares a single budget, so neither route becomes the cheap way to enumerate accounts.
+     */
+    public Mono<Void> checkSearch(Long accountId) {
+        return check("search:account:" + accountId,
+                properties.getSearchMaxAttempts(), properties.getSearchWindowSeconds(), "search");
+    }
+
     private Mono<Void> check(String rawKey, int maxAttempts, long windowSeconds, String scope) {
         String rateKey = hash(rawKey);
         return databaseClient.sql(CLEANUP_SQL)
