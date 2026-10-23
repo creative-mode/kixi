@@ -69,6 +69,20 @@ class ApiAbuseRateLimiterTest {
     }
 
     @Test
+    void rejectsExcessSearchAttemptsWithRetryAfter() {
+        stubReservation(61, 8L);
+
+        StepVerifier.create(limiter.checkSearch(42L))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiAbuseRateLimitException.class);
+                    ApiAbuseRateLimitException limited = (ApiAbuseRateLimitException) error;
+                    assertThat(limited.getStatusCode()).isEqualTo(429);
+                    assertThat(limited.getRetryAfterSeconds()).isEqualTo(8L);
+                })
+                .verify();
+    }
+
+    @Test
     void failsClosedWhenRateLimitStorageIsUnavailable() {
         stubCleanup();
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);

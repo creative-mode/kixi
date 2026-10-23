@@ -28,6 +28,14 @@ public class SecurityRateLimitProperties {
     @Min(1)
     private long enrollmentWindowSeconds = 60;
 
+    // #406: the profile and colleague searches are the back door to account
+    // enumeration, so they share one budget per account.
+    @Min(1)
+    private int searchMaxAttempts = 60;
+
+    @Min(1)
+    private long searchWindowSeconds = 60;
+
     public int getLoginMaxAttempts() {
         return loginMaxAttempts;
     }
@@ -74,5 +82,21 @@ public class SecurityRateLimitProperties {
 
     public void setEnrollmentWindowSeconds(long enrollmentWindowSeconds) {
         this.enrollmentWindowSeconds = enrollmentWindowSeconds;
+    }
+
+    public int getSearchMaxAttempts() {
+        return searchMaxAttempts;
+    }
+
+    public void setSearchMaxAttempts(int searchMaxAttempts) {
+        this.searchMaxAttempts = searchMaxAttempts;
+    }
+
+    public long getSearchWindowSeconds() {
+        return searchWindowSeconds;
+    }
+
+    public void setSearchWindowSeconds(long searchWindowSeconds) {
+        this.searchWindowSeconds = searchWindowSeconds;
     }
 }
