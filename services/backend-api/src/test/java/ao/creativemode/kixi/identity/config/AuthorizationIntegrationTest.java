@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
+import static ao.creativemode.kixi.donations.service.DonationFixtures.png;
 
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.controller.OcrController;
@@ -190,6 +191,26 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void keepsTheUnscopedQuestionImageCatalogAdminOnly() {
+        client.get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/question-images")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
     void rejectsAnonymousSimulationReadsOnVersionedRoute() {
         client.get()
                 .uri("/api/v1/simulations")
@@ -343,10 +364,10 @@ class AuthorizationIntegrationTest {
 
     @Test
     void allowsTeacherOcrExtractionAndCallsClient() {
-        when(ocrServiceClient.extractText(anyList())).thenReturn(Mono.just(successfulOcrResponse()));
+        when(ocrServiceClient.extractTextFromUploadedFiles(anyList())).thenReturn(Mono.just(successfulOcrResponse()));
 
         MultipartBodyBuilder body = new MultipartBodyBuilder();
-        body.part("file", "exam-content".getBytes())
+        body.part("file", png(1, 1, 7))
                 .filename("exam.png")
                 .contentType(MediaType.IMAGE_PNG);
 
@@ -358,7 +379,7 @@ class AuthorizationIntegrationTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(ocrServiceClient).extractText(anyList());
+        verify(ocrServiceClient).extractTextFromUploadedFiles(anyList());
         verify(abuseRateLimiter).checkUpload(7L);
     }
 
@@ -379,7 +400,7 @@ class AuthorizationIntegrationTest {
                 )));
 
         MultipartBodyBuilder body = new MultipartBodyBuilder();
-        body.part("files", "exam-content".getBytes())
+        body.part("files", png(1, 1, 7))
                 .filename("exam.png")
                 .contentType(MediaType.IMAGE_PNG);
 

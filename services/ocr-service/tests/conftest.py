@@ -339,6 +339,11 @@ def mock_settings():
         mock.ocr_use_angle_cls = True
         mock.ocr_show_log = False
         mock.max_image_size_mb = 20.0
+        mock.max_image_pixels = 40_000_000
+        mock.max_ocr_pixels_per_request = 250_000_000
+        mock.max_pdf_pages = 50
+        mock.max_ocr_pages_per_request = 50
+        mock.max_upload_size_mb = 50.0
         mock.max_images_per_request = 10
         mock.min_confidence_threshold = 0.5
         mock.enable_deskew = True

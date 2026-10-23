@@ -211,27 +211,39 @@ public class SimulationSubmissionService {
     @Transactional
     public Mono<SimulationAnswerResponse> grade(Long answerId, Double score,
             Long accountId, boolean admin) {
+        // Keep the pre-lock lookup so a missing answer returns its specific 404;
+        // the second lookup below is the authoritative snapshot after the lock.
         return answers.findByIdAndDeletedAtIsNull(answerId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
-            .flatMap(answer -> simulationForAnswer(answer.getSimulationId())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
-                .flatMap(simulation -> lockForFinalization(simulation).thenReturn(answer))
-                .flatMap(lockedAnswer -> questions.findByIdAndDeletedAtIsNull(lockedAnswer.getQuestionId())
+            .flatMap(answer -> {
+                Mono<Simulation> answerLock = simulations.lockForAnswerWriteByAnswerId(answerId);
+                Mono<Simulation> acquiredLock = answerLock == null ? Mono.empty() : answerLock;
+                return acquiredLock
+                    .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                    .then(answers.findByIdAndDeletedAtIsNull(answerId)
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found"))))
+                    .flatMap(lockedAnswer -> gradeLockedAnswer(lockedAnswer, score, accountId, admin));
+            });
+    }
+
+    private Mono<SimulationAnswerResponse> gradeLockedAnswer(SimulationAnswer answer, Double score,
+            Long accountId, boolean admin) {
+        return questions.findByIdAndDeletedAtIsNull(answer.getQuestionId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
                 .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
-                    if (lockedAnswer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
+                    if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
                         return Mono.error(ApiException.conflict("Only answers pending review can be graded"));
                     }
                     if (question.getMaxScore() != null && score > question.getMaxScore()) {
                         return Mono.error(ApiException.badRequest("Score cannot exceed the question maximum"));
                     }
-                    lockedAnswer.setScoreObtained(score.floatValue());
-                    lockedAnswer.setIsCorrect(question.getMaxScore() != null && score >= question.getMaxScore());
-                    lockedAnswer.setReviewStatus(SimulationAnswerStatus.GRADED);
-                    lockedAnswer.setUpdatedAt(LocalDateTime.now());
-                    return answers.save(lockedAnswer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
+                    answer.setScoreObtained(score.floatValue());
+                    answer.setIsCorrect(question.getMaxScore() != null && score >= question.getMaxScore());
+                    answer.setReviewStatus(SimulationAnswerStatus.GRADED);
+                    answer.setUpdatedAt(LocalDateTime.now());
+                    return answers.save(answer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
                             .then(toResponse(saved)));
-                })))));
+                })));
     }
 
     private Mono<Void> authorizeGrading(Question question, Long accountId, boolean admin) {

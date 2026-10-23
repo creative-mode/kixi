@@ -80,6 +80,20 @@ def test_a_picture_that_is_really_a_paragraph_is_dropped():
     assert images == []
 
 
+def test_adjacent_text_lines_do_not_collectively_hide_a_real_figure():
+    blocks = exam_blocks() + [line("continuação da questão na linha", 585, i=20),
+                              line("continuação da questão na linha", 610, i=21)]
+    _, _, images, *_ = OCRPostprocessor().process(
+        blocks,
+        page_dimensions={0: (W, H)},
+        layout_regions={0: [region("figure", (239, 580, 540, 680))]},
+    )
+
+    assert [(image.region, image.kind) for image in images if image.region.startswith("questao_")] == [
+        ("questao_2", "figure"),
+    ]
+
+
 def test_without_a_layout_the_old_crop_of_the_question_text_is_kept():
     blocks = exam_blocks()
     _, questions, images, *_ = OCRPostprocessor().process(blocks, page_dimensions={0: (W, H)}, layout_regions=None)

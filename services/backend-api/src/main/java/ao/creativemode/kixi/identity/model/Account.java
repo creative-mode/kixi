@@ -26,6 +26,9 @@ public class Account {
     @Column("email")
     private String email;
 
+    @Column("google_sub")
+    private String googleSub;
+
     @Column("password_hash")
     private String passwordHash;
 

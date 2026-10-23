@@ -90,6 +90,16 @@ todos. Para que o limite conte a pessoa e não o proxy, nomeia o proxy em
 `APP_TRUSTED_PROXY_IPS`. Sem isso a cabeça `X-Forwarded-For` é ignorada, que é o
 comportamento certo por omissão: um cabeçalho que qualquer um escreve não é prova de nada.
 
+Em produção, a variável deve conter apenas os IPs dos pares que ligam diretamente ao
+backend (por exemplo, Caddy e os contentores manager/aluno quando fazem pedidos server-side).
+Não liste o IP público do visitante nem confie numa sub-rede partilhada com serviços não
+proxy. O Caddy substitui os valores `X-Forwarded-*` não confiáveis; o manager e o aluno
+validam a cadeia recebida e encaminham apenas o último salto. O backend também usa o último
+salto quando o peer TCP é confiável. Se existir CDN ou outro proxy antes do Caddy, configure
+essa topologia no próprio gateway e confirme os IPs reais antes de preencher a variável.
+No perfil `prod`, uma lista vazia gera um aviso explícito no arranque; a aplicação continua
+a ignorar o cabeçalho e a contar pelo peer TCP.
+
 ---
 
 ## Fluxo 2 — Enunciados

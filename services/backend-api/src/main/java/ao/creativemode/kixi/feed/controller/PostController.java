@@ -6,6 +6,7 @@ import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postModeration.ReportedPostResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionSetRequest;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionToggleResponse;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportResponse;
@@ -73,6 +74,15 @@ public class PostController {
     ) {
         return current.requiredAccountId()
                 .flatMap(accountId -> postService.toggleReaction(postId, accountId, request));
+    }
+
+    @PutMapping("/{postId}/reactions")
+    public Mono<PostReactionToggleResponse> setReaction(
+            @PathVariable Long postId,
+            @Valid @RequestBody PostReactionSetRequest request
+    ) {
+        return current.requiredAccountId()
+                .flatMap(accountId -> postService.setReaction(postId, accountId, request));
     }
 
     @PostMapping("/{postId}/comments")

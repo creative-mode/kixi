@@ -1,9 +1,12 @@
 package ao.creativemode.kixi.critical;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import ao.creativemode.kixi.identity.service.JwtService;
@@ -14,6 +17,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -88,7 +93,10 @@ class CriticalExamFlowPostgresIntegrationTest {
 
         sql("DELETE FROM simulation_answers WHERE simulation_id IN "
                 + "(SELECT id FROM simulations WHERE statement_id = " + STATEMENT + ")");
+        sql("DELETE FROM exam_room_participants WHERE exam_room_id IN "
+                + "(SELECT id FROM exam_rooms WHERE statement_id = " + STATEMENT + ")");
         sql("DELETE FROM simulations WHERE statement_id = " + STATEMENT);
+        sql("DELETE FROM exam_rooms WHERE statement_id = " + STATEMENT);
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
@@ -180,6 +188,162 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.questions[0].correctOptionId").isEqualTo(RIGHT_OPTION)
                 .jsonPath("$.questions[0].scoreObtained").isEqualTo(5.0)
                 .jsonPath("$.questions[0].isCorrect").isEqualTo(true);
+    }
+
+    @Test
+    void studentEventsArePersistedAndVisibleOnlyToAuthorizedRoomStaff() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+
+        long room = database.sql("INSERT INTO exam_rooms (statement_id, teacher_account_id, starts_at, ends_at, "
+                        + "duration_minutes, status) VALUES (:statement, :teacher, CURRENT_TIMESTAMP, "
+                        + "CURRENT_TIMESTAMP + INTERVAL '1 hour', 60, 'RUNNING') RETURNING id")
+                .bind("statement", STATEMENT).bind("teacher", TEACHER)
+                .map((row, metadata) -> row.get("id", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        sql("UPDATE simulations SET exam_room_id = " + room + ", exam_room_duration_minutes = 60 WHERE id = "
+                + simulation);
+        sql("INSERT INTO exam_room_participants (exam_room_id, account_id, simulation_id) VALUES (" + room + ", "
+                + STUDENT + ", " + simulation + ")");
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.simulationId").isEqualTo(simulation)
+                .jsonPath("$.kind").isEqualTo("TAB_HIDDEN")
+                .jsonPath("$.at").exists()
+                .jsonPath("$.questionId").doesNotExist();
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"PASTE_BLOCKED\",\"questionId\":" + QUESTION + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.kind").isEqualTo("PASTE_BLOCKED")
+                .jsonPath("$.questionId").isEqualTo(QUESTION);
+
+        bearer(teacherToken)
+                .get()
+                .uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.roomId").isEqualTo(room)
+                .jsonPath("$.participants[0].accountId").isEqualTo(STUDENT)
+                .jsonPath("$.participants[0].simulationId").isEqualTo(simulation)
+                .jsonPath("$.participants[0].events.length()").isEqualTo(2)
+                .jsonPath("$.participants[0].events[1].questionId").isEqualTo(QUESTION);
+
+        String otherTeacherToken = jwtService.generateToken(999L, List.of("TEACHER"));
+        bearer(otherTeacherToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isForbidden();
+        bearer(studentToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/exam-rooms/" + room + "/integrity")
+                .exchange().expectStatus().isUnauthorized();
+
+        Long saved = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(saved).isEqualTo(2L);
+    }
+
+    @Test
+    void rejectsEventsAfterTheDeadlineEvenWhileTheSweepIsDisabled() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+        // The sweep is disabled in this context, so the status stays IN_PROGRESS:
+        // only the deadline check can refuse the event.
+        sql("UPDATE simulations SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 days' WHERE id = " + simulation);
+
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulation + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        Long saved = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(saved).isZero();
+    }
+
+    @Test
+    void concurrentEventWritesCannotExceedPerSimulationLimit() throws Exception {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        AtomicLong simulationId = new AtomicLong();
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.id").value(value -> simulationId.set(((Number) value).longValue()));
+        long simulation = simulationId.get();
+
+        database.sql("INSERT INTO simulation_integrity_events (simulation_id, kind, occurred_at) "
+                        + "SELECT :id, 'TAB_HIDDEN', CURRENT_TIMESTAMP FROM generate_series(1, 119)")
+                .bind("id", simulation)
+                .fetch().rowsUpdated().block(Duration.ofSeconds(10));
+
+        var first = CompletableFuture.supplyAsync(() -> postIntegrityEvent(simulation));
+        var second = CompletableFuture.supplyAsync(() -> postIntegrityEvent(simulation));
+        List<Integer> statuses = List.of(
+                first.get(20, TimeUnit.SECONDS).value(),
+                second.get(20, TimeUnit.SECONDS).value());
+
+        assertThat(statuses).containsExactlyInAnyOrder(
+                HttpStatus.CREATED.value(), HttpStatus.TOO_MANY_REQUESTS.value());
+        Long persisted = database.sql("SELECT COUNT(*) AS n FROM simulation_integrity_events WHERE simulation_id = :id")
+                .bind("id", simulation)
+                .map((row, metadata) -> row.get("n", Long.class))
+                .one().block(Duration.ofSeconds(10));
+        assertThat(persisted).isEqualTo(120L);
+    }
+
+    private HttpStatusCode postIntegrityEvent(long simulationId) {
+        return bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations/" + simulationId + "/integrity-events")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"kind\":\"TAB_HIDDEN\"}")
+                .exchange()
+                .returnResult(String.class)
+                .getStatus();
     }
 
     @Test

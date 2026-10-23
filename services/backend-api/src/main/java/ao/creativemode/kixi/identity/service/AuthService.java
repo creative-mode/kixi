@@ -170,40 +170,139 @@ public class AuthService {
                                 .map(roles -> buildLoginResponse(updated.getId(), roles))));
     }
 
+    /** Rechecks the local password before beginning a Google identity-link flow. */
+    public Mono<Void> verifyPasswordForGoogleLink(Long accountId, String password) {
+        return accountRepository.findByIdAndDeletedAtIsNull(accountId)
+                .filter(account -> Boolean.TRUE.equals(account.getActive()))
+                .filterWhen(account -> passwordMatches(password, account.getPasswordHash()))
+                .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid account credentials")))
+                .then();
+    }
+
+    /** Completes the explicit, password-confirmed link started by the signed OAuth state. */
+    public Mono<LoginResponse> completeGoogleLink(Long accountId, String code) {
+        return googleOAuth2Client.exchangeCodeForAccessToken(code)
+                .flatMap(googleOAuth2Client::getUserInfo)
+                .flatMap(this::requireVerifiedGoogleIdentity)
+                .flatMap(info -> accountRepository.findByIdAndDeletedAtIsNull(accountId)
+                        .filter(account -> Boolean.TRUE.equals(account.getActive()))
+                        .filter(account -> account.getEmail() != null
+                                && account.getEmail().equalsIgnoreCase(info.email().trim()))
+                        .switchIfEmpty(Mono.error(ApiException.unauthorized(
+                                "Google identity does not match the signed-in account")))
+                        .flatMap(account -> accountRepository.findByGoogleSubAndDeletedAtIsNull(info.sub())
+                                .flatMap(linked -> linked.getId().equals(accountId)
+                                        ? Mono.just(account)
+                                        : Mono.error(ApiException.conflict("Google identity is already linked")))
+                                .switchIfEmpty(Mono.defer(() -> {
+                                    if (account.getGoogleSub() != null
+                                            && !account.getGoogleSub().equals(info.sub())) {
+                                        return Mono.error(ApiException.conflict(
+                                                "A different Google identity is already linked"));
+                                    }
+                                    account.setGoogleSub(info.sub());
+                                    account.setEmailVerified(true);
+                                    return accountRepository.save(account)
+                                            .onErrorMap(DuplicateKeyException.class,
+                                                    error -> ApiException.conflict(
+                                                            "Google identity is already linked"));
+                                }))))
+                .flatMap(account -> recordLogin(account)
+                        .flatMap(updated -> loadRoleNames(updated.getId())
+                                .map(roles -> buildLoginResponse(updated.getId(), roles))));
+    }
+
     private Mono<Account> findOrCreateAccountFromGoogle(GoogleUserInfo info) {
         if (info.email() == null || info.email().isBlank()) {
             return Mono.error(ApiException.badRequest("Google did not provide email"));
         }
-        String email = info.email().trim().toLowerCase();
-        return accountRepository.findByEmailAndDeletedAtIsNull(email)
-                .switchIfEmpty(createAccountAndUserFromGoogle(email, info));
+        if (!isValidGoogleEmail(info.email())) {
+            return Mono.error(ApiException.badRequest("Google did not provide a valid email"));
+        }
+        if (!info.emailVerified() || info.sub() == null || info.sub().isBlank()) {
+            return Mono.error(ApiException.unauthorized("Google must provide a verified email identity"));
+        }
+        String email = info.email().trim().toLowerCase(Locale.ROOT);
+        return accountRepository.findByGoogleSubAndDeletedAtIsNull(info.sub())
+                .flatMap(account -> Boolean.TRUE.equals(account.getActive())
+                        ? Mono.just(account)
+                        : Mono.error(ApiException.unauthorized("Google account is inactive")))
+                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
+                        .flatMap(existing -> {
+                            if (!Boolean.TRUE.equals(existing.getActive())
+                                    || !Boolean.TRUE.equals(existing.getEmailVerified())
+                                    || (existing.getGoogleSub() != null
+                                            && !existing.getGoogleSub().equals(info.sub()))) {
+                                return Mono.error(ApiException.unauthorized(
+                                        "Google identity is not linked to this account"));
+                            }
+                            existing.setGoogleSub(info.sub());
+                            return accountRepository.save(existing)
+                                    .onErrorMap(DuplicateKeyException.class,
+                                            error -> ApiException.conflict("Google identity is already linked"));
+                        })
+                        .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNotNull(email)
+                                .flatMap(deleted -> Mono.<Account>error(ApiException.conflict(
+                                        "Google email belongs to a deleted account")))
+                                .switchIfEmpty(Mono.defer(() -> createAccountAndUserFromGoogle(email, info)))))));
     }
 
     private Mono<Account> createAccountAndUserFromGoogle(String email, GoogleUserInfo info) {
-        String username = email.split("@")[0];
-        String passwordHash = passwordEncoder.encode(UUID.randomUUID().toString());
-        Account account = new Account();
-        account.setUsername(username);
-        account.setEmail(email);
-        account.setPasswordHash(passwordHash);
-        account.setEmailVerified(true);
-        account.setActive(true);
-        account.setDeletedAt(null);
+        String preferredUsername = email.substring(0, email.indexOf('@'));
+        String normalizedUsername = preferredUsername.substring(0, Math.min(100, preferredUsername.length()));
+        Mono<String> username = accountRepository.findByUsername(normalizedUsername)
+                .flatMap(existing -> {
+                    String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+                    String base = normalizedUsername.substring(0, Math.min(89, normalizedUsername.length()));
+                    return Mono.just(base + "-" + suffix);
+                })
+                .switchIfEmpty(Mono.just(normalizedUsername));
 
-        return roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
+        return username.flatMap(candidate -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
                 .switchIfEmpty(Mono.error(ApiException.conflict(
                         "Default role is not configured: " + DEFAULT_ROLE_NAME
                 )))
-                .flatMap(role -> accountRepository.save(account)
-                        .onErrorMap(DuplicateKeyException.class,
-                                e -> ApiException.conflict(
-                                        "An account with this email or username already exists"))
-                        .flatMap(savedAccount -> Mono.when(
-                                accountRoleRepository.save(
-                                        new AccountRole(savedAccount.getId(), role.getId())
-                                ),
-                                createUserFromGoogle(savedAccount.getId(), info)
-                        ).thenReturn(savedAccount)));
+                .flatMap(role -> encodePassword(UUID.randomUUID().toString())
+                        .flatMap(passwordHash -> {
+                            Account account = new Account();
+                            account.setEmail(email);
+                            account.setGoogleSub(info.sub());
+                            account.setPasswordHash(passwordHash);
+                            account.setEmailVerified(true);
+                            account.setActive(true);
+                            account.setDeletedAt(null);
+                            account.setUsername(candidate);
+                            return accountRepository.save(account)
+                                    .onErrorMap(DuplicateKeyException.class,
+                                            error -> ApiException.conflict("Google account could not be created"))
+                                    .flatMap(savedAccount -> Mono.when(
+                                            accountRoleRepository.save(
+                                                    new AccountRole(savedAccount.getId(), role.getId())
+                                            ),
+                                            createUserFromGoogle(savedAccount.getId(), info)
+                                    ).thenReturn(savedAccount));
+                        })));
+    }
+
+    private Mono<GoogleUserInfo> requireVerifiedGoogleIdentity(GoogleUserInfo info) {
+        if (info.email() == null || info.email().isBlank()) {
+            return Mono.error(ApiException.badRequest("Google did not provide email"));
+        }
+        if (!isValidGoogleEmail(info.email())) {
+            return Mono.error(ApiException.badRequest("Google did not provide a valid email"));
+        }
+        if (!info.emailVerified() || info.sub() == null || info.sub().isBlank()) {
+            return Mono.error(ApiException.unauthorized("Google must provide a verified email identity"));
+        }
+        return Mono.just(info);
+    }
+
+    private boolean isValidGoogleEmail(String value) {
+        String email = value.trim();
+        int separator = email.lastIndexOf('@');
+        return separator > 0
+                && separator < email.length() - 1
+                && email.chars().noneMatch(Character::isWhitespace);
     }
 
     private Mono<User> createUserFromGoogle(Long accountId, GoogleUserInfo info) {

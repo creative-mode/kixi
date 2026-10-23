@@ -39,6 +39,8 @@ class EnrollmentServiceTest {
     private AccountRoleRepository accountRoles;
     private RoleRepository roles;
     private EnrollmentCodeService enrollmentCodeService;
+    private InstitutionAccessService institutionAccessService;
+    private TeachingAssignmentService teachingAssignmentService;
     private EnrollmentService service;
 
     @BeforeEach
@@ -50,8 +52,11 @@ class EnrollmentServiceTest {
         accountRoles = mock(AccountRoleRepository.class);
         roles = mock(RoleRepository.class);
         enrollmentCodeService = mock(EnrollmentCodeService.class);
+        institutionAccessService = mock(InstitutionAccessService.class);
+        teachingAssignmentService = mock(TeachingAssignmentService.class);
         service = new EnrollmentService(
-            enrollments, accounts, classes, schoolYears, accountRoles, roles, enrollmentCodeService);
+            enrollments, accounts, classes, schoolYears, accountRoles, roles, enrollmentCodeService,
+            institutionAccessService, teachingAssignmentService);
     }
 
     /** A code that redeems to {@code classId}, as {@code EnrollmentCodeService.redeem} would resolve it. */
@@ -86,7 +91,7 @@ class EnrollmentServiceTest {
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, null, null, CODE)))
             .expectNextMatches(response ->
                 response.accountId().equals(42L)
                     && response.classId().equals(7L)
@@ -111,7 +116,7 @@ class EnrollmentServiceTest {
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
         // classId 999 / schoolYearId 999 are a different class the caller does not have a code for.
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 999L, 999L, CODE)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, 999L, 999L, CODE)))
             .expectNextMatches(response -> response.classId().equals(7L) && response.schoolYearId().equals(2024L))
             .verifyComplete();
         verify(classes, never()).findByIdAndDeletedAtIsNull(999L);
@@ -124,7 +129,7 @@ class EnrollmentServiceTest {
         when(enrollmentCodeService.redeem(null))
             .thenReturn(Mono.error(ApiException.badRequest("An enrollment code is required")));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -137,7 +142,7 @@ class EnrollmentServiceTest {
         when(enrollmentCodeService.redeem("WRONG"))
             .thenReturn(Mono.error(ApiException.badRequest("Invalid, expired, revoked or already used enrollment code")));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, "WRONG")))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, null, null, "WRONG")))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -153,15 +158,46 @@ class EnrollmentServiceTest {
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .expectNextMatches(response -> response.accountId().equals(43L))
             .verifyComplete();
         verify(enrollmentCodeService, never()).redeem(any());
     }
 
     @Test
+    void affiliatedTeacherCanEnrollAnotherAccountInTheirInstitution() {
+        accountHasRoles(43L, 1L, "STUDENT");
+        when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
+        when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
+        when(institutionAccessService.requireTeacherAffiliatedToInstitution(9L, 3L)).thenReturn(Mono.empty());
+        when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
+        when(enrollments.findFirstByAccountIdAndSchoolYearId(43L, 2024L)).thenReturn(Mono.empty());
+        when(enrollments.save(any(Enrollment.class)))
+            .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.enroll(9L, false, true, new EnrollRequest(43L, 7L, 2024L, null)))
+            .expectNextMatches(response -> response.accountId().equals(43L))
+            .verifyComplete();
+        verify(institutionAccessService).requireTeacherAffiliatedToInstitution(9L, 3L);
+    }
+
+    @Test
+    void teacherCannotEnrollAcrossInstitutions() {
+        accountHasRoles(43L, 1L, "STUDENT");
+        when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
+        when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2024L)));
+        when(institutionAccessService.requireTeacherAffiliatedToInstitution(9L, 3L))
+            .thenReturn(Mono.error(ApiException.notFound("Institution not found")));
+
+        StepVerifier.create(service.enroll(9L, false, true, new EnrollRequest(43L, 7L, 2024L, null)))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.NOT_FOUND);
+        verify(enrollments, never()).save(any(Enrollment.class));
+    }
+
+    @Test
     void studentCannotEnrollAnotherAccount() {
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.FORBIDDEN);
 
@@ -179,7 +215,7 @@ class EnrollmentServiceTest {
         when(schoolYears.findByIdAndDeletedAtIsNull(2024L)).thenReturn(Mono.just(schoolYear(2024L)));
         when(enrollments.findFirstByAccountIdAndSchoolYearId(42L, 2024L)).thenReturn(Mono.just(active));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, null, null, CODE)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.CONFLICT);
     }
@@ -198,7 +234,7 @@ class EnrollmentServiceTest {
         when(enrollments.save(any(Enrollment.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, null, null, CODE)))
             .expectNextMatches(response ->
                 response.classId().equals(7L) && response.status().equals(Enrollment.STATUS_ACTIVE))
             .verifyComplete();
@@ -210,7 +246,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(classes.findByIdAndDeletedAtIsNull(7L)).thenReturn(Mono.just(activeClass(7L, 3L, 2023L)));
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
     }
@@ -220,7 +256,7 @@ class EnrollmentServiceTest {
         accountHasRoles(43L, 1L, "STUDENT");
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, null, null, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, null, null, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -232,7 +268,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         accountHasRoles(43L, 2L, "TEACHER");
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -243,7 +279,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(accountRoles.findByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.empty());
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
         verify(enrollments, never()).save(any(Enrollment.class));
@@ -256,7 +292,7 @@ class EnrollmentServiceTest {
         when(accounts.findById(43L)).thenReturn(Mono.just(activeAccount(43L)));
         when(accountRoles.findByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.empty());
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(43L, 7L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(43L, 7L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.BAD_REQUEST);
     }
@@ -270,7 +306,7 @@ class EnrollmentServiceTest {
         codeRedeemsTo(9L);
         when(classes.findByIdAndDeletedAtIsNull(9L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.enroll(42L, false, new EnrollRequest(null, null, null, CODE)))
+        StepVerifier.create(service.enroll(42L, false, false, new EnrollRequest(null, null, null, CODE)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.NOT_FOUND);
     }
@@ -281,7 +317,7 @@ class EnrollmentServiceTest {
         accountHasRoles(42L, 1L, "STUDENT");
         when(classes.findByIdAndDeletedAtIsNull(9L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.enroll(7L, true, new EnrollRequest(42L, 9L, 2024L, null)))
+        StepVerifier.create(service.enroll(7L, true, false, new EnrollRequest(42L, 9L, 2024L, null)))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.NOT_FOUND);
     }
@@ -292,14 +328,14 @@ class EnrollmentServiceTest {
         enrollment.setId(1L);
         when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(enrollment));
 
-        StepVerifier.create(service.findVisible(42L, false, null))
+        StepVerifier.create(service.findVisible(42L, false, false, null))
             .expectNextMatches(response -> response.id().equals(1L))
             .verifyComplete();
     }
 
     @Test
     void studentCannotListAnotherAccount() {
-        StepVerifier.create(service.findVisible(42L, false, 43L))
+        StepVerifier.create(service.findVisible(42L, false, false, 43L))
             .verifyErrorMatches(error -> error instanceof ApiException api
                 && api.getStatus() == HttpStatus.FORBIDDEN);
     }
@@ -308,7 +344,64 @@ class EnrollmentServiceTest {
     void staffListsAnotherAccount() {
         when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.empty());
 
-        StepVerifier.create(service.findVisible(7L, true, 43L)).verifyComplete();
+        StepVerifier.create(service.findVisible(7L, true, false, 43L)).verifyComplete();
+    }
+
+    @Test
+    void teacherListsAnotherAccountOnlyWhenAssignedToItsClass() {
+        Enrollment enrollment = new Enrollment(43L, 7L, 2024L);
+        enrollment.setId(1L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.just(enrollment));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 7L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.findVisible(9L, false, true, 43L))
+            .expectNextMatches(response -> response.id().equals(1L))
+            .verifyComplete();
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 7L);
+    }
+
+    @Test
+    void teacherListsOnlyAssignedEnrollmentsFromAMixedAccount() {
+        Enrollment visible = new Enrollment(43L, 7L, 2024L);
+        visible.setId(1L);
+        Enrollment hidden = new Enrollment(43L, 8L, 2025L);
+        hidden.setId(2L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L))
+            .thenReturn(Flux.just(visible, hidden));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 7L)).thenReturn(Mono.just(true));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 8L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.findVisible(9L, false, true, 43L))
+            .expectNextMatches(response -> response.id().equals(1L))
+            .verifyComplete();
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 7L);
+        verify(teachingAssignmentService).hasAssignedToClass(9L, 8L);
+    }
+
+    @Test
+    void teacherGetsNotFoundWhenNoEnrollmentIsInTheirAssignedClasses() {
+        Enrollment hidden = new Enrollment(43L, 8L, 2025L);
+        hidden.setId(2L);
+        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(43L)).thenReturn(Flux.just(hidden));
+        when(teachingAssignmentService.hasAssignedToClass(9L, 8L)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.findVisible(9L, false, true, 43L))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void teacherCannotCancelAnEnrollmentOutsideTheirAssignments() {
+        Enrollment enrollment = new Enrollment(43L, 7L, 2024L);
+        enrollment.setId(1L);
+        when(enrollments.findById(1L)).thenReturn(Mono.just(enrollment));
+        when(teachingAssignmentService.requireAssignedToClass(9L, 7L))
+            .thenReturn(Mono.error(ApiException.notFound("Enrollment not found")));
+
+        StepVerifier.create(service.cancel(9L, false, true, 1L))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                && api.getStatus() == HttpStatus.NOT_FOUND);
+        verify(enrollments, never()).save(any(Enrollment.class));
     }
 
     private static Account activeAccount(Long id) {
@@ -323,6 +416,7 @@ class EnrollmentServiceTest {
         clazz.setId(id);
         clazz.setCourseId(courseId);
         clazz.setSchoolYearId(schoolYearId);
+        clazz.setInstitutionId(3L);
         return clazz;
     }
 

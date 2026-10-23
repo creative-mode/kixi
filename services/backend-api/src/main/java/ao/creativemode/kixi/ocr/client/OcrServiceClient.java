@@ -7,13 +7,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferUtils;
-import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.http.codec.multipart.FilePart;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -142,6 +143,72 @@ public class OcrServiceClient {
                         response.status(),
                         response.overallConfidence()))
                 .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
+    }
+
+    /** Stream measured page progress and the final result without retrying a consumed upload. */
+    public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStream(List<FilePart> files) {
+        return extractTextStream(files, null);
+    }
+
+    public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStream(
+            List<FilePart> files, Double frontendUploadMs) {
+        if (files == null || files.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("At least one file is required"));
+        }
+
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        for (FilePart file : files) {
+            builder.asyncPart("images", file.content(), DataBuffer.class)
+                    .filename(file.filename())
+                    .contentType(getContentType(file.filename()));
+        }
+
+        return stream(builder, frontendUploadMs);
+    }
+
+    /** Stream OCR events from already bounded source bytes retained for image previews. */
+    public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStreamFromUploadedFiles(
+            List<OcrUploadedFile> files, Double frontendUploadMs) {
+        if (files == null || files.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("At least one file is required"));
+        }
+
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        for (OcrUploadedFile file : files) {
+            builder.part("images", file.content())
+                    .filename(file.filename())
+                    .contentType(file.contentType() != null
+                            ? file.contentType()
+                            : getContentType(file.filename()));
+        }
+
+        return stream(builder, frontendUploadMs);
+    }
+
+    private Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> stream(
+            MultipartBodyBuilder builder, Double frontendUploadMs) {
+        return webClient.post()
+                .uri("/ocr/v1/extract/stream")
+                .headers(headers -> {
+                    applyAuthentication(headers);
+                    if (frontendUploadMs != null && Double.isFinite(frontendUploadMs)
+                            && frontendUploadMs >= 0 && frontendUploadMs <= 180_000) {
+                        headers.set("X-OCR-Upload-Ms", frontendUploadMs.toString());
+                    }
+                })
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, response -> response.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .flatMap(body -> Mono.error(new OcrClientException(
+                                "OCR stream request failed: " + body, response.statusCode().value()))))
+                .toEntityFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .map(entity -> ResponseEntity.status(entity.getStatusCode())
+                        .headers(entity.getHeaders())
+                        .body(entity.getBody().timeout(timeout)))
+                .doOnError(error -> log.error("OCR stream failed: type={}", error.getClass().getSimpleName()));
     }
 
     /**

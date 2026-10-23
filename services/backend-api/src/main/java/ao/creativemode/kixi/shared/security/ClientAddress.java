@@ -14,9 +14,9 @@ import org.springframework.web.server.ServerWebExchange;
  * is to believe nothing, and the operator names the proxy when the topology makes the header the
  * honest answer.</p>
  *
- * <p>The leftmost entry is the original client; each proxy appends the peer it saw. It is taken only
- * when non-blank, so a proxy that forwards an empty header falls back to the peer rather than keying
- * everyone on "".</p>
+ * <p>Only the rightmost entry is used. A trusted direct peer must not let an earlier, client-supplied
+ * value in a forwarded chain choose the rate-limit bucket. An empty final entry falls back to the
+ * peer rather than keying everyone on "".</p>
  *
  * <p>Extracted from {@code AuthController} without changing what it answers.</p>
  */
@@ -41,7 +41,8 @@ public final class ClientAddress {
         if (forwarded == null) {
             return peer;
         }
-        String first = forwarded.split(",", 2)[0].trim();
-        return first.isEmpty() ? peer : first;
+        String[] hops = forwarded.split(",", -1);
+        String last = hops[hops.length - 1].trim();
+        return last.isEmpty() ? peer : last;
     }
 }

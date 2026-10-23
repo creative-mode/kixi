@@ -31,6 +31,7 @@ import ao.creativemode.kixi.examrooms.dto.ExamRoomParticipantResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomResponse;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.service.ExamRoomMonitoringService;
+import ao.creativemode.kixi.examrooms.service.ExamRoomIntegrityService;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -55,6 +56,8 @@ class ExamRoomControllerHttpTest {
     @MockBean
     private ExamRoomMonitoringService monitoring;
     @MockBean
+    private ExamRoomIntegrityService integrity;
+    @MockBean
     private ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction;
 
     @Test
@@ -63,6 +66,7 @@ class ExamRoomControllerHttpTest {
         client.post().uri("/api/v1/exam-rooms/1/participants").exchange().expectStatus().isUnauthorized();
         client.post().uri("/api/v1/exam-rooms/1/join").exchange().expectStatus().isUnauthorized();
         client.post().uri("/api/v1/exam-rooms/1/open").exchange().expectStatus().isUnauthorized();
+        client.get().uri("/api/v1/exam-rooms/1/integrity").exchange().expectStatus().isUnauthorized();
     }
 
     @Test
@@ -116,6 +120,21 @@ class ExamRoomControllerHttpTest {
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.status").isEqualTo("CLOSED");
         client.mutateWith(studentJwt()).get().uri("/api/v1/exam-rooms/mine")
                 .exchange().expectStatus().isOk().expectBody().json("[]");
+    }
+
+    @Test
+    void onlyRoomStaffCanReadIntegrityEvents() {
+        when(integrity.list(7L, 42L, false)).thenReturn(Mono.just(
+                new ao.creativemode.kixi.examrooms.dto.ExamRoomIntegrityResponse(7L,
+                        LocalDateTime.of(2026, 10, 13, 10, 0), List.of())));
+
+        client.mutateWith(teacherJwt()).get().uri("/api/v1/exam-rooms/7/integrity")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.roomId").isEqualTo(7)
+                .jsonPath("$.participants").isArray();
+
+        client.mutateWith(studentJwt()).get().uri("/api/v1/exam-rooms/7/integrity")
+                .exchange().expectStatus().isForbidden();
     }
 
     private static ExamRoomResponse room(Long id, ExamRoomStatus status) {

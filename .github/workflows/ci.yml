@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  caddy-config:
+    name: Caddy configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Caddyfile (Caddy 2.10+)
+        run: >-
+          docker run --rm
+          -v "$PWD/infra/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2.10.2
+          caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate
+
   hygiene:
     name: Higiene de texto
     runs-on: ubuntu-latest

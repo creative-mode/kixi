@@ -1,5 +1,11 @@
 package ao.creativemode.kixi.simulations.repository;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 
@@ -14,12 +20,14 @@ import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
+import ao.creativemode.kixi.gamification.service.GamificationService;
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -61,6 +69,8 @@ class SimulationAnswerPostgresConcurrencyTest {
     @Autowired SimulationService simulationService;
     @Autowired ConnectionFactory connectionFactory;
 
+    @MockBean GamificationService gamification;
+
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
         String host = env("KIXI_POSTGRES_HOST", "localhost");
@@ -78,6 +88,8 @@ class SimulationAnswerPostgresConcurrencyTest {
 
     @BeforeEach
     void data() {
+        when(gamification.simulationFinished(any(), any(), any(), anyDouble(), anyDouble(), any(), any(), anyBoolean()))
+                .thenReturn(Mono.empty());
         sql("DELETE FROM exam_room_participants WHERE exam_room_id = " + ROOM).block(Duration.ofSeconds(10));
         sql("DELETE FROM simulation_answers WHERE simulation_id IN (SELECT id FROM simulations WHERE statement_id = "
                 + STATEMENT + ")").block(Duration.ofSeconds(10));
@@ -117,6 +129,36 @@ class SimulationAnswerPostgresConcurrencyTest {
         Pair<Outcome<Object>, Outcome<Object>> answerFirst = raceWithLockFixture("simulations", SIMULATION,
                 answer(), submit().cast(Object.class));
         assertSubmitRace(answerFirst, false);
+    }
+
+    @Test
+    void concurrentGradesHaveOneWinnerAndRefreshFinalScoreOnce() {
+        sql("UPDATE questions SET max_score = 5 WHERE id = " + QUESTION).block(Duration.ofSeconds(10));
+        sql("UPDATE simulations SET status = 'FINISHED', finished_at = CURRENT_TIMESTAMP, final_score = 0 "
+                + "WHERE id = " + SIMULATION).block(Duration.ofSeconds(10));
+        sql("UPDATE simulation_answers SET review_status = 'PENDING_REVIEW', score_obtained = NULL, is_correct = NULL "
+                + "WHERE id = " + ANSWER).block(Duration.ofSeconds(10));
+
+        Pair<Outcome<Object>, Outcome<Object>> result;
+        try (LockFixture fixture = LockFixture.lock(connectionFactory, database, "simulation_answers", ANSWER)) {
+            Mono<Outcome<Object>> first = outcome(submissionService.grade(ANSWER, 2.0, ACCOUNT, true).cast(Object.class));
+            first.subscribe();
+            fixture.awaitWaiting("simulation_answers", 1);
+
+            Mono<Outcome<Object>> second = outcome(submissionService.grade(ANSWER, 4.0, ACCOUNT, true).cast(Object.class));
+            second.subscribe();
+            fixture.awaitWaiting("simulation_answers", 2);
+            fixture.release();
+            result = new Pair<>(first.block(Duration.ofSeconds(20)), second.block(Duration.ofSeconds(20)));
+        }
+
+        assertThat(result.first().error()).isNull();
+        assertConflict(result.second());
+        assertThat(value("SELECT review_status FROM simulation_answers WHERE id = " + ANSWER)).isEqualTo("GRADED");
+        assertThat(value("SELECT score_obtained::text FROM simulation_answers WHERE id = " + ANSWER)).isEqualTo("2.00");
+        assertThat(value("SELECT final_score::text FROM simulations WHERE id = " + SIMULATION)).isEqualTo("2.00");
+        verify(gamification, times(1)).simulationFinished(
+                any(), any(), any(), anyDouble(), anyDouble(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -325,16 +367,22 @@ class SimulationAnswerPostgresConcurrencyTest {
         }
 
         void awaitWaiting(String table) {
+            awaitWaiting(table, 1);
+        }
+
+        void awaitWaiting(String table, long minimumWaiters) {
+            // pg_stat_activity exposes the blocked SQL query; this is a synchronization
+            // signal for the fixture, not a direct pg_locks relation-lock assertion.
             Mono.defer(() -> database.sql(
                     "SELECT COUNT(*) FROM pg_stat_activity "
                             + "WHERE wait_event_type = 'Lock' AND state = 'active' "
                             + "AND pid <> pg_backend_pid() AND query LIKE '%" + table + "%'")
                     .map((row, metadata) -> row.get(0, Long.class))
                     .one()
-                    .filter(waiters -> waiters > 0))
+                    .filter(waiters -> waiters >= minimumWaiters))
                     .repeatWhenEmpty(repeats -> repeats.delayElements(Duration.ofMillis(25)).take(400))
                     .switchIfEmpty(Mono.error(new AssertionError(
-                            "The first service operation never waited for the " + table + " lock")))
+                            "No blocked SQL query was observed for " + table)))
                     .block(Duration.ofSeconds(15));
         }
 

@@ -1,6 +1,9 @@
 name: OCR integration
 
 on:
+  pull_request:
+    branches:
+      - dev
   workflow_dispatch:
 
 permissions:
@@ -16,6 +19,7 @@ jobs:
         working-directory: services/ocr-service
     env:
       DEBUG: 'false'
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: 'True'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
