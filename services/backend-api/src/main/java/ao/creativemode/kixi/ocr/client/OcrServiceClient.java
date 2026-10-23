@@ -63,7 +63,7 @@ public class OcrServiceClient {
      */
     public OcrServiceClient(
             @Value("${ocr.service.url:http://localhost:8000}") String ocrServiceUrl,
-            @Value("${ocr.service.timeout-ms:120000}") long timeoutMs,
+            @Value("${ocr.service.timeout-ms:300000}") long timeoutMs,
             @Value("${ocr.service.max-retries:2}") int maxRetries) {
         this(ocrServiceUrl, timeoutMs, maxRetries, "");
     }
@@ -71,7 +71,7 @@ public class OcrServiceClient {
     @Autowired
     public OcrServiceClient(
             @Value("${ocr.service.url:http://localhost:8000}") String ocrServiceUrl,
-            @Value("${ocr.service.timeout-ms:120000}") long timeoutMs,
+            @Value("${ocr.service.timeout-ms:300000}") long timeoutMs,
             @Value("${ocr.service.max-retries:2}") int maxRetries,
             @Value("${ocr.service.api-key:}") String apiKey) {
 
