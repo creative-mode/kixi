@@ -22,7 +22,8 @@ Variáveis de ambiente
                 ADMIN_PASS: o aluno não pode apagar as suas simulações)
   OCR_PDF       caminho do PDF de prova (pode ter várias páginas). Sem ele o PDF NÃO é testado: o relatório
                 diz-o e o código de saída é 3 (parcial), nunca 0
-  OCR_IMAGE     caminho da imagem de prova (jpeg/png); várias imagens separadas por «:» (cada uma é uma prova)
+  OCR_IMAGE     caminho da imagem de prova (jpeg/png); várias imagens separadas por «:» (cada uma é uma prova).
+                Tem de haver pelo menos OCR_IMAGE ou OCR_PDF
   SMOKE_OUT     (opcional) ficheiro onde guardar o relatório em JSON
   OCR_TIMEOUT   (opcional) segundos a esperar por cada leitura do OCR (por omissão 300)
 
@@ -196,7 +197,9 @@ def flatten(statement_questions):
 
 def main():
     pdf = os.environ.get("OCR_PDF")
-    images = [p for p in need("OCR_IMAGE").split(":") if p]
+    images = [p for p in os.environ.get("OCR_IMAGE", "").split(":") if p]
+    if not images and not pdf:
+        sys.exit("Falta OCR_IMAGE ou OCR_PDF (ver o topo deste ficheiro).")
     for path in [pdf] + images:
         if path and not os.path.isfile(path):
             sys.exit(f"Ficheiro não encontrado: {path}")

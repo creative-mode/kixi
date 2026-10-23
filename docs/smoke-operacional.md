@@ -54,6 +54,34 @@ python3 services/backend-api/scripts/smoke_teacher_student.py
 | Construtor, impressão/resultado | screenshots à mão: a prova aberta em «Rever enunciado» / «Ver a folha» do Manager, impressa, e o resultado do aluno. Sem credenciais nem dados pessoais visíveis (as contas de teste têm nomes neutros) |
 | Logs | os do backend e do OCR para os request IDs acima |
 
+## O que se comprovou na PRD (23/10/2026)
+
+Corrido dentro do contentor do OCR, pela rede interna (`http://backend-api:8080/api/v1`), no modo «escola existente»
+com `SMOKE_CLEANUP=1`: Instituto de Telecomunicações, curso INFO, disciplina Física, ano lectivo 2026. Cria uma turma
+«SMK<sufixo>», um professor e um aluno de teste, e desfaz tudo no fim. Imagens em produção a ser as de `prod` em
+`52d8bae`; os contentores em execução foram criados a 20/10/2026 (backend `sha256:a20caab6…`, OCR `sha256:ad55acba…`).
+
+| Etapa | Resultado |
+|---|---|
+| OCR da prova de OGI (imagem) | 200, 6 questões, 8,5 s, `req-3ccc17bbb95e4f9da35ff3ce5e4833d5` |
+| OCR da prova de Física (imagem) | 200, 4 questões (3 com fórmulas), 8 figuras/regiões, 8,9 s, `req-8a13738f46154512ab6ad23966c19706` |
+| Prova publicada | mesmas questões, ordem e texto que o OCR leu; cotação soma 20; aprovada pelo gate (`req-8766814a…`, `req-ec830d48…`) |
+| Aluno | não recebe o gabarito; responde a tudo; submete; a nota é calculada no servidor (`req-53a1e942…`, `req-406171d0…`) |
+| Nota (OGI) | 2,22 de 20, 2 certas em 9, 6 por rever; bate com o gabarito nas 3 questões fechadas |
+| Nota (Física) | 0 de 20: só tem questões abertas, por isso a nota fica por corrigir e este caso **não** prova o cálculo |
+| Limpeza | 2 provas e 2 simulações para a lixeira; código de matrícula, matrícula, atribuição, afiliação, conta e ficha do professor, conta do aluno e turma de teste retirados (200/204); confirmado depois que não ficou turma, professor nem conta de teste |
+
+32 de 32 verificações passam (a segunda corrida; a primeira, igual, só falhou ao gravar o relatório). **PDF de várias páginas: ver abaixo.**
+
+### PDF de várias páginas: falhou em produção e derrubou o OCR
+
+Um PDF de 2 páginas (as duas fotografias, ~280 KB) enviado ao OCR de produção fez o processo ser morto pelo limite de
+memória do contentor (4 GB: `Memory cgroup out of memory`, `anon-rss` 4,16 GB). O backend viu a ligação cair 46 s
+depois do pedido e o Docker reiniciou o OCR sozinho, em cerca de 12 s. O smoke corria dentro desse contentor e foi morto
+com ele, por isso não fez a limpeza e a turma, o professor e o aluno de teste foram retirados à mão (todos 200/204).
+Está na #407; enquanto não estiver corrigido, **não se deve repetir este smoke com PDF em PRD** nem enviar PDFs de várias
+páginas ao OCR de produção. Para correr o smoke com PDF sem arriscar o OCR, corre-se o script de fora do contentor.
+
 ## O que se comprovou localmente (não é a PRD)
 
 Stack local real, sem mocks: backend de `origin/dev` (Spring Boot 3.5), Postgres 16, OCR construído do
@@ -73,15 +101,10 @@ com fórmulas, e OGI de 12.ª) enviadas como imagem:
 
 ## O que continua por comprovar na PRD (critérios da #403 ainda abertos)
 
-- **Ambiente identificado e commit implantado**: não há QUA; vai ser a PRD, e o smoke ainda não foi corrido lá.
-- **PDF real com várias páginas**: não foi testado. Na máquina local a memória estava esgotada por outros serviços
-  (RAM e swap cheias) e o contentor do OCR era morto pelo sistema (código 137) assim que começava a rasterizar
-  um PDF, mesmo de uma só página; não é uma conclusão sobre o OCR, só que ali não deu para o medir. Precisa de
-  uma máquina com folga de memória (o servidor da PRD tem 12 GB e o contentor do OCR 4 GB).
-- **Construtor com a importação do OCR, impressão e resultado do aluno em browser**: só ficaram capturas do
-  Manager a mostrar a prova aprovada e publicada; a folha impressa e o ecrã do aluno não foram capturados (o
-  servidor de desenvolvimento do front não compilou a tempo com a máquina sem memória).
-- **Rodapé**: o OCR devolve o cabeçalho e a assinatura como regiões à parte (`cabecalho`, `rodape`) e não os mistura
-  nas questões; o smoke não verifica o rodapé na prova impressa.
-- **Páginas múltiplas** (depende do PDF acima).
-- **Request IDs, logs e screenshots da PRD**, e a actualização do critério na #365 depois de tudo isto.
+- **PDF real com várias páginas**: não passa em PRD (#407). Falta a correcção e voltar a correr com `OCR_PDF`.
+- **Screenshots da PRD**: do construtor com a importação do OCR, da folha impressa e do resultado do aluno. O smoke é só
+  pela API; aqui só se capturou, localmente, o Manager com as provas publicadas.
+- **Rodapé**: o OCR devolve o cabeçalho e a assinatura como regiões à parte (`cabecalho`, `rodape`) e não os mistura nas
+  questões; o smoke não verifica o rodapé na prova impressa.
+- **Páginas múltiplas** (depende do PDF).
+- **Logs da PRD** para os request IDs acima, e a actualização do critério na #365 depois de tudo isto.
