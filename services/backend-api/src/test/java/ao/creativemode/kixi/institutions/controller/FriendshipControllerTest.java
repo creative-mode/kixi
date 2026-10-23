@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.institutions.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,7 +31,9 @@ import ao.creativemode.kixi.identity.service.JwtService;
 import ao.creativemode.kixi.institutions.dto.friendship.ColleagueResponse;
 import ao.creativemode.kixi.institutions.dto.friendship.FriendResponse;
 import ao.creativemode.kixi.institutions.service.FriendshipService;
+import ao.creativemode.kixi.shared.exception.ApiAbuseRateLimitException;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -61,6 +64,9 @@ class FriendshipControllerTest {
 
     @MockBean
     private FriendshipService service;
+
+    @MockBean
+    private ApiAbuseRateLimiter abuseRateLimiter;
 
     // ── Who gets in ──────────────────────────────────────────────────────
 
@@ -161,6 +167,7 @@ class FriendshipControllerTest {
 
     @Test
     void theSearchIsOverTheCallersOwnSchoolYear() {
+        when(abuseRateLimiter.checkSearch(42L)).thenReturn(Mono.empty());
         when(service.searchColleagues(eq(42L), any()))
                 .thenReturn(Flux.just(new ColleagueResponse(43L, "Bruno S.")));
 
@@ -171,6 +178,22 @@ class FriendshipControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$[0].accountId").isEqualTo(43);
+    }
+
+    /** The colleague search shares the profile-search budget (#406). */
+    @Test
+    void aSearchOverTheLimitIsRejectedBeforeTheDatabase() {
+        when(abuseRateLimiter.checkSearch(42L)).thenReturn(Mono.error(
+                new ApiAbuseRateLimitException("search", 12L)));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/friends/search?q=bruno")
+                .exchange()
+                .expectStatus().isEqualTo(429)
+                .expectHeader().valueEquals("Retry-After", "12");
+
+        verify(service, never()).searchColleagues(anyLong(), any());
     }
 
     @Test

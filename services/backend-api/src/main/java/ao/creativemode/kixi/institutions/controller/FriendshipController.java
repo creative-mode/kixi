@@ -4,6 +4,7 @@ import ao.creativemode.kixi.institutions.dto.friendship.ColleagueResponse;
 import ao.creativemode.kixi.institutions.dto.friendship.FriendRequest;
 import ao.creativemode.kixi.institutions.dto.friendship.FriendResponse;
 import ao.creativemode.kixi.institutions.service.FriendshipService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 
 import org.springframework.http.HttpStatus;
@@ -33,17 +34,21 @@ public class FriendshipController {
 
     private final FriendshipService service;
     private final CurrentAccountService current;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
-    public FriendshipController(FriendshipService service, CurrentAccountService current) {
+    public FriendshipController(FriendshipService service, CurrentAccountService current,
+            ApiAbuseRateLimiter abuseRateLimiter) {
         this.service = service;
         this.current = current;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
-    /** Who the caller may ask, from their own school year. */
+    /** Who the caller may ask, from their own school year. Rate limited with the profile searches (#406). */
     @GetMapping("/search")
     public Flux<ColleagueResponse> search(@RequestParam(required = false) String q) {
         return current.requiredAccountId()
-                .flatMapMany(accountId -> service.searchColleagues(accountId, q));
+                .flatMapMany(accountId -> abuseRateLimiter.checkSearch(accountId)
+                        .thenMany(Flux.defer(() -> service.searchColleagues(accountId, q))));
     }
 
     /** The inbox: requests waiting for an answer. */
