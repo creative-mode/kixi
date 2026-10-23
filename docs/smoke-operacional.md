@@ -136,7 +136,7 @@ com fórmulas, e OGI de 12.ª) enviadas como imagem:
 
 ## O que continua por comprovar na PRD (critérios da #403 ainda abertos)
 
-- **PDF real com várias páginas**: não passa em PRD (#407). A correcção está no PR #408 (limite de píxeis por página);
+- **PDF real com várias páginas**: não passa em PRD (#407). A correcção está no PR #412 (limite de píxeis por página);
   falta implantá-la e correr o smoke com um PDF de 1, de 2 e de 10 páginas, fora de horas de uso e com `docker stats` ao
   OCR aberto.
 - **Screenshots da PRD**: do construtor com a importação do OCR, da folha impressa e do resultado do aluno. O smoke é só
