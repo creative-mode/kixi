@@ -7,6 +7,7 @@ import ao.creativemode.kixi.institutions.dto.profile.VisibilityRequest;
 import ao.creativemode.kixi.institutions.dto.experience.ExperienceResponse;
 import ao.creativemode.kixi.institutions.service.ExperienceService;
 import ao.creativemode.kixi.institutions.service.PersonProfileService;
+import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.util.Map;
@@ -36,15 +37,17 @@ public class ProfileController {
     private final PersonProfileService people;
     private final ExperienceService experience;
     private final CurrentAccountService currentAccount;
+    private final ApiAbuseRateLimiter abuseRateLimiter;
 
     public ProfileController(
         ProfileService service, PersonProfileService people, ExperienceService experience,
-        CurrentAccountService currentAccount
+        CurrentAccountService currentAccount, ApiAbuseRateLimiter abuseRateLimiter
     ) {
         this.experience = experience;
         this.service = service;
         this.people = people;
         this.currentAccount = currentAccount;
+        this.abuseRateLimiter = abuseRateLimiter;
     }
 
     /** A person's profile, as much of it as they let this viewer see (issue #336). */
@@ -99,8 +102,25 @@ public class ProfileController {
         return service.teachersOf(id).collectList().map(ResponseEntity::ok);
     }
 
+    /** Schools matching the text. Rate limited with the profile and colleague searches (#406). */
     @GetMapping("/search")
     public Mono<ResponseEntity<List<InstitutionCard>>> search(@RequestParam("q") String q) {
-        return service.searchInstitutions(q).collectList().map(ResponseEntity::ok);
+        return currentAccount.requiredAccountId()
+            .flatMap(accountId -> abuseRateLimiter.checkSearch(accountId)
+                .then(Mono.defer(() -> service.searchInstitutions(q).collectList())))
+            .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Teachers matching the text by name or specialty, at any school (issue #406). Any signed-in
+     * account may search: the same teachers it already sees on a school's profile, carrying no
+     * contact — a teacher at two schools is one card with both schools.
+     */
+    @GetMapping("/teachers")
+    public Mono<ResponseEntity<List<TeacherCard>>> searchTeachers(@RequestParam("q") String q) {
+        return currentAccount.requiredAccountId()
+            .flatMap(accountId -> abuseRateLimiter.checkSearch(accountId)
+                .then(Mono.defer(() -> service.searchTeachers(q).collectList())))
+            .map(ResponseEntity::ok);
     }
 }
