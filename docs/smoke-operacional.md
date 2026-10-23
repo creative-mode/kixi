@@ -1,8 +1,9 @@
 # Smoke operacional: professor → OCR → prova → aluno → nota
 
-Fecha, quando for corrido em QUA com o resultado anexado, os critérios operacionais da #403 (e, com ela, da #365).
-Os testes automáticos e o stack local **não** substituem o QUA: o que se comprovou localmente está no fim,
-separado do que continua por comprovar.
+Fecha, quando for corrido no ambiente de teste com o resultado anexado, os critérios operacionais da #403 (e, com ela,
+da #365). **Não há servidor de QUA: o ambiente em que isto se testa é a PRD.** Os testes automáticos e o stack local
+**não** substituem esse smoke: o que se comprovou localmente está no fim, separado do que continua por comprovar. Onde
+as issues dizem «QUA», lê-se «PRD».
 
 ## Como correr
 
@@ -10,16 +11,22 @@ O script `services/backend-api/scripts/smoke_teacher_student.py` faz o fluxo int
 biblioteca standard do Python:
 
 ```bash
-BASE=https://<host-do-qua>/api/v1 \
+BASE=https://<host-da-prd>/api/v1 \
 ADMIN_USER=<administrador> ADMIN_PASS=<palavra-passe> \
 OCR_PDF=/caminho/prova-varias-paginas.pdf \
 OCR_IMAGE=/caminho/prova.jpg:/caminho/outra-prova.png \
-SMOKE_OUT=smoke-qua.json \
+SMOKE_OUT=smoke-prd.json \
 python3 services/backend-api/scripts/smoke_teacher_student.py
 ```
 
 - O administrador serve só para criar os dados de teste (escola «Smoke <sufixo>», curso, turma, disciplina,
   professor e aluno). Nada é apagado.
+- **Em PRD, sem povoar a base com escolas e contas de teste:** em vez do administrador, usa um professor e um
+  aluno que já existem (o aluno matriculado na turma, o professor com a disciplina atribuída) e os ids da turma:
+  `TEACHER_USER`, `TEACHER_PASS`, `STUDENT_USER`, `STUDENT_PASS`, `SMOKE_INSTITUTION_ID`, `SMOKE_COURSE_ID`,
+  `SMOKE_CLASS_ID`, `SMOKE_SUBJECT_ID`, `SMOKE_SCHOOL_YEAR_ID`. Cria só uma prova por ficheiro e uma simulação
+  por prova, com o título «Smoke <sufixo>». Com `SMOKE_CLEANUP=1` manda as provas para a lixeira no fim; as
+  simulações só um administrador as apaga (junta `ADMIN_USER` e `ADMIN_PASS`), porque o aluno recebe 403.
 - Cada ficheiro de OCR_PDF/OCR_IMAGE é enviado ao OCR pelo professor, e com o que se leu constrói-se, aprova-se e
   publica-se uma prova (cotação distribuída por 20 valores, gabarito de teste na primeira opção). O aluno
   matriculado abre a prova, responde (certo em metade das questões fechadas), submete e lê a nota.
@@ -29,11 +36,11 @@ python3 services/backend-api/scripts/smoke_teacher_student.py
 - Sem `OCR_PDF` o PDF não é testado: o resultado é «PARCIAL» e o código de saída é 3. Com falhas, 1. Tudo certo, 0.
 - Não imprime palavras-passe nem tokens. Os ficheiros de prova são dados de quem corre: não vão para o repositório.
 
-## O que anexar na #403
+## O que anexar na #403 (resultado da PRD)
 
 | Critério | Onde sai |
 |---|---|
-| Ambiente QUA e commit implantado | URL em `BASE`; o commit implantado (`git rev-parse` do que foi publicado, ou o que o ambiente expõe) anota-se à mão |
+| Ambiente (PRD) e commit implantado | URL em `BASE`; o commit implantado (`git rev-parse` do que foi publicado, ou o que o ambiente expõe) anota-se à mão |
 | PDF real, várias páginas | passo `ocr pdf` e `OCR do pdf` no relatório; `pages` > 1 |
 | Imagem real | passo `ocr imagem` |
 | Request IDs e tempos | `requestIds` e `steps` no JSON de `SMOKE_OUT` (um `X-Request-ID` por etapa crítica) |
@@ -41,7 +48,7 @@ python3 services/backend-api/scripts/smoke_teacher_student.py
 | Construtor, impressão/resultado | screenshots à mão: a prova aberta em «Rever enunciado» / «Ver a folha» do Manager, impressa, e o resultado do aluno. Sem credenciais nem dados pessoais visíveis (as contas de teste têm nomes neutros) |
 | Logs | os do backend e do OCR para os request IDs acima |
 
-## O que se comprovou localmente (não é QUA)
+## O que se comprovou localmente (não é a PRD)
 
 Stack local real, sem mocks: backend de `origin/dev` (Spring Boot 3.5), Postgres 16, OCR construído do
 `infra/docker/ocr.Dockerfile`, com o limite de 4 GB de produção. Duas fotografias reais de provas (Física de 12.ª,
@@ -58,17 +65,17 @@ com fórmulas, e OGI de 12.ª) enviadas como imagem:
 
 31 de 31 verificações passam. No Manager, as duas provas aparecem aprovadas e publicadas, com as questões lidas.
 
-## O que continua por comprovar em QUA (critérios da #403 ainda abertos)
+## O que continua por comprovar na PRD (critérios da #403 ainda abertos)
 
-- **QUA identificado e commit implantado**: não existe QUA acessível a partir da máquina de desenvolvimento.
+- **Ambiente identificado e commit implantado**: não há QUA; vai ser a PRD, e o smoke ainda não foi corrido lá.
 - **PDF real com várias páginas**: não foi testado. Na máquina local a memória estava esgotada por outros serviços
   (RAM e swap cheias) e o contentor do OCR era morto pelo sistema (código 137) assim que começava a rasterizar
   um PDF, mesmo de uma só página; não é uma conclusão sobre o OCR, só que ali não deu para o medir. Precisa de
-  uma máquina com folga de memória.
+  uma máquina com folga de memória (o servidor da PRD tem 12 GB e o contentor do OCR 4 GB).
 - **Construtor com a importação do OCR, impressão e resultado do aluno em browser**: só ficaram capturas do
   Manager a mostrar a prova aprovada e publicada; a folha impressa e o ecrã do aluno não foram capturados (o
   servidor de desenvolvimento do front não compilou a tempo com a máquina sem memória).
 - **Rodapé**: o OCR devolve o cabeçalho e a assinatura como regiões à parte (`cabecalho`, `rodape`) e não os mistura
   nas questões; o smoke não verifica o rodapé na prova impressa.
 - **Páginas múltiplas** (depende do PDF acima).
-- **Request IDs e logs de QUA**, screenshots de QUA, e a actualização do critério na #365 depois de tudo isto.
+- **Request IDs, logs e screenshots da PRD**, e a actualização do critério na #365 depois de tudo isto.
