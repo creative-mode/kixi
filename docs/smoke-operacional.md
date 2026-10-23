@@ -21,6 +21,12 @@ python3 services/backend-api/scripts/smoke_teacher_student.py
 
 - O administrador serve só para criar os dados de teste (escola «Smoke <sufixo>», curso, turma, disciplina,
   professor e aluno). Nada é apagado.
+- **Em PRD, sem criar escola, curso nem disciplina novos (modo «escola existente»):** `ADMIN_USER`, `ADMIN_PASS`,
+  `SMOKE_INSTITUTION_ID`, `SMOKE_COURSE_ID`, `SMOKE_SUBJECT_ID` (uma disciplina já no currículo do curso) e
+  `SMOKE_SCHOOL_YEAR_ID`. Cria só uma turma «SMK<sufixo>», um professor e um aluno de teste, isolados das turmas
+  reais. Com `SMOKE_CLEANUP=1` tira tudo no fim (código de matrícula, matrícula, atribuição, afiliação, conta e ficha
+  do professor, conta do aluno e a turma) e verifica que cada passo respondeu 200 ou 204; as provas e as simulações
+  vão para a lixeira (apagadas, recuperáveis). Testado localmente: a turma desaparece e não fica nada.
 - **Em PRD, sem povoar a base com escolas e contas de teste:** em vez do administrador, usa um professor e um
   aluno que já existem (o aluno matriculado na turma, o professor com a disciplina atribuída) e os ids da turma:
   `TEACHER_USER`, `TEACHER_PASS`, `STUDENT_USER`, `STUDENT_PASS`, `SMOKE_INSTITUTION_ID`, `SMOKE_COURSE_ID`,

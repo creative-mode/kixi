@@ -14,6 +14,10 @@ Variáveis de ambiente
   TEACHER_USER / TEACHER_PASS, STUDENT_USER / STUDENT_PASS   professor e aluno existentes (o aluno já matriculado)
   SMOKE_INSTITUTION_ID, SMOKE_COURSE_ID, SMOKE_CLASS_ID, SMOKE_SUBJECT_ID, SMOKE_SCHOOL_YEAR_ID   a turma e a
                 disciplina que o professor leciona (o aluno é dessa turma)
+  Terceiro modo, para uma escola que já existe sem a povoar com escola, curso e disciplina nova: ADMIN_USER e ADMIN_PASS
+                mais SMOKE_INSTITUTION_ID, SMOKE_COURSE_ID, SMOKE_SUBJECT_ID e SMOKE_SCHOOL_YEAR_ID (a disciplina tem de
+                estar no currículo do curso). Cria só uma turma «SMK<sufixo>», um professor e um aluno de teste, isolados
+                das turmas reais; com SMOKE_CLEANUP=1 tira tudo isso no fim, pela ordem inversa.
   SMOKE_CLEANUP=1   no fim, manda para a lixeira as provas que o smoke criou (e as simulações, se houver ADMIN_USER e
                 ADMIN_PASS: o aluno não pode apagar as suas simulações)
   OCR_PDF       caminho do PDF de prova (pode ter várias páginas). Sem ele o PDF NÃO é testado: o relatório
@@ -41,7 +45,8 @@ RUN = secrets.token_hex(3)
 OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "300"))
 REPORT = {"base": BASE, "run": RUN, "steps": [], "checks": [], "requestIds": {}}
 OK = True
-CREATED = {"statements": [], "simulations": [], "teacher": None, "student": None}
+CREATED = {"statements": [], "simulations": [], "teacher": None, "student": None, "class": None, "teacher_id": None,
+           "assignment": None, "code": None, "enrollment": None, "school": None}
 
 
 def now():
@@ -199,6 +204,7 @@ def main():
         REPORT["notTested"] = ["pdf"]
         print("AVISO: sem OCR_PDF, o caminho do PDF não é testado e o resultado final será parcial.\n")
     reuse = bool(os.environ.get("TEACHER_USER"))
+    existing_school = (not reuse) and bool(os.environ.get("SMOKE_INSTITUTION_ID"))
     admin_user, admin_pass = (None, None) if reuse else (need("ADMIN_USER"), need("ADMIN_PASS"))
     REPORT["inputs"] = {"pdf": os.path.basename(pdf) if pdf else None, "pdfBytes": os.path.getsize(pdf) if pdf else None, "images": [{"name": os.path.basename(i), "bytes": os.path.getsize(i)} for i in images]}
     print(f"Smoke {RUN} contra {BASE}\n")
@@ -220,25 +226,39 @@ def main():
         check("login do administrador", bool(admin))
         if not admin:
             return finish()
-        years = request("GET", "/school-years", token=admin)[1]
+        years = request("GET", "/school-years", token=admin)[1] if not existing_school else []
         year = None
         if isinstance(years, list) and years:
             year = max(years, key=lambda y: y.get("startYear", 0))["id"]
-        if year is None:
+        if year is None and not existing_school:
             year = request("POST", "/school-years", {"startYear": 2026, "endYear": 2027}, token=admin)[1].get("id")
-        school = request("POST", "/institutions", {"code": f"SM{RUN}".upper(), "name": f"Smoke {RUN}", "shortName": "SM"}, token=admin)[1].get("id")
-        course = request("POST", "/courses", {"code": "SMK", "name": "Smoke", "institutionId": school}, token=admin)[1].get("id")
-        klass = request("POST", "/classes", {"code": "12S", "grade": 12, "courseId": course, "schoolYearId": year}, token=admin)[1].get("id")
-        subject = request("POST", "/subjects", {"code": f"SMK{RUN}".upper(), "name": f"Smoke {RUN}", "shortName": "SMK"}, token=admin)[1]
-        request("POST", f"/courses/{course}/subjects", {"subjectId": subject.get("id"), "grade": None}, token=admin)
+        if existing_school:
+            school, course = int(need("SMOKE_INSTITUTION_ID")), int(need("SMOKE_COURSE_ID"))
+            year = int(need("SMOKE_SCHOOL_YEAR_ID"))
+            subject = {"id": int(need("SMOKE_SUBJECT_ID"))}
+            klass = request("POST", "/classes", {"code": f"SMK{RUN}".upper(), "grade": 12, "courseId": course, "schoolYearId": year}, token=admin)[1].get("id")
+            CREATED["class"] = klass
+        else:
+            school = request("POST", "/institutions", {"code": f"SM{RUN}".upper(), "name": f"Smoke {RUN}", "shortName": "SM"}, token=admin)[1].get("id")
+            course = request("POST", "/courses", {"code": "SMK", "name": "Smoke", "institutionId": school}, token=admin)[1].get("id")
+            klass = request("POST", "/classes", {"code": "12S", "grade": 12, "courseId": course, "schoolYearId": year}, token=admin)[1].get("id")
+            subject = request("POST", "/subjects", {"code": f"SMK{RUN}".upper(), "name": f"Smoke {RUN}", "shortName": "SMK"}, token=admin)[1]
+            request("POST", f"/courses/{course}/subjects", {"subjectId": subject.get("id"), "grade": None}, token=admin)
         teacher = request("POST", "/teachers", {"firstName": "Professor", "lastName": f"Smoke{RUN}", "email": f"prof{RUN}@example.com"}, token=admin)[1].get("id")
+        CREATED["teacher_id"] = teacher
         request("POST", f"/teachers/{teacher}/account", {"username": f"prof{RUN}", "email": f"prof{RUN}@example.com", "password": f"Smk#{RUN}Prof1"}, token=admin)
         request("POST", f"/institutions/{school}/teachers/{teacher}", {}, token=admin)
-        assigned = request("POST", "/teaching-assignments", {"teacherId": teacher, "classId": klass, "subjectId": subject.get("id"), "schoolYearId": year}, token=admin)[0]
-        code = request("POST", "/enrollment-codes", {"classId": klass, "maxUses": 5}, token=admin)[1].get("code")
+        a_status, a_body, _ = request("POST", "/teaching-assignments", {"teacherId": teacher, "classId": klass, "subjectId": subject.get("id"), "schoolYearId": year}, token=admin)
+        assigned = a_status
+        CREATED["assignment"] = a_body.get("id") if isinstance(a_body, dict) else None
+        code_body = request("POST", "/enrollment-codes", {"classId": klass, "maxUses": 5}, token=admin)[1]
+        code = code_body.get("code")
+        CREATED["code"] = code_body.get("id")
         st, student_reg, _ = request("POST", "/auth/register", {"username": f"aluno{RUN}", "email": f"aluno{RUN}@example.com", "password": f"Smk#{RUN}Aluno1", "firstName": "Aluno", "lastName": f"Smoke{RUN}"})
         student = student_reg.get("accessToken")
-        enrolled = request("POST", "/enrollments", {"code": code}, token=student)[0] if student and code else 0
+        e_status, e_body, _ = request("POST", "/enrollments", {"code": code}, token=student) if student and code else (0, {}, None)
+        enrolled = e_status
+        CREATED["enrollment"] = e_body.get("id") if isinstance(e_body, dict) else None
         teacher_token = login(f"prof{RUN}", f"Smk#{RUN}Prof1")
         check("estrutura de teste criada (escola, curso, turma, disciplina)", all([school, course, klass, subject.get("id")]))
         check("professor com conta, afiliado e com a disciplina atribuída", bool(teacher_token) and assigned in (200, 201), assigned)
@@ -248,7 +268,8 @@ def main():
             return finish()
 
 
-    CREATED["teacher"], CREATED["student"] = teacher_token, student
+    CREATED["teacher"], CREATED["student"], CREATED["school"] = teacher_token, student, school
+    CREATED["admin"] = admin if not reuse else None
 
     # --- 2. OCR: PDF e imagem, pelo professor
     published = []
@@ -362,12 +383,13 @@ def main():
 
 
 def cleanup():
-    """Com SMOKE_CLEANUP=1, manda para a lixeira o que o smoke criou. As provas apaga-as o professor; as simulações
-    só um administrador as apaga (o aluno recebe 403), por isso sem ADMIN_USER ficam e o relatório di-lo."""
+    """Com SMOKE_CLEANUP=1, tira o que o smoke criou. As provas apaga-as o professor; as simulações só um administrador as
+    apaga (o aluno recebe 403). No modo de escola existente, desfaz também a turma de teste, o professor e o aluno, pela
+    ordem inversa à da criação, e diz o que cada passo respondeu (um 409 conta como «ficou»)."""
     if os.environ.get("SMOKE_CLEANUP") != "1":
         return
+    admin = CREATED.get("admin") or (login(os.environ["ADMIN_USER"], os.environ["ADMIN_PASS"]) if os.environ.get("ADMIN_USER") and os.environ.get("ADMIN_PASS") else None)
     removed = {"simulations": 0, "statements": 0}
-    admin = login(os.environ["ADMIN_USER"], os.environ["ADMIN_PASS"]) if os.environ.get("ADMIN_USER") and os.environ.get("ADMIN_PASS") else None
     for sid in CREATED["simulations"]:
         removed["simulations"] += request("DELETE", f"/simulations/{sid}", token=admin or CREATED["student"])[0] in (200, 204)
     for sid in CREATED["statements"]:
@@ -376,6 +398,30 @@ def cleanup():
     left = len(CREATED["simulations"]) - removed["simulations"]
     print(f"     limpeza: {removed['statements']} de {len(CREATED['statements'])} provas e {removed['simulations']} de {len(CREATED['simulations'])} simulações para a lixeira"
           + (f"; {left} simulação(ões) ficam (só um administrador as apaga: junta ADMIN_USER e ADMIN_PASS)" if left else ""))
+    if not (CREATED["class"] and admin):
+        return
+    steps = []
+    def drop(name, path):
+        status = request("DELETE", path, token=admin)[0]
+        steps.append((name, status))
+    if CREATED["code"]:
+        drop("código de matrícula", f"/enrollment-codes/{CREATED['code']}")
+    if CREATED["enrollment"]:
+        drop("matrícula do aluno", f"/enrollments/{CREATED['enrollment']}")
+    if CREATED["assignment"]:
+        drop("atribuição do professor", f"/teaching-assignments/{CREATED['assignment']}")
+    if CREATED["teacher_id"]:
+        drop("afiliação do professor à escola", f"/institutions/{CREATED['school']}/teachers/{CREATED['teacher_id']}")
+        drop("conta do professor", f"/teachers/{CREATED['teacher_id']}/account")
+        drop("professor", f"/teachers/{CREATED['teacher_id']}")
+    student_account = request("GET", f"/accounts/username/aluno{RUN}", token=admin)[1].get("id")
+    if student_account:
+        drop("conta do aluno", f"/accounts/{student_account}")
+    drop("turma de teste", f"/classes/{CREATED['class']}")
+    REPORT["cleanup"]["structure"] = [{"step": n, "status": c} for n, c in steps]
+    print("     limpeza da estrutura de teste: " + ", ".join(f"{n} {c}" for n, c in steps))
+    stuck = [n for n, c in steps if c not in (200, 204)]
+    check("a turma de teste, o professor e o aluno foram retirados", not stuck, ", ".join(stuck))
 
 
 def finish():
