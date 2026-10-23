@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     max_ocr_pages_per_request: int = Field(default=50, ge=1, description="Maximum pages processed per request")
     max_image_pixels: int = Field(default=40_000_000, ge=1, description="Maximum decoded pixels per image or PDF page")
     max_ocr_pixels_per_request: int = Field(default=250_000_000, ge=1, description="Maximum rendered pixels per OCR request")
+    max_pdf_page_pixels: int = Field(
+        default=4_500_000,
+        ge=1,
+        description=(
+            "Pixels a PDF page is rendered at, at most. A page whose size at target_dpi would be bigger is rendered at a "
+            "lower DPI instead of whole: an A4 page at 300 DPI is 8.7 MP, and the layout and formula models on two of those "
+            "took the OCR process above the 4 GB container limit in production (#407)."
+        ),
+    )
     processing_timeout_seconds: int = Field(default=120, description="Timeout for OCR processing in seconds")
     min_confidence_threshold: float = Field(default=0.5, description="Minimum confidence threshold for text extraction")
 
