@@ -34,6 +34,7 @@ verificação falhar e 3 se tudo passou mas o PDF não foi testado. Não imprime
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sys
 import time
@@ -188,13 +189,6 @@ def questions_from(extraction, total=20.0):
     return questions
 
 
-def flatten(statement_questions):
-    out = []
-    for q in statement_questions:
-        out.append(q)
-    return out
-
-
 def main():
     pdf = os.environ.get("OCR_PDF")
     images = [p for p in os.environ.get("OCR_IMAGE", "").split(":") if p]
@@ -288,6 +282,13 @@ def main():
         pages = (extraction.get("document") or {}).get("pageCount") if isinstance(extraction, dict) else None
         REPORT.setdefault("ocr", {})[label_] = {"questions": len(questions), "pages": pages, "figures": len(extraction.get("images_to_upload") or []) if isinstance(extraction, dict) else 0}
         print(f"     {label_}: {len(questions)} questões, páginas={pages}, figuras={REPORT['ocr'][label_]['figures']}")
+        # Rodapé: o OCR deve tratá-lo à parte (região «rodape») e não misturá-lo com as questões. É uma verificação por
+        # palavras típicas de um rodapé (contactos, morada, sítio), por isso só aponta o que sai claramente.
+        regions = sorted({(i.get("region") or "") for i in (extraction.get("images_to_upload") or []) if isinstance(i, dict)})
+        leaks = [q.get("number") for q in questions if re.search(r"@|\.gov\.ao|www\.|\bCTT\b|\bKM\s*\d", " ".join([q.get("text") or ""] + [i.get("text") or "" for i in (q.get("subitems_content") or [])]), re.I)]
+        REPORT["ocr"][label_]["regions"] = regions
+        REPORT["ocr"][label_]["footerInQuestions"] = leaks
+        check(f"rodapé do {label_} não entrou no texto das questões (regiões: {', '.join(r for r in regions if r in ('cabecalho', 'rodape')) or 'nenhuma de cabeçalho/rodapé'})", not leaks, f"questões {leaks}")
         if status != 200 or not questions:
             continue
 

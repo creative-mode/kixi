@@ -73,6 +73,41 @@ com `SMOKE_CLEANUP=1`: Instituto de Telecomunicações, curso INFO, disciplina F
 
 32 de 32 verificações passam (a segunda corrida; a primeira, igual, só falhou ao gravar o relatório). **PDF de várias páginas: ver abaixo.**
 
+### Rodapé
+
+O smoke confere que o texto do rodapé (contactos, morada, sítio) não entra nas questões: com as duas fotografias, nenhuma
+questão tem texto de rodapé (`footerInQuestions: []`). O OCR trata o cabeçalho à parte (região `cabecalho`); na fotografia
+de Física, que tem rodapé com contactos, não saiu região `rodape` nesta corrida e o texto do rodapé não apareceu nas
+questões. A impressão do rodapé do original não é verificada (o Manager não reproduz o cabeçalho nem o rodapé do
+original na folha impressa: só o enunciado). Fica isso explícito para quem valida.
+
+### Logs da PRD
+
+Os `X-Request-ID` que o smoke imprime são os da resposta (aparecem nos logs só quando há erro, como o do PDF abaixo).
+O que liga um pedido ao log é a hora e o `requestId` do OCR que o backend regista. Corrida `c2aaf6`, backend (hora do
+servidor, +01:00):
+
+```
+10:31:22.696 Angolan exam extraction request received
+10:31:22.715 Sending retained OCR request: 1 file(s)
+10:31:31.161 OCR retained request successful: requestId=req-d7e31651b836, status=success      (OGI, 8,4 s)
+10:31:31.548 Angolan exam extraction request received
+10:31:31.584 Sending retained OCR request: 1 file(s)
+10:31:38.854 OCR retained request successful: requestId=req-2c2506d4cb2c, status=success      (Física, 7,3 s)
+10:31:40.426 Angolan exam extraction completed: status=200 OK
+```
+
+O PDF, no mesmo servidor (sem `requestId` de sucesso: a ligação ao OCR caiu):
+
+```
+10:32:01.358 Angolan exam extraction request received
+10:32:01.402 Sending retained OCR request: 1 file(s)
+10:32:47.541 [ocr-service/172.18.0.6:8000] The connection observed an error
+kernel: [Fri Oct 23 11:32:35 2026] Memory cgroup out of memory: Killed process 2049743 (python) anon-rss:4163424kB
+```
+
+(o kernel marca a hora do servidor, +02:00; o backend, +01:00; o OCR reiniciou às 09:32:47 UTC.)
+
 ### PDF de várias páginas: falhou em produção e derrubou o OCR
 
 Um PDF de 2 páginas (as duas fotografias, ~280 KB) enviado ao OCR de produção fez o processo ser morto pelo limite de
@@ -101,10 +136,13 @@ com fórmulas, e OGI de 12.ª) enviadas como imagem:
 
 ## O que continua por comprovar na PRD (critérios da #403 ainda abertos)
 
-- **PDF real com várias páginas**: não passa em PRD (#407). Falta a correcção e voltar a correr com `OCR_PDF`.
+- **PDF real com várias páginas**: não passa em PRD (#407). A correcção está no PR #408 (limite de píxeis por página);
+  falta implantá-la e correr o smoke com um PDF de 1, de 2 e de 10 páginas, fora de horas de uso e com `docker stats` ao
+  OCR aberto.
 - **Screenshots da PRD**: do construtor com a importação do OCR, da folha impressa e do resultado do aluno. O smoke é só
-  pela API; aqui só se capturou, localmente, o Manager com as provas publicadas.
-- **Rodapé**: o OCR devolve o cabeçalho e a assinatura como regiões à parte (`cabecalho`, `rodape`) e não os mistura nas
-  questões; o smoke não verifica o rodapé na prova impressa.
+  pela API. Não se conseguiram tirar daqui: a rede de quem desenvolve bloqueia o host do Manager (FortiGuard) e um túnel
+  SSH pela rede do fornecedor, com perda de pacotes, não aguentou o ecrã do construtor. Têm de ser tiradas por quem
+  tem uma conta de professor, sem credenciais nem dados pessoais visíveis: (1) o construtor com a prova importada (Importar
+  de fotografia → ler); (2) «Imprimir / guardar PDF» da prova; (3) o resultado do aluno depois de submeter.
 - **Páginas múltiplas** (depende do PDF).
-- **Logs da PRD** para os request IDs acima, e a actualização do critério na #365 depois de tudo isto.
+- A actualização do critério na #365 depois de tudo isto.
