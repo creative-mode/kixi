@@ -170,16 +170,15 @@ def _extract_with_pymupdf(
         start_page = max(0, min(start_page, total_pages - 1))
         end_page = max(1, min(end_page, total_pages))
 
-        # Calculate zoom factor for desired DPI
-        # Default PDF resolution is 72 DPI
-        zoom = dpi / 72.0
-        matrix = fitz.Matrix(zoom, zoom)
-
         rendered_pixels = 0
         for page_num in range(start_page, end_page):
             page = pdf_document[page_num]
 
-            page_pixels = _rendered_page_pixels(page.rect.width, page.rect.height, dpi)
+            # The DPI is lowered per page when the page would be too many pixels (#407); default PDF resolution is 72 DPI.
+            page_dpi = effective_render_dpi(page.rect.width, page.rect.height, dpi)
+            zoom = page_dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            page_pixels = _rendered_page_pixels(page.rect.width, page.rect.height, page_dpi)
             if page_pixels > settings.max_image_pixels:
                 raise ValueError("PDF page exceeds the maximum rendered pixel count")
             rendered_pixels += page_pixels
@@ -366,7 +365,7 @@ def validate_pdf(
                 page_pixels = _rendered_page_pixels(
                     page.rect.width,
                     page.rect.height,
-                    settings.target_dpi,
+                    effective_render_dpi(page.rect.width, page.rect.height, settings.target_dpi),
                 )
                 if page_pixels > settings.max_image_pixels:
                     raise ValueError("PDF page exceeds the maximum rendered pixel count")
@@ -387,6 +386,20 @@ def validate_pdf(
         raise
     except Exception as e:
         raise ValueError(f"Failed to validate PDF: {e}")
+
+
+def effective_render_dpi(width_points: float, height_points: float, dpi: int) -> int:
+    """The DPI a page is rendered at: the requested one, lowered when the page would pass `max_pdf_page_pixels`.
+
+    Pixels grow with the square of the DPI, so the DPI is scaled by the square root of the ratio. Never below
+    72 DPI (the PDF's own resolution); a page that is bigger than the limit even there is refused by the callers
+    through `max_image_pixels`.
+    """
+    pixels = _rendered_page_pixels(width_points, height_points, dpi)
+    limit = settings.max_pdf_page_pixels
+    if pixels <= limit:
+        return dpi
+    return max(72, math.floor(dpi * math.sqrt(limit / pixels)))
 
 
 def _rendered_page_pixels(width_points: float, height_points: float, dpi: int) -> int:

@@ -162,3 +162,41 @@ def test_validate_pdf_rejects_encrypted_and_unexpected_errors():
     with patch("app.api.pdf_handler.get_pdf_info", side_effect=RuntimeError("parser failed")):
         with pytest.raises(ValueError, match="Failed to validate PDF"):
             validate_pdf(b"%PDF-valid")
+
+
+# --- #407: a page is never rendered at more than max_pdf_page_pixels -----------------------------------------------
+
+def test_an_a4_page_at_300_dpi_is_rendered_at_a_lower_dpi_so_it_stays_under_the_page_pixel_limit():
+    a4 = (595.0, 842.0)  # points
+
+    dpi = pdf_handler.effective_render_dpi(*a4, 300)
+
+    assert 150 <= dpi < 300
+    assert pdf_handler._rendered_page_pixels(*a4, dpi) <= pdf_handler.settings.max_pdf_page_pixels
+
+
+def test_a_page_that_already_fits_keeps_the_requested_dpi():
+    assert pdf_handler.effective_render_dpi(595.0, 842.0, 150) == 150
+    assert pdf_handler.effective_render_dpi(100.0, 100.0, 300) == 300
+
+
+def test_the_dpi_is_never_lowered_below_the_pdf_own_resolution(monkeypatch):
+    monkeypatch.setattr(pdf_handler.settings, "max_pdf_page_pixels", 10)
+
+    assert pdf_handler.effective_render_dpi(595.0, 842.0, 300) == 72
+
+
+def test_extract_images_renders_a_large_page_within_the_limit_and_keeps_its_aspect_ratio():
+    image = extract_images_from_pdf(make_pdf(page_count=1), dpi=300)[0]
+
+    height, width = image.shape[:2]
+    assert height * width <= pdf_handler.settings.max_pdf_page_pixels
+    assert abs((height / width) - (842.0 / 595.0)) < 0.01
+
+
+def test_every_page_of_a_multi_page_pdf_respects_the_limit_so_pages_do_not_add_up_to_gigabytes():
+    images = extract_images_from_pdf(make_pdf(page_count=3), dpi=300)
+
+    assert len(images) == 3
+    assert all(i.shape[0] * i.shape[1] <= pdf_handler.settings.max_pdf_page_pixels for i in images)
+    assert sum(i.nbytes for i in images) < 3 * pdf_handler.settings.max_pdf_page_pixels * 3 + 1
