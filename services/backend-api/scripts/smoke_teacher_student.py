@@ -162,30 +162,48 @@ def leaf(text, kind, points, extraction_options=None):
 KINDS = {"multipla_escolha": "multiple_choice", "multiple_choice": "multiple_choice", "verdadeiro_falso": "true_false", "true_false": "true_false"}
 
 
+def cents_split(total_cents, parts):
+    """Reparte em cêntimos, sem dízimas: a diferença vai para a última parte, e nunca fica negativa."""
+    base = total_cents // parts
+    shares = [base] * parts
+    shares[-1] += total_cents - base * parts
+    return [s / 100 for s in shares]
+
+
 def questions_from(extraction, total=20.0):
-    """O que o professor faz no construtor: aceitar as questões lidas, dar o gabarito e distribuir a cotação."""
+    """O que o professor faz no construtor: aceitar as questões lidas, dar o gabarito e distribuir a cotação.
+
+    A cotação lida pelo OCR só se usa se somar o total; senão (a prova pode trazer cotações que não são desta
+    nota, ou a leitura pode falhar numa) reparte-se por igual por todas as folhas. Corrigir a diferença na última
+    folha dava uma cotação negativa quando as lidas passavam do total, e o backend recusa-a."""
     raw = [q for q in (extraction.get("questions") or []) if (q.get("text") or "").strip() or (q.get("subitems_content") or [])]
-    share = round(total / max(len(raw), 1), 2)
     questions = []
     for q in raw:
-        points = q.get("cotacao") if isinstance(q.get("cotacao"), (int, float)) and q.get("cotacao") > 0 else share
         items = [i for i in (q.get("subitems_content") or []) if (i.get("text") or "").strip()]
         kind = KINDS.get((q.get("type") or "").lower(), "open")
         if items:
-            each = round(points / len(items), 2)
             group = {"text": (q.get("text") or "Questão").strip(), "type": "group", "maxScore": None, "options": [], "items": []}
             for index, item in enumerate(items):
-                sub = leaf(item["text"], KINDS.get((item.get("type") or "").lower(), "open"), each, None)
+                sub = leaf(item["text"], KINDS.get((item.get("type") or "").lower(), "open"), 0.0, None)
                 sub["label"] = (item.get("label") or label(index)).strip()[:10] or label(index)
                 group["items"].append(sub)
             questions.append(group)
         else:
-            questions.append(leaf(q.get("text") or "", kind, points, q.get("options")))
-    # a soma das cotações tem de bater com o total (o gate da aprovação recusa se não bater)
+            questions.append(leaf(q.get("text") or "", kind, 0.0, q.get("options")))
     leaves = [x for q in questions for x in (q["items"] if q["type"] == "group" else [q])]
-    drift = round(total - sum(x["maxScore"] for x in leaves), 2)
-    if leaves and drift:
-        leaves[-1]["maxScore"] = round(leaves[-1]["maxScore"] + drift, 2)
+    if not leaves:
+        return questions
+    read = []
+    for q in raw:
+        n = len([i for i in (q.get("subitems_content") or []) if (i.get("text") or "").strip()]) or 1
+        c = q.get("cotacao")
+        read += [round(c * 100 / n) if isinstance(c, (int, float)) and c > 0 else None] * n
+    if None not in read and sum(read) == round(total * 100):
+        scores = [c / 100 for c in read]
+    else:
+        scores = cents_split(round(total * 100), len(leaves))
+    for leaf_, score in zip(leaves, scores):
+        leaf_["maxScore"] = score
     return questions
 
 
