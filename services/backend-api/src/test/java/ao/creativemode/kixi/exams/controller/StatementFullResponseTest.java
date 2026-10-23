@@ -91,6 +91,7 @@ class StatementFullResponseTest {
         statement = new Statement("P1", "Prova de Matematica");
         statement.setId(STATEMENT_ID);
         statement.setSource("ocr");
+        statement.setOcrRequestId("ocr-private-request-id");
         statement.setVisible(true);
         statement.setNeedsReview(true);
     }
@@ -122,6 +123,9 @@ class StatementFullResponseTest {
         Question question = new Question(STATEMENT_ID, 1, "Resolva x+1=2", "multiple_choice");
         question.setId(QUESTION_ID);
         question.setOcrConfidence(0.31);
+        question.setRawText("Resolva x+1=2 original OCR");
+        question.setOcrFormulas("[{\"raw\":\"v0\",\"latex\":\"v_0\",\"confidence\":0.61,\"kind\":\"formula\"}]");
+        question.setOcrReviewed(false);
         QuestionOption option = new QuestionOption(QUESTION_ID, "B", "x = 1", true);
         option.setId(OPTION_ID);
         option.setOcrConfidence(0.87);
@@ -132,8 +136,39 @@ class StatementFullResponseTest {
         String json = bodyAsJson(studentJwt());
 
         assertThat(json).doesNotContain("ocrConfidence");
+        assertThat(json).doesNotContain("ocrRequestId").doesNotContain("\"source\"");
+        assertThat(json).doesNotContain("rawText").doesNotContain("formulas").doesNotContain("v0");
         // Even with the numbers on the rows behind it.
         assertThat(json).doesNotContain("0.42").doesNotContain("0.31").doesNotContain("0.87");
+    }
+
+    @Test
+    void aStudentDoesNotGetInternalOcrStateFromTheStatementSummary() {
+        statement.setOcrConfidence(0.42);
+        when(statementService.findByIdVisible(STATEMENT_ID)).thenReturn(Mono.just(statement));
+
+        String json = client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/statements/" + STATEMENT_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertThat(json).doesNotContain("needsReview").doesNotContain("source")
+                .doesNotContain("ocrConfidence").doesNotContain("ocrRequestId");
+    }
+
+    @Test
+    void aStudentCannotReadStaffOnlyStatementQueues() {
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/statements/review")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        org.mockito.Mockito.verify(statementService, org.mockito.Mockito.never()).findNeedingReview();
     }
 
     @Test
@@ -143,6 +178,7 @@ class StatementFullResponseTest {
         String json = bodyAsJson(teacherJwt());
 
         assertThat(json).contains("\"isCorrect\":true").contains("\"needsReview\":true");
+        assertThat(json).contains("rawText").contains("v0").contains("v_0").contains("ocrReviewed");
     }
 
     @Test
@@ -214,6 +250,10 @@ class StatementFullResponseTest {
         Question question = new Question(STATEMENT_ID, 1, "Resolva x+1=2", "multiple_choice");
         question.setId(QUESTION_ID);
         question.setNeedsReview(true);
+        question.setRawText("Resolva x+1=2 original OCR");
+        question.setOcrConfidence(0.31);
+        question.setOcrFormulas("[{\"raw\":\"v0\",\"latex\":\"v_0\",\"confidence\":0.61,\"kind\":\"formula\"}]");
+        question.setOcrReviewed(false);
 
         QuestionOption right = new QuestionOption(QUESTION_ID, "B", "x = 1", true);
         right.setId(OPTION_ID);

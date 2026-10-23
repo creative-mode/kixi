@@ -29,6 +29,12 @@
 	#    que não existe e a resposta era 404 outra vez, com a página do frontend em vez
 	#    de JSON.
 	handle /api/* {
+		# request_body max_size is available from Caddy 2.10; keep the edge cap just
+		# above the backend's 50 MiB file aggregate to allow multipart boundaries.
+		@ocr_upload path /api/v1/ocr/extract /api/v1/ocr/extract/* /api/v1/statements/ocr/extract /api/v1/statements/ocr/extract/*
+		request_body @ocr_upload {
+			max_size 55MB
+		}
 		reverse_proxy backend-api:8080 {
 			# O limiter de login e de registo conta por endereço (#123/#240). Atrás de
 			# um proxy, o endereço que a aplicação vê é o do Caddy, partilhado por
@@ -50,6 +56,8 @@
 	#    tem basePath /manager e espera recebê-lo já removido. Os assets em
 	#    /_next/static são servidos a partir daqui, com cache de um ano.
 	handle_path /manager/* {
+		# reverse_proxy resets untrusted incoming X-Forwarded-* values by default;
+		# do not enable trusted_proxies for arbitrary client connections here.
 		reverse_proxy manager:3002
 	}
 

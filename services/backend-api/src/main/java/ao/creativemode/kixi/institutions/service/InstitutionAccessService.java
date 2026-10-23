@@ -104,4 +104,18 @@ public class InstitutionAccessService implements TeachingAssignmentAuthorizer {
 
         return institution.then(affiliation).then(subject);
     }
+
+    /** Completes only when the account is an active teacher affiliated with the institution. */
+    public Mono<Void> requireTeacherAffiliatedToInstitution(Long accountId, Long institutionId) {
+        if (institutionId == null) {
+            return Mono.error(ApiException.notFound("Institution not found"));
+        }
+
+        return teacherRepository.findByAccountIdAndDeletedAtIsNull(accountId)
+            .flatMap(teacher -> teacherLinks.existsByInstitutionIdAndTeacherIdAndDeletedAtIsNull(
+                    institutionId, teacher.getId()))
+            .filter(Boolean::booleanValue)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Institution not found")))
+            .then();
+    }
 }

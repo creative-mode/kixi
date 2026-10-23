@@ -81,7 +81,11 @@ class Settings(BaseSettings):
     ocr_layout_model_name: str = Field(default="PP-DocLayout_plus-L", description="Layout detection model")
     ocr_layout_min_score: float = Field(default=0.5, ge=0, le=1, description="Minimum score of a layout region")
     ocr_formula_images: bool = Field(default=True, description="Crop the printed formulas as pictures that travel with their question: the text engine cannot read maths, so the picture is the formula. Formulas in a pen colour are never cropped.")
-    ocr_formula_latex: bool = Field(default=True, description="Recognize printed and inline formulas as LaTeX text (#262) - '8π' becomes '$8\\pi$' - instead of leaving the OCR's garbled reading or the «[fórmula]» marker as the only text. Runs entirely on text the OCR already read; no image ever leaves the service for this (there is no external formula-recognition provider wired in). Disable to go back to the old text-only behaviour if a recognition ever does more harm than good.")
+    ocr_formula_latex: bool = Field(default=True, description="Recognize printed and inline formulas as LaTeX text (#262). Disable to keep raw OCR text and formula crops only.")
+    ocr_formula_model_enabled: bool = Field(default=True, description="Run the local image-to-LaTeX model on printed formula regions detected by the layout model.")
+    ocr_formula_model_name: str = Field(default="PP-FormulaNet_plus-S", description="PaddleOCR formula recognition model. The plus-S model is the bounded CPU default.")
+    ocr_formula_batch_size: int = Field(default=8, ge=1, le=32, description="Formula crops inferred together per page.")
+    ocr_formula_max_latex_chars: int = Field(default=2000, ge=16, le=10000, description="Reject unexpectedly large model output before it reaches a renderer.")
 
     # Processing configuration
     max_image_size_mb: float = Field(default=20.0, gt=0, description="Maximum image size in MB")
@@ -89,6 +93,17 @@ class Settings(BaseSettings):
     max_images_per_request: int = Field(default=10, ge=1, description="Maximum images per request")
     max_pdf_pages: int = Field(default=50, ge=1, description="Maximum pages in one uploaded PDF")
     max_ocr_pages_per_request: int = Field(default=50, ge=1, description="Maximum pages processed per request")
+    max_image_pixels: int = Field(default=40_000_000, ge=1, description="Maximum decoded pixels per image or PDF page")
+    max_ocr_pixels_per_request: int = Field(default=250_000_000, ge=1, description="Maximum rendered pixels per OCR request")
+    max_pdf_page_pixels: int = Field(
+        default=4_500_000,
+        ge=1,
+        description=(
+            "Pixels a PDF page is rendered at, at most. A page whose size at target_dpi would be bigger is rendered at a "
+            "lower DPI instead of whole: an A4 page at 300 DPI is 8.7 MP, and the layout and formula models on two of those "
+            "took the OCR process above the 4 GB container limit in production (#407)."
+        ),
+    )
     processing_timeout_seconds: int = Field(default=120, description="Timeout for OCR processing in seconds")
     min_confidence_threshold: float = Field(default=0.5, description="Minimum confidence threshold for text extraction")
 

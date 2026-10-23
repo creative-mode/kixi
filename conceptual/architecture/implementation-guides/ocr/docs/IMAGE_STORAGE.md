@@ -18,14 +18,26 @@ Run the optional profile with the S3 provider enabled:
 
 ```bash
 STORAGE_PROVIDER=s3 \
-STORAGE_PUBLIC_BASE_URL=http://localhost:9000/kixi-images \
+STORAGE_S3_PUBLIC_ENDPOINT=http://127.0.0.1:9000 \
 docker compose --profile storage up --build
 ```
 
-The profile creates the `kixi-images` bucket and enables anonymous downloads for
-local development only. Do not carry that bucket policy to production. In
-production, configure a private bucket with a controlled CDN or signed delivery
-endpoint through `STORAGE_PUBLIC_BASE_URL`.
+The profile creates the `kixi-images` bucket and explicitly sets its anonymous
+policy to `none` on every initialization, including for buckets created before
+this change. MinIO's host ports bind to loopback only. Configure
+`STORAGE_S3_PUBLIC_ENDPOINT` as the browser-reachable endpoint used to sign GET
+URLs; use `http://127.0.0.1:9000` for local testing and HTTPS in production.
+The API returns 15-minute signed GET URLs and persists stable object references,
+not expiring URLs. Existing image URLs under the configured public base or S3
+endpoint are resolved to the same private objects when API responses are built.
+
+Production must keep the bucket private, set `STORAGE_S3_PUBLIC_ENDPOINT` to a
+TLS endpoint reachable by clients, and avoid publishing MinIO ports beyond the
+loopback binding. Existing object bytes are retained; removing anonymous access
+revokes old permanent URLs immediately, while existing database references are
+signed on read when they match the configured legacy base. URLs already copied
+outside the application cannot be revoked at their former CDN/cache layer; purge
+those caches if they existed.
 
 ## OCR boundary
 

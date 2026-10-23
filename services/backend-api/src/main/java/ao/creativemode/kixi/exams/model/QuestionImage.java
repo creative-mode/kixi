@@ -27,6 +27,18 @@ public class QuestionImage {
     @Column("caption")
     private String caption;
 
+    /** OCR layout region kind; null for images uploaded outside OCR. */
+    @Column("ocr_kind")
+    private String ocrKind;
+
+    /** Zero-based source page for OCR-created images. */
+    @Column("ocr_page_index")
+    private Integer ocrPageIndex;
+
+    /** Layout model confidence for the source region, when available. */
+    @Column("ocr_score")
+    private Double ocrScore;
+
     @Column("order_index")
     private Integer orderIndex;
 

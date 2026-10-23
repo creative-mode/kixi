@@ -22,7 +22,15 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByUsernameAndDeletedAtIsNull(String username);
 
+    /** Includes soft-deleted rows so new Google accounts cannot reuse a unique username. */
+    Mono<Account> findByUsername(String username);
+
     Mono<Account> findByEmailAndDeletedAtIsNull(String email);
+
+    /** Includes soft-deleted rows so callers can explain why a unique email cannot be reused. */
+    Mono<Account> findByEmailAndDeletedAtIsNotNull(String email);
+
+    Mono<Account> findByGoogleSubAndDeletedAtIsNull(String googleSub);
 
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
 

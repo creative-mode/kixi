@@ -102,6 +102,9 @@ services:
       # .env value never reaches the backend and CorsProperties stays empty — which
       # blocks the frontend gateway on :3000.
       APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # Only direct peers that are allowed to assert the client address. In production,
+      # set the addresses of the gateway and frontend containers that connect to this API.
+      APP_TRUSTED_PROXY_IPS: ${APP_TRUSTED_PROXY_IPS:-}
       # First ADMIN bootstrap (optional, see .env.example): creates the first
       # administrator on startup when none exists; without them nothing happens.
       APP_BOOTSTRAP_ADMIN_USERNAME: ${APP_BOOTSTRAP_ADMIN_USERNAME:-}
@@ -109,6 +112,9 @@ services:
       APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       APP_AUTH_GOOGLE_STATE_COOKIE_SECURE: ${GOOGLE_OAUTH_STATE_COOKIE_SECURE:-true}
       OCR_SERVICE_API_KEY: ${OCR_API_KEY:?Set OCR_API_KEY for backend-to-OCR authentication}
+      APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: ${APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS:-10}
+      APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_ADDRESS: ${APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_ADDRESS:-60}
+      APP_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${APP_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
       APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_LOGIN_MAX_ATTEMPTS:-10}
       APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS: ${APP_SECURITY_RATE_LIMIT_LOGIN_WINDOW_SECONDS:-900}
       APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS: ${APP_SECURITY_RATE_LIMIT_UPLOAD_MAX_ATTEMPTS:-10}
@@ -123,6 +129,7 @@ services:
       STORAGE_LOCAL_ROOT: ${STORAGE_LOCAL_ROOT:-/tmp/kixi/uploads}
       STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-/uploads}
       STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-http://minio:9000}
+      STORAGE_S3_PUBLIC_ENDPOINT: ${STORAGE_S3_PUBLIC_ENDPOINT:-}
       STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
       STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-kixi-images}
       STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
@@ -188,6 +195,8 @@ services:
       MAX_IMAGES_PER_REQUEST: ${MAX_IMAGES_PER_REQUEST:-10}
       MAX_PDF_PAGES: ${MAX_PDF_PAGES:-50}
       MAX_OCR_PAGES_PER_REQUEST: ${MAX_OCR_PAGES_PER_REQUEST:-50}
+      MAX_IMAGE_PIXELS: ${MAX_IMAGE_PIXELS:-40000000}
+      MAX_OCR_PIXELS_PER_REQUEST: ${MAX_OCR_PIXELS_PER_REQUEST:-250000000}
       PROCESSING_TIMEOUT_SECONDS: ${PROCESSING_TIMEOUT_SECONDS:-120}
       MIN_CONFIDENCE_THRESHOLD: ${MIN_CONFIDENCE_THRESHOLD:-0.5}
       # Preprocessing Configuration
@@ -251,6 +260,8 @@ services:
       MAX_IMAGES_PER_REQUEST: "10"
       MAX_PDF_PAGES: "50"
       MAX_OCR_PAGES_PER_REQUEST: "50"
+      MAX_IMAGE_PIXELS: "40000000"
+      MAX_OCR_PIXELS_PER_REQUEST: "250000000"
       PROCESSING_TIMEOUT_SECONDS: "120"
       MIN_CONFIDENCE_THRESHOLD: "0.5"
       ENABLE_DESKEW: "true"
@@ -318,8 +329,8 @@ services:
       MINIO_ROOT_USER: ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
       MINIO_ROOT_PASSWORD: ${STORAGE_S3_SECRET_KEY:-kixi-minio-secret}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -346,7 +357,7 @@ services:
         ${STORAGE_S3_ACCESS_KEY:-kixi-minio}
         ${STORAGE_S3_SECRET_KEY:-kixi-minio-secret}
         && mc mb --ignore-existing local/${STORAGE_S3_BUCKET:-kixi-images}
-        && mc anonymous set download local/${STORAGE_S3_BUCKET:-kixi-images}
+        && mc anonymous set none local/${STORAGE_S3_BUCKET:-kixi-images}
     networks:
       - kixi-network
 

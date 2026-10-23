@@ -14,6 +14,7 @@ import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postModeration.ReportedPostResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
+import ao.creativemode.kixi.feed.dto.postReaction.PostReactionSetRequest;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionToggleResponse;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportRequest;
 import ao.creativemode.kixi.feed.dto.postReport.PostReportResponse;
@@ -141,6 +142,8 @@ class PostControllerHttpTest {
                         LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg")));
         when(service.toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE)))
                 .thenReturn(Mono.just(new PostReactionToggleResponse(true)));
+        when(service.setReaction(9L, 42L, new PostReactionSetRequest(PostReactionType.APPLAUSE, false)))
+                .thenReturn(Mono.just(new PostReactionToggleResponse(false)));
         when(service.reportPost(9L, 42L, new PostReportRequest("Not useful")))
                 .thenReturn(Mono.just(new PostReportResponse(4L, 9L, 42L, "Not useful", LocalDateTime.now())));
 
@@ -154,6 +157,9 @@ class PostControllerHttpTest {
         client.mutateWith(studentJwt()).post().uri("/api/v1/feed/posts/9/reactions")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("reaction", "APPLAUSE"))
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.reacted").isEqualTo(true);
+        client.mutateWith(studentJwt()).put().uri("/api/v1/feed/posts/9/reactions")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("reaction", "APPLAUSE", "reacted", false))
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.reacted").isEqualTo(false);
         client.mutateWith(studentJwt()).post().uri("/api/v1/feed/posts/9/reports")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("reason", "Not useful"))
                 .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id").isEqualTo(4);
@@ -161,6 +167,7 @@ class PostControllerHttpTest {
         verify(service).createPost(42L, postRequest);
         verify(service).addComment(9L, 42L, new PostCommentRequest("A comment"));
         verify(service).toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE));
+        verify(service).setReaction(9L, 42L, new PostReactionSetRequest(PostReactionType.APPLAUSE, false));
         verify(service).reportPost(9L, 42L, new PostReportRequest("Not useful"));
     }
 

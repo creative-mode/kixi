@@ -1,40 +1,41 @@
 # FastAPI and web server
-fastapi==0.109.2
-uvicorn[standard]==0.27.1
-python-multipart==0.0.9
+fastapi==0.156.3
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
 
 # PaddleOCR and dependencies
 # paddlepaddle 3.2.2, not 3.3.x: with 3.3.1 the oneDNN kernels die on any real page (ConvertPirAttribute2RuntimeAttribute
 # not support), which makes OCR 3 to 10 times slower on CPU. paddleocr 3.3.3 is the release built against 3.2.x.
 paddlepaddle==3.2.2
 paddleocr==3.3.3
+tokenizers>=0.19,<1
+ftfy>=6.1,<7
 # OCR_PIPELINE=vl (PaddleOCR-VL, for a machine with a GPU) also needs the doc-parser extra: paddleocr[doc-parser]==3.3.3
 
 # Image processing
 opencv-python-headless==4.9.0.80
-Pillow==10.2.0
+Pillow==13.0.0
 numpy==1.26.4
 
 # PDF support
 pdf2image==1.17.0
-PyMuPDF==1.23.26
+PyMuPDF==1.28.2
 
 # Configuration and validation
-pydantic==2.6.1
-pydantic-settings==2.1.0
-python-dotenv==1.0.1
+pydantic==2.14.1
+pydantic-settings==2.14.2
+python-dotenv==1.2.4
 
 # Logging and monitoring
 structlog==24.1.0
 prometheus-client==0.19.0
 
 # Utilities
-python-jose[cryptography]==3.3.0
-httpx==0.26.0
-tenacity==8.2.3
+httpx==0.28.1
+tenacity==9.1.2
 
 # Testing
-pytest==7.4.4
-pytest-asyncio==0.23.4
-pytest-cov==4.1.0
-pytest-timeout==2.2.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+pytest-timeout==2.4.0

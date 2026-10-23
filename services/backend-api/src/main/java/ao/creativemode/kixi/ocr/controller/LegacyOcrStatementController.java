@@ -2,6 +2,7 @@ package ao.creativemode.kixi.ocr.controller;
 
 import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
 import ao.creativemode.kixi.ocr.service.LegacyOcrStatementService;
+import ao.creativemode.kixi.ocr.service.OcrUploadBuffer;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
@@ -115,7 +116,8 @@ public class LegacyOcrStatementController {
                     fileList.size()
                 );
 
-                return legacyOcrStatementService.createFromOcr(fileList, createdBy);
+                return OcrUploadBuffer.buffer(fileList)
+                    .flatMap(uploaded -> legacyOcrStatementService.createFromOcr(uploaded, createdBy));
             }))
             .map(result -> {
                 URI location = uriBuilder
@@ -168,7 +170,8 @@ public class LegacyOcrStatementController {
 
         return currentAccountService.requiredAccountId()
             .flatMap(createdBy -> abuseRateLimiter.checkUpload(createdBy)
-                .then(legacyOcrStatementService.createFromOcr(List.of(file), createdBy)))
+                .then(OcrUploadBuffer.buffer(List.of(file)))
+                .flatMap(uploaded -> legacyOcrStatementService.createFromOcr(uploaded, createdBy)))
             .map(result -> {
                 URI location = uriBuilder
                     .path("/api/v1/statements/{id}")

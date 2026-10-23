@@ -162,6 +162,24 @@ class LoginRateLimiterTest {
                 .verify();
     }
 
+    @Test
+    void blocksTheSixtyFirstAttemptForOneAddressWithoutBlockingAnotherAddress() {
+        properties.setMaxAttemptsPerAddress(60);
+        stubReserve(61, 30L);
+
+        StepVerifier.create(limiter.checkAddress("login-ip:198.51.100.10"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(LoginRateLimitException.class);
+                    assertThat(((LoginRateLimitException) error).getStatusCode()).isEqualTo(429);
+                })
+                .verify();
+        Object blockedAddressKey = bound.get("rateKey");
+
+        stubReserve(1, 60L);
+        StepVerifier.create(limiter.checkAddress("login-ip:203.0.113.20")).verifyComplete();
+        assertThat(bound.get("rateKey")).isNotEqualTo(blockedAddressKey);
+    }
+
     private void stubReserve(int attempts, long retryAfterSeconds) {
         stubCleanup();
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);

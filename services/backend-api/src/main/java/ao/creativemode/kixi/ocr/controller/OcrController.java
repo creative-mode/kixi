@@ -8,22 +8,26 @@ import ao.creativemode.kixi.ocr.dto.OcrResponse;
 import ao.creativemode.kixi.ocr.service.OcrImageAssociationService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService.StatementWithRelations;
+import ao.creativemode.kixi.ocr.service.OcrUploadBuffer;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
-import org.springframework.core.io.buffer.DataBufferLimitException;
-import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * REST Controller for OCR operations.
@@ -56,8 +60,9 @@ public class OcrController {
         ".tif"
     );
 
-    private static final long MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
-    private static final long MAX_PERSIST_SOURCE_SIZE = 50 * 1024 * 1024;
+    private static final long MAX_FILE_SIZE = OcrUploadBuffer.MAX_FILE_SIZE;
+    private static final long MAX_PERSIST_SOURCE_SIZE = OcrUploadBuffer.MAX_REQUEST_SIZE;
+    private static final int MAX_STREAM_RESULT_SIZE = 50 * 1024 * 1024;
     private static final int MAX_FILES = 10;
 
     private final OcrServiceClient ocrServiceClient;
@@ -65,19 +70,22 @@ public class OcrController {
     private final CurrentAccountService currentAccountService;
     private final ApiAbuseRateLimiter abuseRateLimiter;
     private final OcrImageAssociationService imageAssociationService;
+    private final ObjectMapper objectMapper;
 
     public OcrController(
         OcrServiceClient ocrServiceClient,
         OcrPersistenceService ocrPersistenceService,
         CurrentAccountService currentAccountService,
         ApiAbuseRateLimiter abuseRateLimiter,
-        OcrImageAssociationService imageAssociationService
+        OcrImageAssociationService imageAssociationService,
+        ObjectMapper objectMapper
     ) {
         this.ocrServiceClient = ocrServiceClient;
         this.ocrPersistenceService = ocrPersistenceService;
         this.currentAccountService = currentAccountService;
         this.abuseRateLimiter = abuseRateLimiter;
         this.imageAssociationService = imageAssociationService;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -128,7 +136,8 @@ public class OcrController {
                 );
 
                 // Call OCR service
-                return ocrServiceClient.extractText(fileList);
+                return OcrUploadBuffer.buffer(fileList)
+                    .flatMap(ocrServiceClient::extractTextFromUploadedFiles);
             })
             .map(ocrResponse -> {
                 // Return appropriate status based on OCR result
@@ -152,6 +161,58 @@ public class OcrController {
             )
             .doOnError(error -> log.error(
                 "OCR extraction failed: type={}", error.getClass().getSimpleName()));
+    }
+
+    /** Stream page-completion events for the Manager importer. The stream is request-scoped. */
+    @PostMapping(
+        value = "/extract/stream",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+        produces = MediaType.TEXT_EVENT_STREAM_VALUE
+    )
+    public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStream(
+        @RequestPart("files") Flux<FilePart> files,
+        @RequestHeader(name = "X-OCR-Upload-Ms", required = false) Double frontendUploadMs
+    ) {
+        return currentAccountService.requiredAccountId()
+            .flatMap(abuseRateLimiter::checkUpload)
+            .then(files.collectList())
+            .flatMap(fileList -> {
+                if (fileList.isEmpty()) {
+                    return Mono.error(ApiException.badRequest("At least one file is required"));
+                }
+                if (fileList.size() > MAX_FILES) {
+                    return Mono.error(ApiException.badRequest("Maximum " + MAX_FILES + " files allowed per request"));
+                }
+
+                long declaredTotal = 0;
+                for (FilePart file : fileList) {
+                    if (!isAllowedFileType(file.filename())) {
+                        return Mono.error(invalidFileTypeException());
+                    }
+                    long size = file.headers().getContentLength();
+                    if (size > MAX_FILE_SIZE) {
+                        return Mono.error(new ApiException(
+                            HttpStatus.PAYLOAD_TOO_LARGE, "Each OCR file must be at most 20 MB"));
+                    }
+                    if (size > 0) declaredTotal += size;
+                    if (declaredTotal > MAX_PERSIST_SOURCE_SIZE) {
+                        return Mono.error(new ApiException(
+                            HttpStatus.PAYLOAD_TOO_LARGE, "Total OCR upload must be at most 50 MB"));
+                    }
+                }
+
+                return OcrUploadBuffer.buffer(fileList).flatMap(uploaded ->
+                    ocrServiceClient.extractTextStreamFromUploadedFiles(uploaded, frontendUploadMs)
+                        .map(upstream -> ResponseEntity.status(upstream.getStatusCode())
+                            .contentType(MediaType.TEXT_EVENT_STREAM)
+                            .header("Cache-Control", "no-cache, no-transform")
+                            .header("X-Accel-Buffering", "no")
+                            .body(upstream.getBody().concatMap(event -> Mono.fromCallable(
+                                    () -> normalizeResultEvent(event, uploaded))
+                                .subscribeOn(Schedulers.boundedElastic())))));
+            })
+            .doOnError(error -> log.error(
+                "OCR stream setup failed: type={}", error.getClass().getSimpleName()));
     }
 
     /**
@@ -178,7 +239,8 @@ public class OcrController {
 
         return currentAccountService.requiredAccountId()
             .flatMap(abuseRateLimiter::checkUpload)
-            .then(ocrServiceClient.extractText(List.of(file)))
+            .then(OcrUploadBuffer.buffer(List.of(file)))
+            .flatMap(ocrServiceClient::extractTextFromUploadedFiles)
             .map(ocrResponse -> {
                 if (ocrResponse.isSuccess()) {
                     return ResponseEntity.ok(ocrResponse);
@@ -260,7 +322,7 @@ public class OcrController {
                 );
 
                 // Keep the source bytes: the figures the OCR finds are cropped from them for the builder.
-                return bufferFilesForPersistence(fileList).flatMap(uploaded ->
+                return OcrUploadBuffer.buffer(fileList).flatMap(uploaded ->
                     ocrServiceClient.extractTextFromUploadedFiles(uploaded)
                         .map(ocrResponse -> new ExtractedExam(ocrResponse, uploaded)));
             })
@@ -351,7 +413,7 @@ public class OcrController {
                 );
 
                 // Retain the exact source bytes for OCR-region association.
-                return bufferFilesForPersistence(fileList)
+                return OcrUploadBuffer.buffer(fileList)
                     .flatMap(uploadedFiles -> ocrPersistenceService.processAndPersist(
                         uploadedFiles,
                         createdBy
@@ -435,35 +497,31 @@ public class OcrController {
 
     private record ExtractedExam(OcrResponse response, List<OcrUploadedFile> files) {}
 
-    private Mono<List<OcrUploadedFile>> bufferFilesForPersistence(List<FilePart> files) {
-        return Flux.fromIterable(files)
-            .concatMap(file -> DataBufferUtils.join(file.content(), (int) MAX_FILE_SIZE)
-                .map(buffer -> {
-                    try {
-                        byte[] content = new byte[buffer.readableByteCount()];
-                        buffer.read(content);
-                        return new OcrUploadedFile(
-                            file.filename(),
-                            file.headers().getContentType(),
-                            content
-                        );
-                    } finally {
-                        DataBufferUtils.release(buffer);
-                    }
-                }))
-            .collectList()
-            .flatMap(uploadedFiles -> {
-                long totalBytes = uploadedFiles.stream()
-                    .mapToLong(file -> file.content().length)
-                    .sum();
-                if (totalBytes > MAX_PERSIST_SOURCE_SIZE) {
-                    return Mono.error(ApiException.badRequest(
-                        "Persisted OCR input exceeds the 50 MB aggregate limit"));
-                }
-                return Mono.just(uploadedFiles);
-            })
-            .onErrorMap(DataBufferLimitException.class,
-                error -> ApiException.badRequest("File exceeds the 20 MB limit"));
+    private ServerSentEvent<String> normalizeResultEvent(
+            ServerSentEvent<String> event, List<OcrUploadedFile> sourceFiles) {
+        if (event == null || !"result".equals(event.event()) || event.data() == null) {
+            return event;
+        }
+
+        try {
+            OcrResponse response = objectMapper.readValue(event.data(), OcrResponse.class);
+            ExamExtractionResponse extracted = ExamExtractionResponse.fromOcrResponse(
+                response,
+                imageAssociationService.previewCrops(response.imagesToUpload(), sourceFiles));
+            byte[] serialized = objectMapper.writeValueAsBytes(extracted);
+            if (serialized.length > MAX_STREAM_RESULT_SIZE) {
+                throw new IllegalStateException("OCR stream result exceeds the 50 MB limit");
+            }
+            String data = new String(serialized, StandardCharsets.UTF_8);
+            return ServerSentEvent.<String>builder(data)
+                .id(event.id())
+                .event(event.event())
+                .retry(event.retry())
+                .comment(event.comment())
+                .build();
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Could not normalize OCR stream result", error);
+        }
     }
 
     /**
@@ -549,7 +607,7 @@ public class OcrController {
                     "supportedFormats",
                     List.of("JPEG", "PNG", "PDF", "WebP", "BMP", "TIFF"),
                     "maxFileSize",
-                    MAX_FILE_SIZE,
+                    OcrUploadBuffer.MAX_FILE_SIZE,
                     "maxFiles",
                     MAX_FILES,
                     "features",

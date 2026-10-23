@@ -6,12 +6,14 @@ Supports multi-page PDFs and various PDF rendering qualities.
 """
 
 import io
+import math
 from typing import List, Optional
 
 import numpy as np
 from PIL import Image
 
 import structlog
+from app.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +36,7 @@ def extract_images_from_pdf(
     dpi: int = 300,
     first_page: Optional[int] = None,
     last_page: Optional[int] = None,
+    max_total_pixels: Optional[int] = None,
 ) -> List[np.ndarray]:
     """
     Extract images from PDF pages.
@@ -57,7 +60,7 @@ def extract_images_from_pdf(
 
     try:
         # Try PyMuPDF first (faster and more reliable)
-        images = _extract_with_pymupdf(pdf_content, dpi, first_page, last_page)
+        images = _extract_with_pymupdf(pdf_content, dpi, first_page, last_page, max_total_pixels)
     except ImportError:
         logger.warning("PyMuPDF not available, falling back to pdf2image")
         try:
@@ -83,11 +86,60 @@ def extract_images_from_pdf(
     return images
 
 
+def extract_text_pages_from_pdf(
+    pdf_content: bytes,
+    first_page: Optional[int] = None,
+    last_page: Optional[int] = None,
+) -> List[dict]:
+    """Return selectable PDF text lines with page-space bounding boxes.
+
+    A native text layer is both faster and more faithful than OCR for digitally
+    authored PDFs. The OCR image path remains authoritative for scanned pages,
+    formula regions and figures; callers can fall back per page when no usable
+    text layer exists.
+    """
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    try:
+        document = fitz.open(stream=pdf_content, filetype="pdf")
+        start = max(0, (first_page or 1) - 1)
+        end = min(len(document), last_page or len(document))
+        pages = []
+        for page_index in range(start, end):
+            page = document[page_index]
+            lines = []
+            for block in page.get_text("dict").get("blocks", []):
+                for line in block.get("lines", []):
+                    text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                    if not text:
+                        continue
+                    x0, y0, x1, y1 = line["bbox"]
+                    lines.append({
+                        "text": text,
+                        "bbox": [float(x0), float(y0), float(x1), float(y1)],
+                    })
+            rect = page.rect
+            pages.append({
+                "width": float(rect.width),
+                "height": float(rect.height),
+                "lines": lines,
+            })
+        document.close()
+        return pages
+    except Exception as exc:
+        logger.warning("Native PDF text extraction failed", error_type=type(exc).__name__)
+        return []
+
+
 def _extract_with_pymupdf(
     pdf_content: bytes,
     dpi: int = 300,
     first_page: Optional[int] = None,
     last_page: Optional[int] = None,
+    max_total_pixels: Optional[int] = None,
 ) -> List[np.ndarray]:
     """
     Extract images using PyMuPDF (fitz).
@@ -118,13 +170,26 @@ def _extract_with_pymupdf(
         start_page = max(0, min(start_page, total_pages - 1))
         end_page = max(1, min(end_page, total_pages))
 
-        # Calculate zoom factor for desired DPI
-        # Default PDF resolution is 72 DPI
-        zoom = dpi / 72.0
-        matrix = fitz.Matrix(zoom, zoom)
-
+        rendered_pixels = 0
         for page_num in range(start_page, end_page):
             page = pdf_document[page_num]
+
+            # The DPI is lowered per page when the page would be too many pixels (#407); default PDF resolution is 72 DPI.
+            page_dpi = effective_render_dpi(page.rect.width, page.rect.height, dpi)
+            zoom = page_dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            page_pixels = _rendered_page_pixels(page.rect.width, page.rect.height, page_dpi)
+            if page_pixels > settings.max_image_pixels:
+                raise ValueError("PDF page exceeds the maximum rendered pixel count")
+            rendered_pixels += page_pixels
+            request_pixel_limit = min(
+                settings.max_ocr_pixels_per_request,
+                settings.max_ocr_pixels_per_request
+                if max_total_pixels is None
+                else max_total_pixels,
+            )
+            if rendered_pixels > request_pixel_limit:
+                raise ValueError("PDF exceeds the maximum total rendered pixel count")
 
             # Render page to pixmap
             pixmap = page.get_pixmap(matrix=matrix, alpha=False)
@@ -257,16 +322,24 @@ def get_pdf_info(pdf_content: bytes) -> dict:
     return info
 
 
-def validate_pdf(pdf_content: bytes, max_pages: int = 50) -> None:
+def validate_pdf(
+    pdf_content: bytes,
+    max_pages: int = 50,
+    max_total_pixels: Optional[int] = None,
+) -> int:
     """
     Validate a PDF file for OCR processing.
 
     Args:
         pdf_content: PDF file content as bytes
         max_pages: Maximum allowed pages
+        max_total_pixels: Remaining request-wide rendered-pixel budget
 
     Raises:
         ValueError: If the PDF is invalid or exceeds limits
+
+    Returns:
+        The estimated rendered pixel count for all pages in the PDF.
     """
     if not is_pdf(pdf_content):
         raise ValueError("File is not a valid PDF")
@@ -283,7 +356,56 @@ def validate_pdf(pdf_content: bytes, max_pages: int = 50) -> None:
                 f"maximum allowed is {max_pages}"
             )
 
+        import fitz
+
+        document = fitz.open(stream=pdf_content, filetype="pdf")
+        try:
+            total_pixels = 0
+            for page in document:
+                page_pixels = _rendered_page_pixels(
+                    page.rect.width,
+                    page.rect.height,
+                    effective_render_dpi(page.rect.width, page.rect.height, settings.target_dpi),
+                )
+                if page_pixels > settings.max_image_pixels:
+                    raise ValueError("PDF page exceeds the maximum rendered pixel count")
+                total_pixels += page_pixels
+                request_pixel_limit = min(
+                    settings.max_ocr_pixels_per_request,
+                    settings.max_ocr_pixels_per_request
+                    if max_total_pixels is None
+                    else max_total_pixels,
+                )
+                if total_pixels > request_pixel_limit:
+                    raise ValueError("PDF exceeds the maximum total rendered pixel count")
+            return total_pixels
+        finally:
+            document.close()
+
     except ValueError:
         raise
     except Exception as e:
         raise ValueError(f"Failed to validate PDF: {e}")
+
+
+def effective_render_dpi(width_points: float, height_points: float, dpi: int) -> int:
+    """The DPI a page is rendered at: the requested one, lowered when the page would pass `max_pdf_page_pixels`.
+
+    Pixels grow with the square of the DPI, so the DPI is scaled by the square root of the ratio. Never below
+    72 DPI (the PDF's own resolution); a page that is bigger than the limit even there is refused by the callers
+    through `max_image_pixels`.
+    """
+    pixels = _rendered_page_pixels(width_points, height_points, dpi)
+    limit = settings.max_pdf_page_pixels
+    if pixels <= limit:
+        return dpi
+    return max(72, math.floor(dpi * math.sqrt(limit / pixels)))
+
+
+def _rendered_page_pixels(width_points: float, height_points: float, dpi: int) -> int:
+    if width_points <= 0 or height_points <= 0 or dpi <= 0:
+        raise ValueError("PDF page has invalid dimensions")
+    zoom = dpi / 72.0
+    width_pixels = math.ceil(width_points * zoom)
+    height_pixels = math.ceil(height_points * zoom)
+    return width_pixels * height_pixels

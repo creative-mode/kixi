@@ -14,12 +14,15 @@ import ao.creativemode.kixi.shared.exception.LoginRateLimitException;
 import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.GoogleLinkAuthorizationRequest;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.GoogleLinkStateService;
 import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.List;
@@ -43,6 +46,8 @@ class AuthControllerTest {
     private LoginRateLimiter loginRateLimiter;
     private TrustedProxyProperties trustedProxies;
     private ApiAbuseRateLimiter abuseRateLimiter;
+    private CurrentAccountService currentAccountService;
+    private GoogleLinkStateService googleLinkStateService;
     private AuthController controller;
 
     @BeforeEach
@@ -58,10 +63,12 @@ class AuthControllerTest {
         when(loginRateLimiter.checkIdentity(anyString())).thenReturn(Mono.empty());
         when(loginRateLimiter.checkAddress(anyString())).thenReturn(Mono.empty());
         trustedProxies = new TrustedProxyProperties();
+        currentAccountService = mock(CurrentAccountService.class);
+        googleLinkStateService = mock(GoogleLinkStateService.class);
         when(abuseRateLimiter.checkLogin(anyString())).thenReturn(Mono.empty());
         controller = new AuthController(
                 authService, googleProperties, registrationRateLimiter, loginRateLimiter,
-                trustedProxies, abuseRateLimiter);
+                trustedProxies, abuseRateLimiter, currentAccountService, googleLinkStateService);
     }
 
     @Test
@@ -113,6 +120,53 @@ class AuthControllerTest {
                 .contains("kixi_oauth_state=")
                 .contains("Max-Age=0");
         verify(abuseRateLimiter).checkLogin("unknown");
+    }
+
+    @Test
+    void callbackCompletesTheAccountBoundLinkInsteadOfLoggingIntoAnotherAccount() {
+        LoginResponse expected = new LoginResponse(
+                "token", LoginResponse.TOKEN_TYPE, Instant.now(), 42L, List.of("STUDENT"));
+        when(googleLinkStateService.accountForCallback("nonce", "signed-cookie"))
+                .thenReturn(java.util.Optional.of(42L));
+        when(authService.completeGoogleLink(42L, "code")).thenReturn(Mono.just(expected));
+
+        ResponseEntity<LoginResponse> response = controller
+                .googleCallback("code", "nonce", "signed-cookie", null).block();
+
+        assertThat(response.getBody()).isEqualTo(expected);
+        verify(authService).completeGoogleLink(42L, "code");
+        verify(authService, never()).loginWithGoogle("code");
+    }
+
+    @Test
+    void googleLinkRequiresAuthenticatedAccountAndFreshPassword() {
+        when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(42L));
+        when(authService.verifyPasswordForGoogleLink(42L, "password")).thenReturn(Mono.empty());
+        when(googleLinkStateService.issue(42L))
+                .thenReturn(new GoogleLinkStateService.IssuedState("nonce", "signed-cookie"));
+
+        ResponseEntity<ao.creativemode.kixi.identity.dto.auth.GoogleLinkAuthorizationResponse> response =
+                controller.authorizeGoogleLink(null, new GoogleLinkAuthorizationRequest("password")).block();
+
+        assertThat(response).isNotNull();
+        assertThat(response.getBody().authorizationUrl()).contains("state=nonce");
+        assertThat(response.getHeaders().getFirst("Set-Cookie")).contains("signed-cookie").contains("HttpOnly");
+        verify(loginRateLimiter).checkAddress("login-ip:unknown");
+        verify(loginRateLimiter).checkIdentity("google-link:42");
+        verify(authService).verifyPasswordForGoogleLink(42L, "password");
+    }
+
+    @Test
+    void googleLinkAuthorizationCannotStartWithoutAnAuthenticatedAccount() {
+        when(currentAccountService.requiredAccountId())
+                .thenReturn(Mono.error(ApiException.unauthorized("An authenticated account is required")));
+
+        StepVerifier.create(controller.authorizeGoogleLink(null, new GoogleLinkAuthorizationRequest("password")))
+                .expectError(ApiException.class)
+                .verify();
+
+        verify(authService, never()).verifyPasswordForGoogleLink(42L, "password");
+        verify(googleLinkStateService, never()).issue(42L);
     }
 
     @Test
@@ -293,6 +347,19 @@ class AuthControllerTest {
         controller.login(from("203.0.113.7", "198.51.100.9"), new LoginRequest("aluno", "s")).block();
 
         verify(loginRateLimiter).checkAddress("login-ip:198.51.100.9");
+    }
+
+    @Test
+    void aTrustedFrontendUsesOnlyTheLastForwardedHop() {
+        trustedProxies.setIps(List.of("203.0.113.7"));
+        when(authService.login(anyString(), anyString()))
+                .thenReturn(Mono.just(new LoginResponse(
+                        "token", "Bearer", Instant.now(), 1L, List.of("STUDENT"))));
+
+        controller.login(from("203.0.113.7", "198.51.100.9, 192.0.2.25"),
+                new LoginRequest("aluno", "s")).block();
+
+        verify(loginRateLimiter).checkAddress("login-ip:192.0.2.25");
     }
 
     /** An empty header is not evidence of an address, so the peer stands. */

@@ -42,6 +42,10 @@ public class SecurityConfig {
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
                 .authorizeExchange(exchange -> exchange
+                        // The controller also resolves the current account, but keep this
+                        // security boundary explicit before the broad public auth matcher.
+                        .pathMatchers(HttpMethod.POST, "/api/v1/auth/google/link/authorize")
+                        .authenticated()
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         .pathMatchers("/actuator/health").permitAll()
                         // As figuras das questões que o armazenamento local guarda: o aluno e o professor vêem-nas no
@@ -162,8 +166,13 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/school-years/trash", "/api/v1/terms/trash",
                                 "/api/v1/subjects/trash", "/api/v1/courses/trash",
-                                "/api/v1/classes/trash", "/api/v1/question-images/trash")
+                                "/api/v1/classes/trash")
                         .hasAnyRole("ADMIN", "TEACHER")
+                        // The unscoped question-image catalog has no question id on which to apply
+                        // statement/teacher visibility. Keep it ADMIN-only; scoped reads below
+                        // still pass through QuestionImageReadAccessService in the controller.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/question-images", "/api/v1/question-images/trash")
+                        .hasRole("ADMIN")
                         // #253: where a subject is taught across schools is for the administrator.
                         .pathMatchers(HttpMethod.GET, "/api/v1/subjects/*/offerings")
                         .hasRole("ADMIN")
@@ -184,7 +193,7 @@ public class SecurityConfig {
                                 "/api/v1/classes", "/api/v1/classes/**")
                         .hasRole("ADMIN")
                         .pathMatchers("/api/v1/question-images", "/api/v1/question-images/**")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .authenticated()
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/simulation-answers/trash",
                                 "/api/v1/simulations/trash",

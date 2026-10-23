@@ -7,9 +7,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -22,6 +24,10 @@ import ao.creativemode.kixi.exams.model.QuestionImage;
 import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
 import ao.creativemode.kixi.shared.storage.StoredObject;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -57,7 +63,9 @@ class OcrImageAssociationServiceTest {
             10,
             10,
             1,
-            0
+            0,
+            "formula",
+            0.93
         );
         OcrUploadedFile source = new OcrUploadedFile(
             "exam.png",
@@ -84,6 +92,9 @@ class OcrImageAssociationServiceTest {
         assertThat(persisted.get().getQuestionId()).isEqualTo(7L);
         assertThat(persisted.get().getStorageKey()).isEqualTo(stored.key());
         assertThat(persisted.get().getCaption()).isEqualTo("Figura da questão 3");
+        assertThat(persisted.get().getOcrKind()).isEqualTo("formula");
+        assertThat(persisted.get().getOcrPageIndex()).isZero();
+        assertThat(persisted.get().getOcrScore()).isEqualTo(0.93);
         verify(storage).put(anyString(), any(), any(byte[].class));
     }
 
@@ -111,24 +122,185 @@ class OcrImageAssociationServiceTest {
 
         assertThat(saved).extracting(QuestionImage::getOrderIndex).containsExactly(0, 1);
         assertThat(saved).extracting(QuestionImage::getCaption).containsExactly("Figura 1", "Tabela");
+        assertThat(saved).extracting(QuestionImage::getOcrKind).containsExactly("figure", "table");
+        assertThat(saved).extracting(QuestionImage::getOcrPageIndex).containsExactly(0, 0);
+        assertThat(saved).extracting(QuestionImage::getOcrScore).containsExactly(0.9, 0.8);
     }
 
     @Test
-    void previewCropsGiveTheBuilderAPngDataUrlPerQuestionRegionAndNothingForTheHeader() {
+    void previewCropsGiveTheBuilderDataUrlsForQuestionsAndFooterButNotHeader() {
         List<OcrResponse.ImageToUpload> regions = List.of(
             new OcrResponse.ImageToUpload("h.png", "Cabeçalho", "cabecalho", 0, List.of(0, 0, 10, 4), 10, 10, 1, 0),
             new OcrResponse.ImageToUpload("q.png", "Figura", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 0, "figure", 0.9),
-            new OcrResponse.ImageToUpload("p.png", "Figura de um PDF", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 1, "figure", 0.9));
+            new OcrResponse.ImageToUpload("p.png", "Figura de um PDF", "questao_1", 0, List.of(2, 2, 8, 8), 10, 10, 1, 1, "figure", 0.9),
+            new OcrResponse.ImageToUpload("f.png", "Rodapé original", "rodape", 0, List.of(0, 5, 10, 10), 10, 10, 1, 0));
         List<OcrUploadedFile> files = List.of(
             new OcrUploadedFile("exam.png", MediaType.IMAGE_PNG, pngBytes(10, 10)),
             new OcrUploadedFile("exam.pdf", MediaType.APPLICATION_PDF, "%PDF-1.4".getBytes()));
 
         List<String> crops = service.previewCrops(regions, files);
 
-        assertThat(crops).hasSize(3);
+        assertThat(crops).hasSize(4);
         assertThat(crops.get(0)).isNull();
         assertThat(crops.get(1)).startsWith("data:image/png;base64,");
         assertThat(crops.get(2)).isNull();
+        assertThat(crops.get(3)).startsWith("data:image/png;base64,");
+    }
+
+    @Test
+    void previewCropsTheGlobalOcrPageFromTheIndexedMultiPagePdf() throws IOException {
+        OcrUploadedFile unrelatedRaster = new OcrUploadedFile(
+                "unrelated.png", MediaType.IMAGE_PNG, pngBytes(10, 10));
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "exam.pdf", MediaType.APPLICATION_PDF, pdfBytes(
+                        new Color[] {Color.RED, Color.BLUE}, 72, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(1, 1, List.of(0, 0, 300, 300), 300, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(unrelatedRaster, sourcePdf));
+
+        assertThat(crops).hasSize(1);
+        BufferedImage cropped = imageFromDataUrl(crops.get(0));
+        assertThat(cropped.getWidth()).isEqualTo(300);
+        assertThat(cropped.getHeight()).isEqualTo(300);
+        assertThat(new Color(cropped.getRGB(150, 150))).isEqualTo(new Color(255, 0, 0));
+    }
+
+    @Test
+    void mapsGlobalOcrPageToTheSelectedPdfLocalPage() throws IOException {
+        Question question = new Question();
+        question.setId(21L);
+        question.setNumber(1);
+        OcrUploadedFile unrelatedRaster = new OcrUploadedFile(
+                "unrelated.png", MediaType.IMAGE_PNG, pngBytes(10, 10));
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "exam.pdf", MediaType.APPLICATION_PDF,
+                pdfBytes(new Color[] {Color.RED, Color.BLUE}, 72, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(1, 1, List.of(0, 0, 300, 300), 300, 300);
+        AtomicReference<byte[]> uploadedPng = new AtomicReference<>();
+        when(storage.put(anyString(), any(), any(byte[].class))).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            uploadedPng.set(invocation.getArgument(2));
+            return Mono.just(new StoredObject(key, "/uploads/" + key));
+        });
+        when(repository.save(any(QuestionImage.class))).thenAnswer(invocation ->
+                Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.persistQuestionImages(
+                        List.of(question), List.of(region), List.of(unrelatedRaster, sourcePdf)))
+                .assertNext(images -> assertThat(images).hasSize(1))
+                .verifyComplete();
+
+        BufferedImage cropped = ImageIO.read(new java.io.ByteArrayInputStream(uploadedPng.get()));
+        assertThat(cropped.getWidth()).isEqualTo(300);
+        assertThat(cropped.getHeight()).isEqualTo(300);
+        assertThat(new Color(cropped.getRGB(150, 150))).isEqualTo(new Color(255, 0, 0));
+    }
+
+    @Test
+    void secondPdfUsesItsOwnPageIndexAfterAPrecedingMultiPagePdf() throws IOException {
+        OcrUploadedFile firstPdf = new OcrUploadedFile(
+                "first.pdf", MediaType.APPLICATION_PDF,
+                pdfBytes(new Color[] {Color.RED, Color.BLUE}, 72, 72));
+        OcrUploadedFile secondPdf = new OcrUploadedFile(
+                "second.pdf", MediaType.APPLICATION_PDF,
+                pdfBytes(new Color[] {Color.GREEN, Color.MAGENTA}, 72, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(3, 1, List.of(0, 0, 300, 300), 300, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(firstPdf, secondPdf));
+
+        assertThat(new Color(imageFromDataUrl(crops.get(0)).getRGB(150, 150)))
+                .isEqualTo(new Color(255, 0, 255));
+    }
+
+    @Test
+    void ignoresPdfRegionsWithAnInvalidPageIndex() throws IOException {
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "exam.pdf", MediaType.APPLICATION_PDF, pdfBytes(new Color[] {Color.RED}, 72, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(1, 0, List.of(0, 0, 300, 300), 300, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(sourcePdf));
+
+        assertThat(crops).containsExactly((String) null);
+    }
+
+    @Test
+    void skipsPdfPagesThatExceedTheRenderDimensionLimit() throws IOException {
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "wide.pdf", MediaType.APPLICATION_PDF, pdfBytes(new Color[] {Color.GREEN}, 2_000, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(0, 0, List.of(0, 0, 8_334, 300), 8_334, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(sourcePdf));
+
+        assertThat(crops).containsExactly((String) null);
+    }
+
+    @Test
+    void skipsPdfDocumentsAboveThePageCountLimit() throws IOException {
+        Color[] colors = new Color[51];
+        Arrays.fill(colors, Color.RED);
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "too-many-pages.pdf", MediaType.APPLICATION_PDF, pdfBytes(colors, 72, 72));
+        OcrResponse.ImageToUpload region = pdfRegion(0, 0, List.of(0, 0, 300, 300), 300, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(sourcePdf));
+
+        assertThat(crops).containsExactly((String) null);
+    }
+
+    @Test
+    void skipsPdfSourcesAboveTheUploadSizeLimitWithoutParsingThem() {
+        byte[] oversizedContent = new byte[20 * 1024 * 1024 + 1];
+        byte[] header = "%PDF-1.4".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        System.arraycopy(header, 0, oversizedContent, 0, header.length);
+        OcrUploadedFile sourcePdf = new OcrUploadedFile(
+                "oversized.pdf", MediaType.APPLICATION_PDF, oversizedContent);
+        OcrResponse.ImageToUpload region = pdfRegion(0, 0, List.of(0, 0, 300, 300), 300, 300);
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(sourcePdf));
+
+        assertThat(crops).containsExactly((String) null);
+    }
+
+    @Test
+    void stillCropsRasterSourcesUsingTheExistingCoordinateScaling() {
+        OcrResponse.ImageToUpload region = new OcrResponse.ImageToUpload(
+                "questao.png", "Figura raster", "questao_1", 0,
+                List.of(2, 2, 8, 8), 10, 10, 1, 0, "figure", 0.9);
+        OcrUploadedFile source = new OcrUploadedFile(
+                "exam.png", MediaType.IMAGE_PNG, pngBytes(10, 10));
+
+        List<String> crops = service.previewCrops(List.of(region), List.of(source));
+
+        assertThat(crops).hasSize(1).first().asString().startsWith("data:image/png;base64,");
+    }
+
+    private OcrResponse.ImageToUpload pdfRegion(
+            int pageIndex, int sourceFileIndex, List<Integer> bbox, int width, int height) {
+        return new OcrResponse.ImageToUpload(
+                "figure.png", "Figura da questão 1", "questao_1", pageIndex,
+                bbox, width, height, 1, sourceFileIndex, "figure", 0.9);
+    }
+
+    private BufferedImage imageFromDataUrl(String dataUrl) throws IOException {
+        assertThat(dataUrl).startsWith("data:image/png;base64,");
+        byte[] bytes = java.util.Base64.getDecoder().decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+        return ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+    }
+
+    private byte[] pdfBytes(Color[] pageColors, float widthPoints, float heightPoints) throws IOException {
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            for (Color color : pageColors) {
+                PDPage page = new PDPage(new PDRectangle(widthPoints, heightPoints));
+                document.addPage(page);
+                try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                    content.setNonStrokingColor(color);
+                    content.addRect(0, 0, widthPoints, heightPoints);
+                    content.fill();
+                }
+            }
+            document.save(output);
+            return output.toByteArray();
+        }
     }
 
     private byte[] pngBytes(int width, int height) {

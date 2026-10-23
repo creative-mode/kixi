@@ -14,6 +14,7 @@ import ao.creativemode.kixi.exams.dto.questionimage.QuestionImageResponse;
 import ao.creativemode.kixi.exams.model.QuestionImage;
 import ao.creativemode.kixi.exams.repository.QuestionImageRepository;
 import ao.creativemode.kixi.shared.storage.ImageStorage;
+import ao.creativemode.kixi.shared.storage.UploadSniffer;
 import ao.creativemode.kixi.shared.storage.StoredObject;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
@@ -178,6 +179,11 @@ public class QuestionImageService {
     }
 
     private boolean isValidRaster(MediaType contentType, byte[] bytes) {
+        UploadSniffer.Kind kind = UploadSniffer.detect(bytes).orElse(null);
+        if (kind == null || kind == UploadSniffer.Kind.PDF) {
+            return false;
+        }
+        UploadSniffer.requireSafe(kind, bytes, UploadSniffer.MAX_SAFE_IMAGE_PIXELS, 1);
         if ("png".equalsIgnoreCase(contentType.getSubtype())
                 || "jpeg".equalsIgnoreCase(contentType.getSubtype())) {
             try {
@@ -210,14 +216,23 @@ public class QuestionImageService {
     }
 
     private QuestionImageResponse toResponse(QuestionImage entity) {
+        String imageUrl = entity.getStorageKey() == null || entity.getStorageKey().isBlank()
+                ? storage.resolveUrl(entity.getImageUrl())
+                : storage.urlFor(entity.getStorageKey());
+        if (imageUrl == null) {
+            imageUrl = entity.getImageUrl();
+        }
         return new QuestionImageResponse(
                 entity.getId(),
                 entity.getQuestionId(),
-                entity.getImageUrl(),
+                imageUrl,
                 entity.getCaption(),
                 entity.getOrderIndex(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
-                entity.getDeletedAt());
+                entity.getDeletedAt(),
+                entity.getOcrKind(),
+                entity.getOcrPageIndex(),
+                entity.getOcrScore());
     }
 }

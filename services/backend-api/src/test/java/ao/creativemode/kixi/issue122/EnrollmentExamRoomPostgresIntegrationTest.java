@@ -44,6 +44,11 @@ class EnrollmentExamRoomPostgresIntegrationTest {
     private static final long COURSE = 122101L;
     private static final long CLASS = 122101L;
     private static final long STATEMENT = 122101L;
+    private static final long OTHER_INSTITUTION = 122102L;
+    private static final long OTHER_YEAR = 122102L;
+    private static final long OTHER_COURSE = 122102L;
+    private static final long OTHER_CLASS = 122102L;
+    private static final long SUBJECT = 122101L;
 
     @Autowired
     private ApplicationContext context;
@@ -94,18 +99,27 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         // NOT NULL with ON DELETE SET NULL, so deleting an account that still has a code
         // referencing it as creator throws a NOT NULL violation instead of cascading.
         sql("DELETE FROM enrollment_codes WHERE class_id = " + CLASS);
+        sql("DELETE FROM teaching_assignments WHERE class_id IN (" + CLASS + "," + OTHER_CLASS + ")");
+        sql("DELETE FROM institution_teachers WHERE institution_id IN (" + INSTITUTION + "," + OTHER_INSTITUTION + ")");
+        sql("DELETE FROM teachers WHERE account_id IN (" + OWNER + "," + OTHER_TEACHER + ")");
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM account_roles WHERE account_id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
         sql("DELETE FROM accounts WHERE id IN (" + ADMIN + "," + OWNER + "," + OTHER_TEACHER + "," + STUDENT + "," + OTHER_STUDENT + ")");
-        sql("DELETE FROM classes WHERE id = " + CLASS);
-        sql("DELETE FROM courses WHERE id = " + COURSE);
-        sql("DELETE FROM school_years WHERE id = " + YEAR);
-        sql("DELETE FROM institutions WHERE id = " + INSTITUTION);
+        sql("DELETE FROM classes WHERE id IN (" + CLASS + "," + OTHER_CLASS + ")");
+        sql("DELETE FROM courses WHERE id IN (" + COURSE + "," + OTHER_COURSE + ")");
+        sql("DELETE FROM school_years WHERE id IN (" + YEAR + "," + OTHER_YEAR + ")");
+        sql("DELETE FROM institutions WHERE id IN (" + INSTITUTION + "," + OTHER_INSTITUTION + ")");
+        sql("DELETE FROM subjects WHERE id = " + SUBJECT);
 
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (" + INSTITUTION + ", 'I122', 'Issue 122', now(), now())");
+        sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (" + OTHER_INSTITUTION + ", 'I360B', 'Issue 360 B', now(), now())");
         sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (" + YEAR + ", 2122, 2123, now(), now())");
+        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (" + OTHER_YEAR + ", 2324, 2325, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (" + COURSE + ", 'C122', 'Curso 122', " + INSTITUTION + ", now(), now())");
+        sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (" + OTHER_COURSE + ", 'C122B', 'Curso 122 B', " + OTHER_INSTITUTION + ", now(), now())");
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES (" + CLASS + ", '12A', 12, " + COURSE + ", " + YEAR + ", " + INSTITUTION + ", now(), now())");
+        sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES (" + OTHER_CLASS + ", '12B', 12, " + OTHER_COURSE + ", " + OTHER_YEAR + ", " + OTHER_INSTITUTION + ", now(), now())");
+        sql("INSERT INTO subjects (id, code, name, created_at, updated_at) VALUES (" + SUBJECT + ", 'SUB122', 'Subject 122', now(), now())");
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active) VALUES "
                 + "(" + ADMIN + ", 'admin122', 'admin122@kixi.test', 'x', true, true),"
                 + "(" + OWNER + ", 'owner122', 'owner122@kixi.test', 'x', true, true),"
@@ -117,6 +131,14 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         role(OTHER_TEACHER, "TEACHER");
         role(STUDENT, "STUDENT");
         role(OTHER_STUDENT, "STUDENT");
+        sql("INSERT INTO teachers (id, account_id, first_name, last_name) VALUES "
+                + "(" + OWNER + ", " + OWNER + ", 'Owner', 'Teacher'),"
+                + "(" + OTHER_TEACHER + ", " + OTHER_TEACHER + ", 'Other', 'Teacher')");
+        sql("INSERT INTO institution_teachers (institution_id, teacher_id) VALUES "
+                + "(" + INSTITUTION + ", " + OWNER + "), (" + OTHER_INSTITUTION + ", " + OTHER_TEACHER + ")");
+        sql("INSERT INTO teaching_assignments (teacher_id, class_id, subject_id, school_year_id) VALUES "
+                + "(" + OWNER + ", " + CLASS + ", " + SUBJECT + ", " + YEAR + "),"
+                + "(" + OTHER_TEACHER + ", " + OTHER_CLASS + ", " + SUBJECT + ", " + OTHER_YEAR + ")");
         sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, class_id, school_year_id, visible, needs_review, source) VALUES ("
                 + STATEMENT + ", 'Issue 122', 'TEST', 60, 1, " + OWNER + ", " + CLASS + ", " + YEAR + ", false, false, 'manual')");
 
@@ -157,6 +179,45 @@ class EnrollmentExamRoomPostgresIntegrationTest {
                 .exchange().expectStatus().isCreated();
         assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + ownEnrollment + " AND deleted_at IS NULL AND status = 'ACTIVE'")).isEqualTo(1L);
         assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + otherEnrollment + " AND deleted_at IS NULL")).isEqualTo(1L);
+    }
+
+    @Test
+    void teacherEnrollmentAndVisibilityAreScopedToInstitutionAndClassAssignments() {
+        bearer(ownerToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"classId\":" + OTHER_CLASS
+                        + ",\"schoolYearId\":" + OTHER_YEAR + "}")
+                .exchange().expectStatus().isNotFound();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE account_id = " + OTHER_STUDENT)).isEqualTo(0L);
+
+        AtomicLong permittedEnrollment = new AtomicLong();
+        bearer(ownerToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + OTHER_STUDENT + ",\"classId\":" + CLASS
+                        + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id")
+                .value(value -> permittedEnrollment.set(((Number) value).longValue()));
+        bearer(ownerToken).get().uri("/api/v1/enrollments?accountId=" + OTHER_STUDENT)
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.length()").isEqualTo(1);
+
+        bearer(ownerToken).post().uri("/api/v1/enrollments").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"classId\":" + CLASS
+                        + ",\"schoolYearId\":" + YEAR + "}")
+                .exchange().expectStatus().isCreated();
+        sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES ("
+                + STUDENT + ", " + OTHER_CLASS + ", " + OTHER_YEAR + ")");
+        bearer(ownerToken).get().uri("/api/v1/enrollments?accountId=" + STUDENT)
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].classId").isEqualTo((int) CLASS);
+
+        bearer(ownerToken).delete().uri("/api/v1/enrollments/" + one("SELECT id FROM enrollments WHERE account_id = "
+                        + STUDENT + " AND class_id = " + OTHER_CLASS))
+                .exchange().expectStatus().isNotFound();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE account_id = " + STUDENT
+                + " AND class_id = " + OTHER_CLASS + " AND deleted_at IS NULL")).isEqualTo(1L);
+
+        bearer(ownerToken).delete().uri("/api/v1/enrollments/" + permittedEnrollment.get())
+                .exchange().expectStatus().isNoContent();
+        assertThat(one("SELECT count(*) FROM enrollments WHERE id = " + permittedEnrollment.get()
+                + " AND deleted_at IS NOT NULL")).isEqualTo(1L);
     }
 
     @Test

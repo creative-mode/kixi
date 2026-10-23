@@ -2,6 +2,7 @@ package ao.creativemode.kixi.ocr.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
+import java.util.Map;
 
 /**
  * OCR Service Response DTO
@@ -30,8 +31,19 @@ public record OcrResponse(
 
     List<OcrWarning> warnings,
 
-    @JsonProperty("errorMessage") String errorMessage
+    @JsonProperty("errorMessage") String errorMessage,
+
+    @JsonProperty("timings") Map<String, Double> timings
 ) {
+    /** Preserve the constructor used before final-stage timings were part of the OCR contract. */
+    public OcrResponse(String status, String requestId, Integer processingTimeMs, Double overallConfidence,
+            DocumentInfo document, OcrMetadata metadata, List<ExtractedQuestion> questions,
+            List<ImageToUpload> imagesToUpload, List<UnmappedContent> unmappedContent,
+            List<OcrWarning> warnings, String errorMessage) {
+        this(status, requestId, processingTimeMs, overallConfidence, document, metadata, questions,
+            imagesToUpload, unmappedContent, warnings, errorMessage, null);
+    }
+
     /**
      * Check if the OCR processing was successful.
      */
@@ -212,7 +224,11 @@ public record OcrResponse(
         /** Formulas recognized in the statement, alíneas or options (#262); empty when nothing in the
          * question's text looked like maths. {@code text} already carries the recognized spans delimited
          * ({@code $...$}) - this is the same result, structured, with the raw OCR text and a confidence. */
-        List<FormulaSegment> formulas
+        List<FormulaSegment> formulas,
+
+        @JsonProperty("rawText") String rawText,
+
+        @JsonProperty("groupLayout") String groupLayout
     ) {
         /** The shape before formula recognition (#262) was added. */
         public ExtractedQuestion(String number, Double confidence, List<String> subitems,
@@ -220,7 +236,25 @@ public record OcrResponse(
                 List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
                 Integer startY, Integer endY) {
             this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
-                imageDescription, pageIndex, startY, endY, List.of());
+                imageDescription, pageIndex, startY, endY, List.of(), null, null);
+        }
+
+        /** The shape with formula evidence, before raw OCR text was added to the contract. */
+        public ExtractedQuestion(String number, Double confidence, List<String> subitems,
+                List<SubitemContent> subitemsContent, ConfidenceField<String> text, String type, Double cotacao,
+                List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
+                Integer startY, Integer endY, List<FormulaSegment> formulas) {
+            this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
+                imageDescription, pageIndex, startY, endY, formulas, null, null);
+        }
+
+        /** Compatibility constructor for the contract with raw OCR text. */
+        public ExtractedQuestion(String number, Double confidence, List<String> subitems,
+                List<SubitemContent> subitemsContent, ConfidenceField<String> text, String type, Double cotacao,
+                List<ExtractedOption> options, Boolean hasImage, String imageDescription, Integer pageIndex,
+                Integer startY, Integer endY, List<FormulaSegment> formulas, String rawText) {
+            this(number, confidence, subitems, subitemsContent, text, type, cotacao, options, hasImage,
+                imageDescription, pageIndex, startY, endY, formulas, rawText, null);
         }
 
         /**
@@ -291,10 +325,27 @@ public record OcrResponse(
         String text,
         Double cotacao,
         /** The alínea's own type: dissertativa, multipla_escolha or verdadeiro_falso. Null when the OCR did not say. */
-        String type
+        String type,
+        /** OCR confidence for this alínea, when supplied by the extractor. */
+        Double confidence,
+        /** Formula spans recognized in the alínea's own text. */
+        List<FormulaSegment> formulas,
+        @JsonProperty("rawText") String rawText
     ) {
+        /** Preserve the constructor introduced before source OCR text was exposed. */
+        public SubitemContent(String label, String text, Double cotacao, String type, Double confidence,
+                List<FormulaSegment> formulas) {
+            this(label, text, cotacao, type, confidence, formulas, null);
+        }
+
+        /** Preserve the original constructor used before per-alínea type and OCR metadata were exposed. */
         public SubitemContent(String label, String text, Double cotacao) {
-            this(label, text, cotacao, null);
+            this(label, text, cotacao, null, null, List.of(), null);
+        }
+
+        /** Preserve the constructor introduced when per-alínea type was added. */
+        public SubitemContent(String label, String text, Double cotacao, String type) {
+            this(label, text, cotacao, type, null, List.of(), null);
         }
     }
 
@@ -318,8 +369,14 @@ public record OcrResponse(
         String raw,
         String latex,
         Double confidence,
-        String kind
+        String kind,
+        Double ocrConfidence,
+        Double layoutConfidence
     ) {
+        public FormulaSegment(String raw, String latex, Double confidence, String kind) {
+            this(raw, latex, confidence, kind, null, null);
+        }
+
         public boolean isRecognized() {
             return "formula".equals(kind) && latex != null;
         }
@@ -400,7 +457,10 @@ public record OcrResponse(
     public record UnmappedContent(
         @JsonProperty("pageIndex") Integer pageIndex,
         String text,
-        Double confidence
+        Double confidence,
+        String reason,
+        List<Integer> bbox,
+        String zone
     ) {}
 
     /**

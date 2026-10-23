@@ -4,13 +4,18 @@ import ao.creativemode.kixi.identity.config.GoogleOAuth2Properties;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.dto.auth.LoginRequest;
 import ao.creativemode.kixi.identity.dto.auth.LoginResponse;
+import ao.creativemode.kixi.identity.dto.auth.GoogleLinkAuthorizationRequest;
+import ao.creativemode.kixi.identity.dto.auth.GoogleLinkAuthorizationResponse;
 import ao.creativemode.kixi.identity.dto.auth.RegisterRequest;
 import ao.creativemode.kixi.identity.service.AuthService;
+import ao.creativemode.kixi.identity.service.GoogleLinkStateService;
 import ao.creativemode.kixi.identity.service.LoginRateLimiter;
 import ao.creativemode.kixi.shared.config.TrustedProxyProperties;
 import ao.creativemode.kixi.identity.service.RegistrationRateLimiter;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
+import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -26,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Autenticação: login tradicional (username/email + password) e login Google OAuth2.
@@ -45,19 +51,25 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final TrustedProxyProperties trustedProxies;
     private final ApiAbuseRateLimiter abuseRateLimiter;
+    private final CurrentAccountService currentAccountService;
+    private final GoogleLinkStateService googleLinkStateService;
 
     public AuthController(AuthService authService,
                           GoogleOAuth2Properties googleProperties,
                           RegistrationRateLimiter registrationRateLimiter,
                           LoginRateLimiter loginRateLimiter,
                           TrustedProxyProperties trustedProxies,
-                          ApiAbuseRateLimiter abuseRateLimiter) {
+                          ApiAbuseRateLimiter abuseRateLimiter,
+                          CurrentAccountService currentAccountService,
+                          GoogleLinkStateService googleLinkStateService) {
         this.authService = authService;
         this.googleProperties = googleProperties;
         this.registrationRateLimiter = registrationRateLimiter;
         this.loginRateLimiter = loginRateLimiter;
         this.trustedProxies = trustedProxies;
         this.abuseRateLimiter = abuseRateLimiter;
+        this.currentAccountService = currentAccountService;
+        this.googleLinkStateService = googleLinkStateService;
     }
 
     /**
@@ -112,9 +124,9 @@ public class AuthController {
      * locks everyone out at once. So the default is to believe nothing, and the operator
      * names the proxy when the topology makes the header the honest answer.</p>
      *
-     * <p>The leftmost entry is the original client; each proxy appends the peer it saw.
-     * It is taken only when non-blank, so a proxy that forwards an empty header falls
-     * back to the address rather than keying everyone on "".
+     * <p>Only the rightmost entry is used. A trusted direct peer must not let an earlier,
+     * client-supplied value in a forwarded chain choose the rate-limit bucket. An empty
+     * final entry falls back to the address rather than keying everyone on "".
      */
     private String clientAddress(ServerWebExchange exchange) {
         return ao.creativemode.kixi.shared.security.ClientAddress.resolve(exchange, trustedProxies);
@@ -148,19 +160,45 @@ public class AuthController {
             @RequestParam(required = false) String state,
             @CookieValue(name = STATE_COOKIE_NAME, required = false) String expectedState,
             ServerWebExchange exchange) {
-        if (!isValidState(state, expectedState)) {
+        Optional<Long> linkAccountId = googleLinkStateService.accountForCallback(state, expectedState);
+        if (!isValidState(state, expectedState) && linkAccountId.isEmpty()) {
             return Mono.error(ApiException.badRequest("Invalid OAuth state"));
         }
 
+        Mono<LoginResponse> completion = linkAccountId
+                .map(accountId -> authService.completeGoogleLink(accountId, code))
+                .orElseGet(() -> authService.loginWithGoogle(code));
+
         return abuseRateLimiter.checkLogin(clientAddress(exchange))
-                .then(authService.loginWithGoogle(code))
+                .then(completion)
+                .doOnError(error -> exchange.getResponse().addCookie(clearStateCookie()))
                 .map(response -> ResponseEntity.ok()
                         .header(HttpHeaders.SET_COOKIE, clearStateCookie().toString())
                         .body(response));
     }
 
-    private ResponseCookie stateCookie(String state) {
-        return ResponseCookie.from(STATE_COOKIE_NAME, state)
+    /** Starts explicit Google linking after re-authenticating the local account password. */
+    @PostMapping("/google/link/authorize")
+    @SecurityRequirement(name = "bearerAuth")
+    public Mono<ResponseEntity<GoogleLinkAuthorizationResponse>> authorizeGoogleLink(
+            ServerWebExchange exchange,
+            @Valid @RequestBody GoogleLinkAuthorizationRequest request) {
+        if (googleProperties.getClientId() == null || googleProperties.getClientId().isBlank()) {
+            return Mono.error(ApiException.badRequest("Google OAuth2 is not configured"));
+        }
+        return currentAccountService.requiredAccountId()
+                .flatMap(accountId -> loginRateLimiter.checkAddress("login-ip:" + clientAddress(exchange))
+                        .then(loginRateLimiter.checkIdentity("google-link:" + accountId))
+                        .then(Mono.defer(() -> authService.verifyPasswordForGoogleLink(accountId, request.password())))
+                        .then(Mono.fromSupplier(() -> googleLinkStateService.issue(accountId)))
+                        .map(issued -> ResponseEntity.ok()
+                                .header(HttpHeaders.SET_COOKIE, stateCookie(issued.cookieValue()).toString())
+                                .body(new GoogleLinkAuthorizationResponse(
+                                        googleProperties.buildAuthorizationUrl(issued.state())))));
+    }
+
+    private ResponseCookie stateCookie(String cookieValue) {
+        return ResponseCookie.from(STATE_COOKIE_NAME, cookieValue)
                 .httpOnly(true)
                 .secure(googleProperties.isStateCookieSecure())
                 .sameSite("Lax")
