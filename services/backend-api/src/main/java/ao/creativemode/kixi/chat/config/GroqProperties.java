@@ -24,7 +24,7 @@ public class GroqProperties {
 
     private String baseUrl = "https://api.groq.com/openai/v1";
 
-    private String model = "llama-3.3-70b-versatile";
+    private String model = "qwen/qwen3.8-27b";
 
     @Min(1_000)
     private long timeoutMs = 30_000;
