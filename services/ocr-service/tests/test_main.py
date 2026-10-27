@@ -19,17 +19,21 @@ def test_lifespan_initializes_and_shuts_down_engine():
         shutdown.assert_called_once()
 
 
-def test_request_id_is_generated_server_side_instead_of_trusting_header():
-    # The engine is patched for the same reason as in the lifespan test above, and not as
-    # a convenience: `with TestClient(app)` runs the lifespan, which pre-loads the OCR
-    # engine unless settings.debug is true. The model download is what pushed this test
-    # past the 120s timeout in CI, while the assertion below has nothing to do with it.
+def test_request_id_accepts_only_the_explicit_ocr_uuid_header():
+    # Avoid loading the OCR engine: request correlation does not depend on model startup.
     with patch("app.main.initialize_engine"), patch("app.main.shutdown_engine"):
         with TestClient(app) as client:
-            response = client.get("/health", headers={"X-Request-ID": "spoofed"})
+            accepted = client.get(
+                "/health", headers={"X-OCR-Request-ID": "ad8f8b31-35a0-4f76-ae46-692ec432601e"}
+            )
+            rejected = client.get("/health", headers={"X-OCR-Request-ID": "spoofed"})
+            generic = client.get("/health", headers={"X-Request-ID": "spoofed"})
 
-    request_id = response.headers.get("X-Request-ID")
-    assert response.status_code == 200
-    assert request_id is not None
-    assert request_id.startswith("req-")
-    assert request_id != "spoofed"
+    assert accepted.status_code == 200
+    assert accepted.headers["X-Request-ID"] == "ad8f8b31-35a0-4f76-ae46-692ec432601e"
+    assert rejected.status_code == 200
+    assert rejected.headers["X-Request-ID"].startswith("req-")
+    assert rejected.headers["X-Request-ID"] != "spoofed"
+    assert generic.status_code == 200
+    assert generic.headers["X-Request-ID"].startswith("req-")
+    assert generic.headers["X-Request-ID"] != "spoofed"
