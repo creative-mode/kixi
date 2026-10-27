@@ -1681,7 +1681,7 @@ class OCRProcessWorker:
     def health_check(self) -> Dict[str, Any]:
         alive = self._process is not None and self._process.is_alive() and self._ready
         return {
-            "status": "healthy",
+            "status": "healthy" if alive else "not_initialized",
             "initialized": bool(alive),
             "message": "OCR worker ready" if alive else "OCR worker starts on demand",
         }

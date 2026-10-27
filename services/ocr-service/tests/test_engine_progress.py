@@ -24,13 +24,16 @@ def _engine_with_worker(worker):
 def _blocking_process_worker(connection):
     connection.send({"type": "ready"})
     command = connection.recv()
-    assert command["type"] == "progress"
-    page = connection.recv()
-    assert page["type"] == "page"
-    connection.send({"type": "rasterized", "page": 1})
-    while True:
-        # Model a native inference call that cannot poll Python cancellation flags.
-        sum(range(100_000))
+    if command["type"] == "progress":
+        page = connection.recv()
+        assert page["type"] == "page"
+        connection.send({"type": "rasterized", "page": 1})
+        while True:
+            # Model a native inference call that cannot poll Python cancellation flags.
+            sum(range(100_000))
+    assert command["type"] == "process_image"
+    connection.send({"type": "result", "result": {"status": "success"}})
+    assert connection.recv()["type"] == "shutdown"
 
 
 def _successful_process_worker(connection):
@@ -196,6 +199,10 @@ def test_closing_progress_stream_terminates_native_inference_process():
         with pytest.raises(ProcessLookupError):
             os.kill(worker_pid, 0)
         assert worker.health_check()["initialized"] is False
+        assert worker.health_check()["status"] == "not_initialized"
+        result = await worker._call("process_image", image=np.zeros((2, 2, 3), dtype=np.uint8))
+        assert result == {"status": "success"}
+        assert worker.health_check()["initialized"] is True
 
     try:
         asyncio.run(cancel_during_inference())
