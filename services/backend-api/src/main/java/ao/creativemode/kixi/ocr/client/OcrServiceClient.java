@@ -163,12 +163,17 @@ public class OcrServiceClient {
                     .contentType(getContentType(file.filename()));
         }
 
-        return stream(builder, frontendUploadMs);
+        return stream(builder, frontendUploadMs, null);
     }
 
     /** Stream OCR events from already bounded source bytes retained for image previews. */
     public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStreamFromUploadedFiles(
             List<OcrUploadedFile> files, Double frontendUploadMs) {
+        return extractTextStreamFromUploadedFiles(files, frontendUploadMs, null);
+    }
+
+    public Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> extractTextStreamFromUploadedFiles(
+            List<OcrUploadedFile> files, Double frontendUploadMs, String requestId) {
         if (files == null || files.isEmpty()) {
             return Mono.error(new IllegalArgumentException("At least one file is required"));
         }
@@ -182,11 +187,11 @@ public class OcrServiceClient {
                             : getContentType(file.filename()));
         }
 
-        return stream(builder, frontendUploadMs);
+        return stream(builder, frontendUploadMs, requestId);
     }
 
     private Mono<ResponseEntity<Flux<ServerSentEvent<String>>>> stream(
-            MultipartBodyBuilder builder, Double frontendUploadMs) {
+            MultipartBodyBuilder builder, Double frontendUploadMs, String requestId) {
         return webClient.post()
                 .uri("/ocr/v1/extract/stream")
                 .headers(headers -> {
@@ -194,6 +199,9 @@ public class OcrServiceClient {
                     if (frontendUploadMs != null && Double.isFinite(frontendUploadMs)
                             && frontendUploadMs >= 0 && frontendUploadMs <= 180_000) {
                         headers.set("X-OCR-Upload-Ms", frontendUploadMs.toString());
+                    }
+                    if (requestId != null && !requestId.isBlank()) {
+                        headers.set("X-OCR-Request-ID", requestId);
                     }
                 })
                 .accept(MediaType.TEXT_EVENT_STREAM)

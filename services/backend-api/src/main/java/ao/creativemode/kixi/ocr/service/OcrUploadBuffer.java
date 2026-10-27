@@ -12,6 +12,7 @@ import javax.imageio.stream.ImageInputStream;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.codec.multipart.FilePart;
+import org.springframework.http.HttpStatus;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -48,8 +49,15 @@ public final class OcrUploadBuffer {
                                     }
                                     totalBytes.addAndGet(content.length);
                                     validateContent(content);
-                                    return new OcrUploadedFile(
-                                            file.filename(), file.headers().getContentType(), content);
+                                    String filename = file.filename();
+                                    var contentType = file.headers().getContentType();
+                                    if (filename == null || filename.isBlank() || filename.length() > 255) {
+                                        throw ApiException.badRequest("OCR filename must contain at most 255 characters");
+                                    }
+                                    if (contentType != null && contentType.toString().length() > 128) {
+                                        throw ApiException.badRequest("OCR content type is invalid");
+                                    }
+                                    return new OcrUploadedFile(filename, contentType, content);
                                 } finally {
                                     DataBufferUtils.release(buffer);
                                 }
@@ -57,7 +65,7 @@ public final class OcrUploadBuffer {
                 })
                 .collectList()
                 .onErrorMap(DataBufferLimitException.class,
-                        error -> ApiException.badRequest(
+                        error -> new ApiException(HttpStatus.PAYLOAD_TOO_LARGE,
                                 "OCR input exceeds the 20 MB per-file or 50 MB aggregate limit"));
     }
 

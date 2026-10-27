@@ -1,0 +1,3 @@
+ALTER TABLE ocr_jobs
+    ADD COLUMN frontend_upload_ms INTEGER NOT NULL DEFAULT 0 CHECK (frontend_upload_ms >= 0),
+    ADD COLUMN client_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
