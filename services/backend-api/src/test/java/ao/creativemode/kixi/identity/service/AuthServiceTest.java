@@ -52,6 +52,7 @@ class AuthServiceTest {
 
         when(jwtService.generateToken(anyLong(), anyList())).thenReturn("jwt-token");
         when(jwtService.getExpirationMs()).thenReturn(86_400_000L);
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNotNull(any())).thenReturn(Mono.empty());
     }
 
     @Test
