@@ -925,7 +925,8 @@ class TestModuleFunctions:
         """Test that get_engine creates a new instance."""
         engine = get_engine()
 
-        assert isinstance(engine, OCREngine)
+        from app.ocr.engine import OCRProcessWorker
+        assert isinstance(engine, OCRProcessWorker)
 
     @patch("app.ocr.engine._default_engine", None)
     def test_get_engine_returns_same_instance(self):
@@ -935,16 +936,12 @@ class TestModuleFunctions:
 
         assert engine1 is engine2
 
-    @patch("app.ocr.engine.PaddleOCR")
+    @patch("app.ocr.engine.OCRProcessWorker.initialize")
     @patch("app.ocr.engine._default_engine", None)
-    def test_initialize_engine(self, mock_paddle):
+    def test_initialize_engine(self, mock_initialize):
         """Test initialize_engine function."""
-        mock_paddle.return_value = MagicMock()
-
         initialize_engine()
-
-        engine = get_engine()
-        assert engine._initialized is True
+        mock_initialize.assert_called_once()
 
     @patch("app.ocr.engine._default_engine")
     def test_shutdown_engine(self, mock_engine):
