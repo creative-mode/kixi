@@ -6,6 +6,7 @@ formulas) that the postprocessor ties to the questions. PaddleOCR-VL is availabl
 """
 
 import asyncio
+import multiprocessing
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1532,11 +1533,275 @@ class OCREngine:
         self._initialized = False
 
 
-# Default engine instance
-_default_engine: Optional[OCREngine] = None
+def _ocr_process_main(connection) -> None:
+    """Own Paddle in a killable process so cancellation can stop native inference."""
+    engine = OCREngine(
+        lang=settings.ocr_lang,
+        use_gpu=settings.ocr_use_gpu,
+        use_angle_cls=settings.ocr_use_angle_cls,
+        det_model_dir=settings.ocr_det_model_dir,
+        rec_model_dir=settings.ocr_rec_model_dir,
+        cls_model_dir=settings.ocr_cls_model_dir,
+        show_log=settings.ocr_show_log,
+    )
+    try:
+        engine.initialize()
+        connection.send({"type": "ready"})
+        while True:
+            command = connection.recv()
+            if command["type"] == "shutdown":
+                engine.shutdown()
+                return
+            if command["type"] == "progress":
+                source_indices: List[int] = []
+                native_pages: List[Optional[Dict[str, Any]]] = []
+
+                def pages():
+                    while True:
+                        item = connection.recv()
+                        if item["type"] == "end":
+                            return
+                        source_indices.append(item["source_file_index"])
+                        native_pages.append(item["native_text_page"])
+                        yield item["image"]
+
+                try:
+                    result = engine.process_images_with_progress(
+                        pages(),
+                        command["request_id"],
+                        source_indices,
+                        lambda event: connection.send({"type": "event", "event": event}),
+                        native_text_pages=native_pages,
+                        page_count=command["page_count"],
+                        on_page_rasterized=lambda page: connection.send(
+                            {"type": "rasterized", "page": page}
+                        ),
+                    )
+                    connection.send({"type": "result", "result": result})
+                except BaseException as error:
+                    connection.send({
+                        "type": "error",
+                        "error_type": type(error).__name__,
+                    })
+                continue
+
+            try:
+                operation = command["type"]
+                if operation == "process_image":
+                    result = engine.process_image(**command["kwargs"])
+                elif operation == "process_images":
+                    result = engine.process_images(**command["kwargs"])
+                else:
+                    raise ValueError("Unsupported OCR worker operation")
+                connection.send({"type": "result", "result": result})
+            except BaseException as error:
+                connection.send({"type": "error", "error_type": type(error).__name__})
+    except BaseException as error:
+        try:
+            connection.send({"type": "startup_error", "error_type": type(error).__name__})
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        connection.close()
 
 
-def get_engine() -> OCREngine:
+class OCRProcessWorker:
+    """Serialize OCR through a persistent, killable Paddle process."""
+
+    def __init__(self, process_target=_ocr_process_main):
+        self._context = multiprocessing.get_context("spawn")
+        self._process_target = process_target
+        self._process = None
+        self._connection = None
+        self._lock = asyncio.Lock()
+        self._ready = False
+
+    def initialize(self) -> None:
+        self._ensure_process()
+
+    def _ensure_process(self) -> None:
+        if self._process is not None and self._process.is_alive() and self._ready:
+            return
+        self._stop_process()
+        parent, child = self._context.Pipe(duplex=True)
+        process = self._context.Process(
+            target=self._process_target,
+            args=(child,),
+            name="kixi-ocr-inference",
+            daemon=True,
+        )
+        try:
+            process.start()
+        except BaseException:
+            parent.close()
+            child.close()
+            raise
+        child.close()
+        self._process, self._connection = process, parent
+        if not parent.poll(240):
+            self._stop_process()
+            raise TimeoutError("OCR inference worker initialization timed out")
+        message = parent.recv()
+        if message.get("type") != "ready":
+            self._stop_process()
+            raise RuntimeError(
+                f"OCR inference worker failed to initialize ({message.get('error_type', 'unknown')})"
+            )
+        self._ready = True
+
+    def _stop_process(self) -> None:
+        process, connection = self._process, self._connection
+        self._process = self._connection = None
+        self._ready = False
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        if process is not None:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            if not process.is_alive():
+                process.close()
+
+    def shutdown(self) -> None:
+        process, connection = self._process, self._connection
+        if process is not None and process.is_alive() and connection is not None:
+            try:
+                connection.send({"type": "shutdown"})
+                process.join(timeout=5)
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+        self._stop_process()
+
+    def health_check(self) -> Dict[str, Any]:
+        alive = self._process is not None and self._process.is_alive() and self._ready
+        return {
+            "status": "healthy" if alive else "not_initialized",
+            "initialized": bool(alive),
+            "message": "OCR worker ready" if alive else "OCR worker starts on demand",
+        }
+
+    async def _call(self, operation: str, **kwargs):
+        async with self._lock:
+            await asyncio.to_thread(self._ensure_process)
+            connection = self._connection
+            await asyncio.to_thread(connection.send, {"type": operation, "kwargs": kwargs})
+            message = await asyncio.to_thread(self._receive)
+            if message["type"] != "result":
+                raise RuntimeError(f"OCR worker failed ({message.get('error_type', 'unknown')})")
+            return message["result"]
+
+    def _receive(self):
+        connection = self._connection
+        while True:
+            if connection.poll(0.25):
+                return connection.recv()
+            if self._process is None or not self._process.is_alive():
+                raise RuntimeError("OCR inference worker exited unexpectedly")
+
+    def process_image(self, image: np.ndarray, page_index: int = 0,
+                      request_id: Optional[str] = None, source_file_index: int = 0,
+                      native_text_page: Optional[Dict[str, Any]] = None) -> OCRResult:
+        return asyncio.run(self._call(
+            "process_image", image=image, page_index=page_index,
+            request_id=request_id, source_file_index=source_file_index,
+            native_text_page=native_text_page,
+        ))
+
+    async def process_image_async(self, image: np.ndarray, page_index: int = 0,
+                                  request_id: Optional[str] = None,
+                                  source_file_index: int = 0) -> OCRResult:
+        return await self._call("process_image", image=image, page_index=page_index,
+                                request_id=request_id, source_file_index=source_file_index)
+
+    def process_images(self, images: List[np.ndarray], request_id: Optional[str] = None,
+                       source_file_indices: Optional[List[int]] = None) -> OCRResult:
+        return asyncio.run(self.process_images_async(images, request_id, source_file_indices))
+
+    async def process_images_async(self, images: List[np.ndarray],
+                                   request_id: Optional[str] = None,
+                                   source_file_indices: Optional[List[int]] = None) -> OCRResult:
+        return await self._call("process_images", images=images, request_id=request_id,
+                                source_file_indices=source_file_indices)
+
+    async def process_images_progress_async(
+        self,
+        images: Iterable[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
+    ):
+        if page_count is None:
+            if not hasattr(images, "__len__"):
+                raise ValueError("page_count is required for an image iterator")
+            page_count = len(images)  # type: ignore[arg-type]
+        sources = source_file_indices if source_file_indices is not None else []
+        native_pages = native_text_pages if native_text_pages is not None else []
+
+        async with self._lock:
+            await asyncio.to_thread(self._ensure_process)
+            connection = self._connection
+            connection.send({"type": "progress", "request_id": request_id,
+                             "page_count": page_count})
+            feeder = asyncio.create_task(asyncio.to_thread(
+                self._feed_pages, connection, images, sources, native_pages
+            ))
+            completed = False
+            try:
+                while True:
+                    message = await asyncio.to_thread(self._receive)
+                    if message["type"] == "event":
+                        yield message["event"]
+                    elif message["type"] == "rasterized":
+                        extra = on_page_rasterized(message["page"]) if on_page_rasterized else {}
+                        yield {"type": "rasterized", "page": message["page"], **(extra or {})}
+                    elif message["type"] == "result":
+                        await feeder
+                        completed = True
+                        yield {"type": "result", "result": message["result"]}
+                        return
+                    else:
+                        raise RuntimeError(
+                            f"OCR worker failed ({message.get('error_type', 'unknown')})"
+                        )
+            finally:
+                if not completed:
+                    process = self._process
+                    logger.info(
+                        "Terminating OCR inference process after request cancellation",
+                        request_id=request_id,
+                        worker_pid=process.pid if process is not None else None,
+                    )
+                    await asyncio.to_thread(self._stop_process)
+                    if not feeder.done():
+                        feeder.cancel()
+
+    @staticmethod
+    def _feed_pages(connection, images, source_indices, native_pages) -> None:
+        try:
+            for index, image in enumerate(images):
+                source_index = source_indices[index] if index < len(source_indices) else 0
+                native_page = native_pages[index] if index < len(native_pages) else None
+                connection.send({"type": "page", "image": image,
+                                 "source_file_index": source_index,
+                                 "native_text_page": native_page})
+            connection.send({"type": "end"})
+        except (BrokenPipeError, EOFError, OSError, RuntimeError):
+            return
+
+
+# Default engine process
+_default_engine: Optional[OCRProcessWorker] = None
+
+
+def get_engine() -> OCRProcessWorker:
     """
     Get the default OCR engine instance.
 
@@ -1545,15 +1810,7 @@ def get_engine() -> OCREngine:
     global _default_engine
 
     if _default_engine is None:
-        _default_engine = OCREngine(
-            lang=settings.ocr_lang,
-            use_gpu=settings.ocr_use_gpu,
-            use_angle_cls=settings.ocr_use_angle_cls,
-            det_model_dir=settings.ocr_det_model_dir,
-            rec_model_dir=settings.ocr_rec_model_dir,
-            cls_model_dir=settings.ocr_cls_model_dir,
-            show_log=settings.ocr_show_log,
-        )
+        _default_engine = OCRProcessWorker()
 
     return _default_engine
 

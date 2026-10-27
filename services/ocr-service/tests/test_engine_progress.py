@@ -1,6 +1,7 @@
 """Bounded progress handoff and disconnect cancellation at page boundaries."""
 
 import asyncio
+import os
 import threading
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.ocr.engine import OCREngine
+from app.ocr.engine import OCREngine, OCRProcessWorker
 from app.ocr.postprocessing import ExtractedMetadata
 
 
@@ -18,6 +19,36 @@ def _engine_with_worker(worker):
     engine._executor = ThreadPoolExecutor(max_workers=1)
     engine.process_images_with_progress = worker
     return engine
+
+
+def _blocking_process_worker(connection):
+    connection.send({"type": "ready"})
+    command = connection.recv()
+    if command["type"] == "progress":
+        page = connection.recv()
+        assert page["type"] == "page"
+        connection.send({"type": "rasterized", "page": 1})
+        while True:
+            # Model a native inference call that cannot poll Python cancellation flags.
+            sum(range(100_000))
+    assert command["type"] == "process_image"
+    connection.send({"type": "result", "result": {"status": "success"}})
+    assert connection.recv()["type"] == "shutdown"
+
+
+def _successful_process_worker(connection):
+    connection.send({"type": "ready"})
+    command = connection.recv()
+    assert command["type"] == "progress"
+    page = connection.recv()
+    assert page["type"] == "page"
+    connection.send({"type": "rasterized", "page": 1})
+    connection.send({
+        "type": "event",
+        "event": {"page": 1, "pageCount": command["page_count"]},
+    })
+    assert connection.recv()["type"] == "end"
+    connection.send({"type": "result", "result": {"status": "success"}})
 
 
 @pytest.mark.asyncio
@@ -150,3 +181,50 @@ async def test_closing_progress_stream_stops_work_after_current_page():
         assert 1 <= len(processed) <= 2
     finally:
         engine._executor.shutdown(wait=True)
+
+
+def test_closing_progress_stream_terminates_native_inference_process():
+    worker = OCRProcessWorker(process_target=_blocking_process_worker)
+
+    async def cancel_during_inference():
+        stream = worker.process_images_progress_async(
+            [np.zeros((2, 2, 3), dtype=np.uint8)], page_count=1
+        )
+        event = await anext(stream)
+        assert event["type"] == "rasterized"
+        process = worker._process
+        assert process is not None and process.is_alive()
+        worker_pid = process.pid
+        await stream.aclose()
+        with pytest.raises(ProcessLookupError):
+            os.kill(worker_pid, 0)
+        assert worker.health_check()["initialized"] is False
+        assert worker.health_check()["status"] == "not_initialized"
+        result = await worker._call("process_image", image=np.zeros((2, 2, 3), dtype=np.uint8))
+        assert result == {"status": "success"}
+        assert worker.health_check()["initialized"] is True
+
+    try:
+        asyncio.run(cancel_during_inference())
+    finally:
+        worker.shutdown()
+
+
+def test_process_worker_streams_progress_and_result():
+    worker = OCRProcessWorker(process_target=_successful_process_worker)
+
+    async def collect():
+        return [event async for event in worker.process_images_progress_async(
+            [np.zeros((2, 2, 3), dtype=np.uint8)], page_count=1
+        )]
+
+    try:
+        events = asyncio.run(collect())
+        assert events == [
+            {"type": "rasterized", "page": 1},
+            {"page": 1, "pageCount": 1},
+            {"type": "result", "result": {"status": "success"}},
+        ]
+        assert worker.health_check()["initialized"] is True
+    finally:
+        worker.shutdown()
