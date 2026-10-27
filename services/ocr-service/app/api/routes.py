@@ -555,7 +555,6 @@ async def extract_text_stream(
     upload_ms = upload_ms if upload_ms is not None and 0 <= upload_ms <= 180_000 else None
 
     async def events():
-        all_images = []
         native_text_pages = []
         source_file_indices = []
         rasterization_ms = 0.0
@@ -570,46 +569,54 @@ async def extract_text_stream(
             },
         })
         try:
-            global_page = 0
-            for source_file_index, file_type, content, file_page_count in prepared_files:
-                for local_page in range(1, file_page_count + 1):
-                    raster_started = time.perf_counter()
-                    remaining_pixels = settings.max_ocr_pixels_per_request - rasterized_pixels
-                    if file_type == "pdf":
-                        pages = extract_images_from_pdf(
-                            content,
-                            first_page=local_page,
-                            last_page=local_page,
-                            max_total_pixels=remaining_pixels,
-                        )
-                        if len(pages) != 1:
-                            raise ValueError("PDF page rendering returned an unexpected page count")
-                        text_pages = extract_text_pages_from_pdf(
-                            content,
-                            first_page=local_page,
-                            last_page=local_page,
-                        )
-                        all_images.append(pages[0])
-                        native_text_pages.append(text_pages[0] if len(text_pages) == 1 else None)
-                    else:
-                        all_images.append(load_image_from_bytes(content, max_pixels=remaining_pixels))
-                        native_text_pages.append(None)
-                    rasterized_pixels += int(all_images[-1].shape[0]) * int(all_images[-1].shape[1])
-                    source_file_indices.append(source_file_index)
-                    rasterization_ms += (time.perf_counter() - raster_started) * 1000
-                    global_page += 1
-                    yield _sse_event("rasterized", {
-                        "page": global_page,
-                        "pageCount": page_count,
-                        "timings": {"rasterizationMs": round(rasterization_ms, 1)},
-                    })
+            def rasterized_pages():
+                nonlocal rasterization_ms, rasterized_pixels
+                global_page = 0
+                for source_file_index, file_type, content, file_page_count in prepared_files:
+                    for local_page in range(1, file_page_count + 1):
+                        raster_started = time.perf_counter()
+                        remaining_pixels = settings.max_ocr_pixels_per_request - rasterized_pixels
+                        if file_type == "pdf":
+                            pages = extract_images_from_pdf(
+                                content,
+                                first_page=local_page,
+                                last_page=local_page,
+                                max_total_pixels=remaining_pixels,
+                            )
+                            if len(pages) != 1:
+                                raise ValueError("PDF page rendering returned an unexpected page count")
+                            text_pages = extract_text_pages_from_pdf(
+                                content,
+                                first_page=local_page,
+                                last_page=local_page,
+                            )
+                            image = pages[0]
+                            native_text_pages.append(text_pages[0] if len(text_pages) == 1 else None)
+                        else:
+                            image = load_image_from_bytes(content, max_pixels=remaining_pixels)
+                            native_text_pages.append(None)
+                        rasterized_pixels += int(image.shape[0]) * int(image.shape[1])
+                        source_file_indices.append(source_file_index)
+                        rasterization_ms += (time.perf_counter() - raster_started) * 1000
+                        global_page += 1
+                        yield image
+
+            def report_rasterized(page: int) -> dict:
+                # Progress events are emitted by the engine as soon as this page is ready,
+                # before OCR starts; only one rasterized page is retained at a time.
+                return {"timings": {"rasterizationMs": round(rasterization_ms, 1)}}
 
             async for update in engine.process_images_progress_async(
-                all_images,
+                rasterized_pages(),
                 request_id=request_id,
                 source_file_indices=source_file_indices,
                 native_text_pages=native_text_pages,
+                page_count=page_count,
+                on_page_rasterized=report_rasterized,
             ):
+                if update.get("type") == "rasterized":
+                    yield _sse_event("rasterized", update)
+                    continue
                 if "type" not in update:
                     yield _sse_event("progress", update)
                     continue

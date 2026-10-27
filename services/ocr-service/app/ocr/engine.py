@@ -10,7 +10,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import Optional, List, Dict, Any, Tuple, Callable
+from typing import Optional, List, Dict, Any, Tuple, Callable, Iterable
 import hashlib
 import re
 import uuid
@@ -1144,12 +1144,14 @@ class OCREngine:
         on_page_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
         cancelled: Optional[threading.Event] = None,
         native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
     ) -> OCRResult:
         """
         Process pages sequentially and report measured completion after each page.
 
         Args:
-            images: List of images as numpy arrays
+            images: Images as numpy arrays. Iterators require an explicit page_count.
             request_id: Optional request ID for tracking
 
         Returns:
@@ -1158,13 +1160,18 @@ class OCREngine:
         start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
+        if page_count is None:
+            if not hasattr(images, "__len__"):
+                raise ValueError("page_count is required for an image iterator")
+            page_count = len(images)  # type: ignore[arg-type]
+
         logger.info(
             "Processing multiple images",
             request_id=request_id,
-            num_images=len(images),
+            num_images=page_count,
         )
 
-        if not images:
+        if page_count == 0:
             return OCRResult(
                 status="error",
                 request_id=request_id,
@@ -1197,9 +1204,20 @@ class OCREngine:
             "parsingMs": 0.0,
         }
 
-        for idx, image in enumerate(images):
+        processed_pages = 0
+        image_iterator = iter(images)
+        while True:
             if cancelled is not None and cancelled.is_set():
                 break
+            try:
+                image = next(image_iterator)
+            except StopIteration:
+                break
+            idx = processed_pages
+            if on_page_rasterized is not None:
+                on_page_rasterized(idx + 1)
+                if cancelled is not None and cancelled.is_set():
+                    break
             result = self.process_image(
                 image,
                 page_index=idx,
@@ -1239,9 +1257,10 @@ class OCREngine:
             if on_page_complete is not None:
                 on_page_complete({
                     "page": idx + 1,
-                    "pageCount": len(images),
+                    "pageCount": page_count,
                     "timings": result.timings or {},
                 })
+            processed_pages += 1
 
             # Use metadata from first page
             if idx == 0:
@@ -1250,7 +1269,7 @@ class OCREngine:
         # Parse the complete document after each page has been recognized. This retains streaming page
         # progress but lets a question or alínea continue across a physical page break without dropping text.
         combined_parsing_ms = 0.0
-        if len(page_contexts) == len(images) and page_contexts:
+        if processed_pages == page_count and page_contexts:
             combined_started = time.perf_counter()
             all_blocks = [block for page in page_contexts for block in page.text_blocks]
             page_dimensions = {page.page_index: (page.width, page.height) for page in page_contexts}
@@ -1267,7 +1286,7 @@ class OCREngine:
             }
             metadata, all_questions, all_images_to_upload, all_unmapped, document_warnings = self.postprocessor.process(
                 all_blocks,
-                page_count=len(images),
+                page_count=page_count,
                 page_dimensions=page_dimensions,
                 source_file_indices=source_indices,
                 layout_regions=layout_regions,
@@ -1308,7 +1327,7 @@ class OCREngine:
         if not all_questions and not read_any_text:
             status = "error"
         elif has_unreadable_page or has_partial_content_page or (
-            has_partial_page and len(page_contexts) < len(images)
+            has_partial_page and len(page_contexts) < page_count
         ) or not all_questions or overall_confidence < 0.5:
             status = "partial"
         else:
@@ -1320,7 +1339,7 @@ class OCREngine:
             processing_time_ms=processing_time_ms,
             overall_confidence=overall_confidence,
             document=DocumentInfo(
-                page_count=len(images),
+                page_count=page_count,
                 main_language=main_language,
                 has_tables=has_tables,
             ),
@@ -1338,10 +1357,12 @@ class OCREngine:
 
     async def process_images_progress_async(
         self,
-        images: List[np.ndarray],
+        images: Iterable[np.ndarray],
         request_id: Optional[str] = None,
         source_file_indices: Optional[List[int]] = None,
         native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
     ):
         """Yield a bounded, backpressured event after each completed page and then the result."""
         loop = asyncio.get_running_loop()
@@ -1360,6 +1381,11 @@ class OCREngine:
                     return
             pending.cancel()
 
+        def report_rasterized(page: int) -> None:
+            if on_page_rasterized is not None:
+                extra = on_page_rasterized(page) or {}
+                report({"type": "rasterized", "page": page, "pageCount": page_count, **extra})
+
         task = loop.run_in_executor(
             self._executor,
             self.process_images_with_progress,
@@ -1369,6 +1395,8 @@ class OCREngine:
             report,
             cancelled,
             native_text_pages,
+            page_count,
+            report_rasterized,
         )
         try:
             while not task.done():

@@ -122,8 +122,9 @@ class OcrServiceClientTest {
             .setBody("event: prepared\ndata: {\"pages\":2}\n\nevent: progress\ndata: {\"page\":1}\n\n"));
         OcrUploadedFile file = new OcrUploadedFile(
             "exam.pdf", MediaType.APPLICATION_PDF, new byte[] {1, 2, 3});
+        String requestId = "ad8f8b31-35a0-4f76-ae46-692ec432601e";
 
-        StepVerifier.create(client(0, "").extractTextStreamFromUploadedFiles(List.of(file), null)
+        StepVerifier.create(client(0, "").extractTextStreamFromUploadedFiles(List.of(file), null, requestId)
                 .flatMapMany(response -> response.getBody()))
             .assertNext(event -> {
                 assertThat(event.event()).isEqualTo("prepared");
@@ -138,6 +139,7 @@ class OcrServiceClientTest {
         RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
         assertThat(request).isNotNull();
         assertThat(request.getPath()).isEqualTo("/ocr/v1/extract/stream");
+        assertThat(request.getHeader("X-OCR-Request-ID")).isEqualTo(requestId);
         assertThat(request.getBody().readUtf8()).contains("filename=\"exam.pdf\"");
     }
 

@@ -113,8 +113,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
-    """Attach a server-generated correlation ID to every response and log context."""
-    request_id = f"req-{uuid.uuid4().hex[:12]}"
+    """Attach a validated correlation ID or generate one for the request."""
+    supplied_id = request.headers.get("X-OCR-Request-ID")
+    try:
+        request_id = str(uuid.UUID(supplied_id)) if supplied_id else f"req-{uuid.uuid4().hex[:12]}"
+    except (ValueError, AttributeError):
+        request_id = f"req-{uuid.uuid4().hex[:12]}"
     request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
