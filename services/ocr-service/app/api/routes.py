@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.ocr import (
     get_engine,
-    OCREngine,
+    OCRProcessWorker,
     OCRResult,
     load_image_from_bytes,
 )
@@ -86,7 +86,7 @@ class ExtractResponse(BaseModel):
 
 
 # Dependency for OCR engine
-def get_ocr_engine() -> OCREngine:
+def get_ocr_engine() -> OCRProcessWorker:
     """Dependency to get the OCR engine instance."""
     return get_engine()
 
@@ -220,7 +220,7 @@ def _status_code_for_result(status: str) -> int:
 
 # Routes
 @router.get("/health", response_model=HealthResponse)
-async def health_check(engine: OCREngine = Depends(get_ocr_engine)) -> HealthResponse:
+async def health_check(engine: OCRProcessWorker = Depends(get_ocr_engine)) -> HealthResponse:
     """
     Health check endpoint.
 
@@ -243,7 +243,7 @@ async def extract_text(
     images: List[UploadFile] = File(..., description="Image files to process"),
     context: Optional[str] = Form(default=None, description="JSON context string"),
     _: None = Depends(require_ocr_api_key),
-    engine: OCREngine = Depends(get_ocr_engine),
+    engine: OCRProcessWorker = Depends(get_ocr_engine),
 ) -> JSONResponse:
     """
     Extract text from uploaded images.
@@ -422,7 +422,7 @@ async def extract_text_simple(
     request: Request,
     image: UploadFile = File(..., description="Single image file to process"),
     _: None = Depends(require_ocr_api_key),
-    engine: OCREngine = Depends(get_ocr_engine),
+    engine: OCRProcessWorker = Depends(get_ocr_engine),
 ) -> JSONResponse:
     """
     Simplified text extraction for a single image.
@@ -487,7 +487,7 @@ async def extract_text_stream(
     images: List[UploadFile] = File(..., description="Image files or PDFs to process"),
     upload_ms: Optional[float] = Header(default=None, alias="X-OCR-Upload-Ms"),
     _: None = Depends(require_ocr_api_key),
-    engine: OCREngine = Depends(get_ocr_engine),
+    engine: OCRProcessWorker = Depends(get_ocr_engine),
 ) -> StreamingResponse:
     """Stream request-scoped, measured progress and the final extraction as SSE."""
     request_id = request.state.request_id
