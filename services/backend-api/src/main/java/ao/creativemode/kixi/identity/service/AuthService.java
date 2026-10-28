@@ -62,11 +62,11 @@ public class AuthService {
         // tell "no such account" apart from "wrong password", since the same
         // 400 is used for genuine payload validation errors on this endpoint.
         return findAccountByUsernameOrEmail(usernameOrEmail.trim())
-                .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
+                .switchIfEmpty(Mono.error(() -> ApiException.unauthorized("Invalid username or password")))
                 .filter(Account::getActive)
-                .switchIfEmpty(Mono.error(ApiException.unauthorized("Account is inactive")))
+                .switchIfEmpty(Mono.error(() -> ApiException.unauthorized("Account is inactive")))
                 .filterWhen(account -> passwordMatches(password, account.getPasswordHash()))
-                .switchIfEmpty(Mono.error(ApiException.unauthorized("Invalid username or password")))
+                .switchIfEmpty(Mono.error(() -> ApiException.unauthorized("Invalid username or password")))
                 .flatMap(account -> recordLogin(account)
                         .flatMap(updated -> loadRoleNames(updated.getId())
                                 .map(roles -> buildLoginResponse(updated.getId(), roles))));
@@ -259,7 +259,7 @@ public class AuthService {
                 .switchIfEmpty(Mono.just(normalizedUsername));
 
         return username.flatMap(candidate -> roleRepository.findByNameAndDeletedAtIsNull(DEFAULT_ROLE_NAME)
-                .switchIfEmpty(Mono.error(ApiException.conflict(
+                .switchIfEmpty(Mono.error(() -> ApiException.conflict(
                         "Default role is not configured: " + DEFAULT_ROLE_NAME
                 )))
                 .flatMap(role -> encodePassword(UUID.randomUUID().toString())
