@@ -3,24 +3,33 @@
 //
 // Regras:
 //  1. A branch segue  <tipo>/<n.º da issue>-<descricao-curta>   (ex.: feature/23-login-com-jwt)
-//  2. O PR fecha a issue:  "Closes #23"  (o n.º tem de coincidir com o da branch)
+//  2. O PR associa a issue: "Closes #23" ou "Refs #23" (o n.º coincide com a branch)
 //  3. O PR aponta para a branch de integração (dev). Promoções seguem dev → qua → prod.
 //  4. hotfix/* pode apontar a qualquer ambiente.
 
 const TYPES = 'feature|feat|bug|fix|hotfix|refactor|docs|test|tests|chore|ci|devops|perf';
 const BRANCH_RE = new RegExp(`^(${TYPES})/(\\d+)-[a-z0-9][a-z0-9._-]*$`);
 const CLOSE_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+((?:(?:[\w.-]+\/[\w.-]+)?#\d+(?:\s*,\s*|\s+e\s+|\s+and\s+)?)+)/gi;
+const REFERENCE_RE = /\brefs?\s*:?\s+((?:(?:[\w.-]+\/[\w.-]+)?#\d+(?:\s*,\s*|\s+e\s+|\s+and\s+)?)+)/gi;
 const MARKER = '<!-- pr-check -->';
 
-function closingRefs(body, ownRepo) {
+function refsFor(body, ownRepo, pattern) {
   const clean = (body || '').replace(/<!--[\s\S]*?-->/g, '').replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
   const nums = [];
-  for (const m of clean.matchAll(CLOSE_RE)) {
+  for (const m of clean.matchAll(pattern)) {
     for (const r of m[1].matchAll(/(?:([\w.-]+\/[\w.-]+))?#(\d+)/g)) {
       if (!r[1] || r[1].toLowerCase() === ownRepo.toLowerCase()) nums.push(Number(r[2]));
     }
   }
   return nums;
+}
+
+function closingRefs(body, ownRepo) {
+  return refsFor(body, ownRepo, CLOSE_RE);
+}
+
+function linkedRefs(body, ownRepo) {
+  return [...new Set([...closingRefs(body, ownRepo), ...refsFor(body, ownRepo, REFERENCE_RE)])];
 }
 
 /** Devolve a lista de problemas (vazia = tudo certo). */
@@ -45,11 +54,11 @@ function evaluate({ head, base, body, ownRepo, branches, isBot = false }) {
     problems.push(`Os PRs de funcionalidade/correção apontam para \`${dev}\`, não para \`${base}\`.`);
   }
 
-  const refs = closingRefs(body, ownRepo);
+  const refs = linkedRefs(body, ownRepo);
   if (refs.length === 0) {
-    problems.push('O PR tem de fechar uma issue: escreve `Closes #<n.º>` na descrição.');
+    problems.push('O PR tem de associar a issue da branch com `Closes #<n.º>` ou `Refs #<n.º>`.');
   } else if (m && !refs.includes(Number(m[2]))) {
-    problems.push(`A branch refere a issue #${m[2]}, mas o PR só fecha ${refs.map((n) => `#${n}`).join(', ')}. Acrescenta \`Closes #${m[2]}\` ou corrige o nome da branch.`);
+    problems.push(`A branch refere a issue #${m[2]}, mas o PR só associa ${refs.map((n) => `#${n}`).join(', ')}. Acrescenta \`Refs #${m[2]}\` ou \`Closes #${m[2]}\`, ou corrige o nome da branch.`);
   }
   return problems;
 }
@@ -81,3 +90,4 @@ module.exports = async ({ github, context, core }) => {
 };
 module.exports.evaluate = evaluate;
 module.exports.closingRefs = closingRefs;
+module.exports.linkedRefs = linkedRefs;
