@@ -148,6 +148,27 @@ class MeServiceTest {
     }
 
     @Test
+    void catalogAffiliationFallsBackToLinkedInstitutionWithoutEnrollment() {
+        Account account = new Account();
+        account.setId(42L);
+        account.setActive(true);
+        when(accounts.findById(42L)).thenReturn(Mono.just(account));
+        when(enrollmentCatalogQuery.findCurrentActiveByAccountId(42L)).thenReturn(Mono.empty());
+        when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
+        when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L))
+                .thenReturn(Flux.just(new InstitutionStudent(11L, 9L)));
+
+        StepVerifier.create(service.getCatalogAffiliation(42L))
+            .expectNext(new EnrollmentCatalogQuery.CatalogAffiliation(11L, null, null))
+            .verifyComplete();
+
+        verify(enrollmentCatalogQuery).findCurrentActiveByAccountId(42L);
+        verify(users).findByAccountIdAndDeletedAtIsNull(42L);
+        verify(studentLinks).findAllByUserIdAndDeletedAtIsNull(9L);
+        verifyNoInteractions(accountRoles, roles, courses, schoolYears, institutions);
+    }
+
+    @Test
     void updateMeChangesOnlyProvidedFields() {
         User user = user(9L, 42L);
         user.setFirstName("Ada");

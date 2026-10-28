@@ -6,7 +6,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Criteria;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Sort;
-import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
+import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.dto.PageResponse;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -52,9 +52,9 @@ public class StatementCatalogService {
             }
 
             boolean defaultsToOwnSchool = mine && filter.institutionId() == null;
-            Mono<Affiliation> affiliation = defaultsToOwnSchool || sort == Sort.RELEVANCE
+            Mono<EnrollmentCatalogQuery.CatalogAffiliation> affiliation = defaultsToOwnSchool || sort == Sort.RELEVANCE
                     ? affiliationOf(accountId)
-                    : Mono.just(Affiliation.NONE);
+                    : Mono.just(EnrollmentCatalogQuery.CatalogAffiliation.NONE);
 
             return affiliation.flatMap(own -> {
                 Criteria criteria = new Criteria(
@@ -73,9 +73,20 @@ public class StatementCatalogService {
                         filter.size(),
                         (long) filter.page() * filter.size());
 
-                return Mono.zip(repository.findPage(criteria).collectList(), repository.count(criteria))
-                        .flatMap(page -> withQuestionCounts(page.getT1())
-                                .map(content -> PageResponse.of(content, filter.page(), filter.size(), page.getT2())));
+                return repository.findPageWithTotal(criteria).collectList()
+                        .flatMap(rows -> {
+                            Mono<Long> total = rows.isEmpty()
+                                    ? repository.count(criteria)
+                                    : Mono.just(rows.get(0).total());
+                            return total.flatMap(totalElements -> withQuestionCounts(rows.stream()
+                                    .map(StatementCatalogRepository.PageRow::statement)
+                                    .toList())
+                                    .map(content -> PageResponse.of(
+                                            content,
+                                            filter.page(),
+                                            filter.size(),
+                                            totalElements)));
+                        });
             });
         });
     }
@@ -91,15 +102,8 @@ public class StatementCatalogService {
                         .toList());
     }
 
-        private Mono<Affiliation> affiliationOf(Long accountId) {
-        return meService.getMe(accountId).map(me -> new Affiliation(
-                me.school() != null ? me.school().id() : null,
-                me.course() != null ? me.course().id() : null,
-                idOf(me.currentClass())));
-    }
-
-    private static Long idOf(MeResponse.ClassInfo currentClass) {
-        return currentClass != null ? currentClass.id() : null;
+    private Mono<EnrollmentCatalogQuery.CatalogAffiliation> affiliationOf(Long accountId) {
+        return meService.getCatalogAffiliation(accountId);
     }
 
     private static void validatePaging(StatementCatalogFilter filter) {
@@ -144,7 +148,4 @@ public class StatementCatalogService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private record Affiliation(Long institutionId, Long courseId, Long classId) {
-        static final Affiliation NONE = new Affiliation(null, null, null);
-    }
 }

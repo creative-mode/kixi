@@ -21,6 +21,7 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
 import ao.creativemode.kixi.institutions.model.Institution;
+import ao.creativemode.kixi.institutions.model.InstitutionStudent;
 import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
@@ -119,10 +120,16 @@ public class MeService {
      * <p>This deliberately does not call {@link #getMe(Long)}: the catalog needs
      * three identifiers, not identity, roles, profile, course metadata or the
      * school-year label.</p>
+     *
+     * <p>When there is no active enrollment, the institution link used by the
+     * profile is retained as the institution-only fallback.</p>
      */
     public Mono<EnrollmentCatalogQuery.CatalogAffiliation> getCatalogAffiliation(Long accountId) {
         return Mono.defer(() -> activeAccount(accountId))
                 .then(Mono.defer(() -> enrollmentCatalogQuery.findCurrentActiveByAccountId(accountId)
+                        .switchIfEmpty(Mono.defer(() -> linkedInstitutionId(accountId)
+                                .map(institutionId -> new EnrollmentCatalogQuery.CatalogAffiliation(
+                                        institutionId, null, null))))
                         .defaultIfEmpty(EnrollmentCatalogQuery.CatalogAffiliation.NONE)));
     }
 
@@ -210,12 +217,17 @@ public class MeService {
      * enrollment to read a school from.
      */
     private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
+        return linkedInstitutionId(accountId)
+            .flatMap(institutionRepository::findByIdAndDeletedAtIsNull)
+            .map(MeService::toSchoolInfo);
+    }
+
+    private Mono<Long> linkedInstitutionId(Long accountId) {
         return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
             .singleOrEmpty()
             .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
             .next()
-            .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
-            .map(MeService::toSchoolInfo);
+            .map(InstitutionStudent::getInstitutionId);
     }
 
     private static MeResponse.SchoolInfo toSchoolInfo(Institution institution) {
