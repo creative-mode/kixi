@@ -21,8 +21,8 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
 import ao.creativemode.kixi.institutions.model.Institution;
-import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
+import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -120,12 +120,10 @@ public class MeService {
      * three identifiers, not identity, roles, profile, course metadata or the
      * school-year label.</p>
      */
-    public Mono<CatalogAffiliation> getCatalogAffiliation(Long accountId) {
+    public Mono<EnrollmentCatalogQuery.CatalogAffiliation> getCatalogAffiliation(Long accountId) {
         return Mono.defer(() -> activeAccount(accountId))
                 .then(Mono.defer(() -> enrollmentCatalogQuery.findCurrentActiveByAccountId(accountId)
-                        .map(affiliation -> new CatalogAffiliation(
-                                affiliation.institutionId(), affiliation.courseId(), affiliation.classId()))
-                        .defaultIfEmpty(CatalogAffiliation.NONE)));
+                        .defaultIfEmpty(EnrollmentCatalogQuery.CatalogAffiliation.NONE)));
     }
 
     private Mono<Account> activeAccount(Long accountId) {
@@ -240,7 +238,4 @@ public class MeService {
         ao.creativemode.kixi.academic.model.Class clazz
     ) { }
 
-    public record CatalogAffiliation(Long institutionId, Long courseId, Long classId) {
-        private static final CatalogAffiliation NONE = new CatalogAffiliation(null, null, null);
-    }
 }

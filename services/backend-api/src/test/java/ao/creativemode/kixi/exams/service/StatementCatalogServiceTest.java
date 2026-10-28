@@ -13,6 +13,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Criteria;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Sort;
+import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.util.List;
@@ -100,7 +101,7 @@ class StatementCatalogServiceTest {
     @Test
     void anAccountWithNoAffiliationSeesEverySchool() {
         when(meService.getCatalogAffiliation(STUDENT))
-                .thenReturn(Mono.just(new MeService.CatalogAffiliation(null, null, null)));
+                .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(null, null, null)));
 
         StepVerifier.create(service.catalog(filter(null, null, null, 0, 20), STUDENT))
                 .expectNextCount(1)
@@ -206,7 +207,7 @@ class StatementCatalogServiceTest {
 
     private void givenTheStudentIsEnrolled() {
         when(meService.getCatalogAffiliation(STUDENT))
-                .thenReturn(Mono.just(new MeService.CatalogAffiliation(ITEL, COURSE, CLASS)));
+                .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(ITEL, COURSE, CLASS)));
     }
 
     private Criteria capturedCriteria() {
