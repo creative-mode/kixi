@@ -169,7 +169,7 @@ public class MeService {
 
     /** Most recent live enrollment and its class, shared by all /me projections. */
     private Mono<EnrollmentSeat> currentEnrollmentSeat(Long accountId) {
-        return enrollmentRepository.findLatestByAccountIdAndDeletedAtIsNull(accountId)
+        return enrollmentRepository.findLatestActiveByAccountId(accountId)
             .flatMap(enrollment -> classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId())
                 .map(clazz -> new EnrollmentSeat(enrollment, clazz)));
     }

@@ -12,7 +12,7 @@ public interface EnrollmentRepository extends ReactiveCrudRepository<Enrollment,
 
     @Query("SELECT * FROM enrollments WHERE account_id = :accountId "
             + "AND deleted_at IS NULL AND status = 'ACTIVE' ORDER BY id DESC LIMIT 1")
-    Mono<Enrollment> findLatestByAccountIdAndDeletedAtIsNull(Long accountId);
+    Mono<Enrollment> findLatestActiveByAccountId(Long accountId);
 
     /** Every live enrollment, for the administrator's listing (#146). */
     Flux<Enrollment> findAllByDeletedAtIsNullOrderByIdAsc();

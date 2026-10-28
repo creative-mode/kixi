@@ -88,14 +88,14 @@ class MeServiceTest {
                     && me.currentClass().schoolYear().equals("2024/2025"))
             .verifyComplete();
 
-        verify(enrollments, times(1)).findLatestByAccountIdAndDeletedAtIsNull(42L);
+        verify(enrollments, times(1)).findLatestActiveByAccountId(42L);
         verify(classes, times(1)).findByIdAndDeletedAtIsNull(7L);
     }
 
     @Test
     void getMeWithoutEnrollmentLeavesAcademicContextNull() {
         stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", null, "STUDENT");
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Mono.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
         when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
 
@@ -156,7 +156,7 @@ class MeServiceTest {
         when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user));
         when(users.save(any(User.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", "new.png", "STUDENT");
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Mono.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.updateMe(42L, new MeUpdateRequest(null, null, "new.png")))
@@ -187,7 +187,7 @@ class MeServiceTest {
             return Mono.just(saved);
         });
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(10L)).thenReturn(Flux.empty());
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Mono.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.updateMe(42L, new MeUpdateRequest("Ada", "Lovelace", null)))
             .expectNextMatches(me -> me.firstName().equals("Ada") && me.lastName().equals("Lovelace"))
@@ -250,7 +250,7 @@ class MeServiceTest {
 
         Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Mono.just(enrollment));
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
         when(clazz.getId()).thenReturn(7L);
@@ -300,7 +300,7 @@ class MeServiceTest {
 
         Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Mono.just(enrollment));
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
         when(clazz.getCourseId()).thenReturn(3L);
@@ -334,7 +334,7 @@ class MeServiceTest {
     private void stubAcademicContext(Long accountId) {
         Enrollment enrollment = new Enrollment(accountId, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findLatestByAccountIdAndDeletedAtIsNull(accountId))
+        when(enrollments.findLatestActiveByAccountId(accountId))
             .thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
