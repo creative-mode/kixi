@@ -43,5 +43,7 @@ public class EnrollmentCatalogQuery {
                 .one();
     }
 
-    public record CatalogAffiliation(Long institutionId, Long courseId, Long classId) { }
+    public record CatalogAffiliation(Long institutionId, Long courseId, Long classId) {
+        public static final CatalogAffiliation NONE = new CatalogAffiliation(null, null, null);
+    }
 }

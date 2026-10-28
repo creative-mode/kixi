@@ -30,8 +30,8 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
 import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.model.InstitutionStudent;
-import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
+import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -125,7 +125,7 @@ class MeServiceTest {
                 .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(11L, 3L, 7L)));
 
         StepVerifier.create(service.getCatalogAffiliation(42L))
-            .expectNext(new MeService.CatalogAffiliation(11L, 3L, 7L))
+            .expectNext(new EnrollmentCatalogQuery.CatalogAffiliation(11L, 3L, 7L))
             .verifyComplete();
 
         verify(enrollmentCatalogQuery).findCurrentActiveByAccountId(42L);
