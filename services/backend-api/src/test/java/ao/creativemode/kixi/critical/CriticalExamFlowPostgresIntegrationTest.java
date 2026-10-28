@@ -43,6 +43,8 @@ class CriticalExamFlowPostgresIntegrationTest {
 
     private static final long TEACHER = 122001L;
     private static final long STUDENT = 122002L;
+    /** Professor real sem acesso à sala do teste: tem de existir na base para o filtro de sessão o autenticar (kixi#450). */
+    private static final long OTHER_TEACHER = 122003L;
     private static final long STATEMENT = 122001L;
     private static final long QUESTION = 122001L;
     private static final long WRONG_OPTION = 122001L;
@@ -100,12 +102,16 @@ class CriticalExamFlowPostgresIntegrationTest {
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
-        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ")");
 
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
                 + "(" + TEACHER + ", 'it-teacher-122', 'it-teacher-122@example.com', 'x', true),"
-                + "(" + STUDENT + ", 'it-student-122', 'it-student-122@example.com', 'x', true)");
+                + "(" + STUDENT + ", 'it-student-122', 'it-student-122@example.com', 'x', true),"
+                // Um professor real sem acesso àquela sala: desde kixi#450 um token de uma conta que não existe já nem autentica (401).
+                + "(" + OTHER_TEACHER + ", 'it-teacher-other-122', 'it-teacher-other-122@example.com', 'x', true)");
+        sql("INSERT INTO account_roles (account_id, role_id) "
+                + "SELECT " + OTHER_TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO account_roles (account_id, role_id) "
                 + "SELECT " + TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO account_roles (account_id, role_id) "
@@ -252,7 +258,7 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .jsonPath("$.participants[0].events.length()").isEqualTo(2)
                 .jsonPath("$.participants[0].events[1].questionId").isEqualTo(QUESTION);
 
-        String otherTeacherToken = jwtService.generateToken(999L, List.of("TEACHER"));
+        String otherTeacherToken = jwtService.generateToken(OTHER_TEACHER, List.of("TEACHER"));
         bearer(otherTeacherToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
                 .exchange().expectStatus().isForbidden();
         bearer(studentToken).get().uri("/api/v1/exam-rooms/" + room + "/integrity")
