@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 /**
  * The catalog SQL is built from the filters that are present, so what matters is that
  * an absent filter adds nothing, a present one is bound and never concatenated, and the
- * order and page window stay out of the count.
+ * the total is computed by the same page query.
  */
 class StatementCatalogRepositoryTest {
 
@@ -25,6 +25,7 @@ class StatementCatalogRepositoryTest {
                 .contains("LIMIT :limit OFFSET :offset")
                 .doesNotContain("CASE");
         assertThat(sql.binds()).containsOnlyKeys("limit", "offset");
+        assertThat(sql.select()).contains("COUNT(*) OVER() AS total");
         assertThat(sql.count()).startsWith("SELECT COUNT(*)").doesNotContain("ORDER BY").doesNotContain("LIMIT");
         assertThat(sql.countBinds()).isEmpty();
     }
@@ -48,7 +49,7 @@ class StatementCatalogRepositoryTest {
                 .contains("(s.title ILIKE :query OR s.exam_type ILIKE :query)")
                 .doesNotContain("matemática")
                 .doesNotContain("Exame Final");
-        assertThat(sql.countBinds())
+        assertThat(sql.binds())
                 .containsEntry("institutionId", 4L)
                 .containsEntry("courseId", 40L)
                 .containsEntry("classId", 3L)
@@ -70,7 +71,8 @@ class StatementCatalogRepositoryTest {
                         + "WHEN COALESCE(s.course_id, cl.course_id) = :affinityCourseId THEN 1 "
                         + "ELSE 2 END, s.created_at DESC, s.id DESC");
         assertThat(sql.binds()).containsEntry("affinityClassId", 3L).containsEntry("affinityCourseId", 40L);
-        // Affinity only orders: it is neither a filter nor part of the count.
+        // Affinity only orders; it is not a filter.
+        assertThat(sql.select()).contains("affinity");
         assertThat(sql.count()).doesNotContain("affinity");
         assertThat(sql.countBinds()).doesNotContainKeys("affinityClassId", "affinityCourseId");
     }

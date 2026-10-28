@@ -7,6 +7,8 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Full statement response including its questions and options. Shared by
@@ -69,13 +71,15 @@ public record StatementOcrResponse(
         Statement s = result.statement();
         List<Question> questions = result.questions();
         List<QuestionOption> allOptions = result.options();
+        Map<Long, List<QuestionOption>> optionsByQuestion = allOptions.stream()
+            .collect(Collectors.groupingBy(QuestionOption::getQuestionId));
 
         List<QuestionResponse> questionResponses = questions
             .stream()
             .map(q -> {
-                List<OptionResponse> options = allOptions
+                List<OptionResponse> options = optionsByQuestion
+                    .getOrDefault(q.getId(), List.of())
                     .stream()
-                    .filter(opt -> opt.getQuestionId().equals(q.getId()))
                     .map(opt -> OptionResponse.from(opt, staff))
                     .toList();
                 return QuestionResponse.from(q, options, staff);
