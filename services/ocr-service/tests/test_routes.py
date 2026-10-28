@@ -304,6 +304,7 @@ class TestExtractEndpoint:
         engine = MagicMock()
         engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
         engine_override(engine)
+        original_processing_time_ms = mock_ocr_result.processing_time_ms
 
         def render_page(_content, **_kwargs):
             time.sleep(0.02)
@@ -316,7 +317,7 @@ class TestExtractEndpoint:
         )
 
         assert response.status_code == 200
-        assert response.json()["processingTimeMs"] < mock_ocr_result.processing_time_ms
+        assert response.json()["processingTimeMs"] < original_processing_time_ms
 
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch
@@ -591,6 +592,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)
@@ -626,6 +628,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)
@@ -645,6 +648,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)
