@@ -83,7 +83,7 @@ public class StatementService {
         return statementRepository
             .findByIdAndDeletedAtIsNull(id)
             .switchIfEmpty(
-                Mono.error(ApiException.notFound("Statement not found: " + id))
+                Mono.error(() -> ApiException.notFound("Statement not found: " + id))
             );
     }
 
@@ -94,7 +94,7 @@ public class StatementService {
         return statementRepository
             .findByIdAndVisibleTrueAndDeletedAtIsNull(id)
             .switchIfEmpty(
-                Mono.error(ApiException.notFound("Statement not found: " + id))
+                Mono.error(() -> ApiException.notFound("Statement not found: " + id))
             );
     }
 

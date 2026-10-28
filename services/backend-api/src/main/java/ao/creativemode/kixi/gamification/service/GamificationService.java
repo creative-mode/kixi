@@ -74,9 +74,9 @@ public class GamificationService {
     }
 
     public Mono<UserStatsResponse> getStats(Long accountId) {
-        return stats.ensureStats(accountId)
-            .then(stats.findByAccountId(accountId))
-            .map(GamificationService::toResponse);
+        return stats.findByAccountId(accountId)
+            .map(GamificationService::toResponse)
+            .defaultIfEmpty(new UserStatsResponse(accountId, 0L, 1, 0, 0, 1, null));
     }
 
     public Flux<UserBadgeResponse> getBadges(Long accountId) {
