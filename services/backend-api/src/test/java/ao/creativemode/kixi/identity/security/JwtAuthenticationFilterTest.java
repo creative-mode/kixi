@@ -37,7 +37,14 @@ class JwtAuthenticationFilterTest {
 
     /** Corre o filtro com um token e devolve a autenticação que a cadeia viu, ou null. */
     private Authentication correr(JwtAuthenticationFilter filtro, String token) {
-        MockServerHttpRequest.BaseBuilder<?> pedido = MockServerHttpRequest.get("/api/v1/x");
+        return correr(filtro, token, org.springframework.http.HttpMethod.GET, "/api/v1/x").auth();
+    }
+
+    private record Resultado(Authentication auth, org.springframework.http.HttpStatusCode estado) {}
+
+    private Resultado correr(JwtAuthenticationFilter filtro, String token,
+            org.springframework.http.HttpMethod metodo, String caminho) {
+        MockServerHttpRequest.BaseBuilder<?> pedido = MockServerHttpRequest.method(metodo, caminho);
         if (token != null) pedido.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
         MockServerWebExchange exchange = MockServerWebExchange.from(pedido);
         AtomicReference<Authentication> vista = new AtomicReference<>();
@@ -45,7 +52,7 @@ class JwtAuthenticationFilterTest {
                 .doOnNext(ctx -> vista.set(ctx.getAuthentication()))
                 .then();
         filtro.filter(exchange, cadeia).block();
-        return vista.get();
+        return new Resultado(vista.get(), exchange.getResponse().getStatusCode());
     }
 
     private static AccountSessionGate.Verdict veredicto(Kind tipo, String... papeis) {
@@ -130,5 +137,27 @@ class JwtAuthenticationFilterTest {
         assertThat(correr(filtro, null)).isNull();
         assertThat(correr(filtro, "isto.nao.e-um-jwt")).isNull();
         assertThat(correr(filtro, tokenDe("STUDENT") + "x")).isNull(); // assinatura adulterada
+    }
+
+    @Test
+    void aContaDeIntegracaoPassaNoQueOEscopoListaEFicaSoComEssePapel() {
+        when(gate.verdict(7L)).thenReturn(Mono.just(veredicto(Kind.VALID, "INTEGRATION", "ADMIN")));
+
+        Resultado r = correr(new JwtAuthenticationFilter(jwt, provider), tokenDe("INTEGRATION", "ADMIN"),
+                org.springframework.http.HttpMethod.PATCH, "/api/v1/simulation-answers/12/grade");
+
+        assertThat(r.auth()).isNotNull();
+        assertThat(r.auth().getAuthorities()).extracting(Object::toString).containsExactly("ROLE_INTEGRATION");
+    }
+
+    @Test
+    void aContaDeIntegracaoRecebe403NoQueNaoEstaNoEscopoMesmoSendoAdmin() {
+        when(gate.verdict(7L)).thenReturn(Mono.just(veredicto(Kind.VALID, "INTEGRATION", "ADMIN")));
+
+        Resultado r = correr(new JwtAuthenticationFilter(jwt, provider), tokenDe("INTEGRATION", "ADMIN"),
+                org.springframework.http.HttpMethod.GET, "/api/v1/accounts");
+
+        assertThat(r.estado()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        assertThat(r.auth()).isNull();
     }
 }

@@ -45,6 +45,7 @@ class CriticalExamFlowPostgresIntegrationTest {
     private static final long STUDENT = 122002L;
     /** Professor real sem acesso à sala do teste: tem de existir na base para o filtro de sessão o autenticar (kixi#450). */
     private static final long OTHER_TEACHER = 122003L;
+    private static final long ENGINE = 122004L;
     private static final long STATEMENT = 122001L;
     private static final long QUESTION = 122001L;
     private static final long WRONG_OPTION = 122001L;
@@ -102,14 +103,18 @@ class CriticalExamFlowPostgresIntegrationTest {
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
-        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ", " + ENGINE + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ", " + OTHER_TEACHER + ", " + ENGINE + ")");
 
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
                 + "(" + TEACHER + ", 'it-teacher-122', 'it-teacher-122@example.com', 'x', true),"
                 + "(" + STUDENT + ", 'it-student-122', 'it-student-122@example.com', 'x', true),"
                 // Um professor real sem acesso àquela sala: desde kixi#450 um token de uma conta que não existe já nem autentica (401).
                 + "(" + OTHER_TEACHER + ", 'it-teacher-other-122', 'it-teacher-other-122@example.com', 'x', true)");
+        sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
+                + "(" + ENGINE + ", 'it-engine-122', 'it-engine-122@example.com', 'x', true)");
+        sql("INSERT INTO account_roles (account_id, role_id) "
+                + "SELECT " + ENGINE + ", id FROM roles WHERE name = 'INTEGRATION'");
         sql("INSERT INTO account_roles (account_id, role_id) "
                 + "SELECT " + OTHER_TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO account_roles (account_id, role_id) "
@@ -302,6 +307,29 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .expectHeader().valueEquals("X-Total-Count", "0")
                 .expectBody()
                 .jsonPath("$.length()").isEqualTo(0);
+    }
+
+    @Test
+    void theIntegrationAccountReadsAnyStudentsSimulationButIsRefusedEverythingElse() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated();
+        String engine = jwtService.generateToken(ENGINE, List.of("INTEGRATION"));
+
+        bearer(engine).get().uri("/api/v1/simulations?statementId=" + STATEMENT).exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(1);
+        bearer(engine).get().uri("/api/v1/accounts").exchange().expectStatus().isForbidden();
+        bearer(engine).get().uri("/api/v1/simulations/trash").exchange().expectStatus().isForbidden();
+        bearer(engine).delete().uri("/api/v1/simulations/1").exchange().expectStatus().isForbidden();
+        // Um token que diga ADMIN sem a conta o ter na base também não vale: a conta só tem INTEGRATION.
+        String escalated = jwtService.generateToken(ENGINE, List.of("INTEGRATION", "ADMIN"));
+        bearer(escalated).get().uri("/api/v1/accounts").exchange().expectStatus().isForbidden();
     }
 
     @Test

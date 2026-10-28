@@ -22,6 +22,18 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 | Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido |
 | Rota sem regra explícita | Negado | Negado | Negado | Negado |
 
+## Papel `INTEGRATION` (serviços)
+
+Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria.
+
+| Pode | Caminhos |
+|---|---|
+| Ler | `GET` simulações (lista, uma, resultado), respostas, enunciado completo e questões, anos letivos (por id), disciplinas, salas próprias e as suas notas, alunos de uma turma (analytics) |
+| Escrever | `PATCH` da pontuação de uma resposta; criar, atualizar e submeter simulações e respostas; fechar uma sala |
+| Não pode | contas, instituições, apagar ou purgar, lixeiras, editar enunciados, o resto da API e `/actuator` |
+
+A autenticação continua a ser por login com palavra-passe (o JWT expira); trocar por um token de serviço próprio fica fora deste âmbito.
+
 ## Casos cobertos pelos testes
 
 `AuthorizationIntegrationTest` cobre pedidos anónimos, STUDENT, TEACHER e ADMIN em rotas de leitura e escrita, incluindo leitura de simulações e respostas do próprio aluno, bloqueio de operações administrativas, acesso a salas de prova e uploads OCR. O teste `deniesUnmappedRoutesToEveryAuthenticatedRole` garante que uma rota nova sem regra explícita não fica acessível por herança ao papel autenticado.
