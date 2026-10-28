@@ -10,14 +10,28 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 import io
+import time
 import fitz
+import numpy as np
 from PIL import Image
 
 from app.main import app
 from app.config import settings
 from app.api.routes import get_ocr_engine as route_get_ocr_engine, resolve_file_type
-from app.ocr.engine import OCRResult, DocumentInfo
+from app.ocr.engine import OCRProcessWorker, OCRResult, DocumentInfo
 from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType, UnmappedContent
+
+
+def _page_input_error_worker(connection):
+    connection.send({"type": "ready"})
+    command = connection.recv()
+    assert command["type"] == "progress"
+    while True:
+        message = connection.recv()
+        if message["type"] == "feed_error":
+            connection.send({"type": "input_error", "error_type": "OCRPageInputError"})
+            return
+        assert message["type"] == "page"
 
 
 # =============================================================================
@@ -198,6 +212,112 @@ class TestExtractEndpoint:
         )
 
         assert response.status_code in [200, 207]
+
+    def test_multi_page_pdf_is_rasterized_one_page_at_a_time(
+        self, client, engine_override, mock_ocr_result, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        rasterized = []
+        engine = MagicMock()
+        engine.process_image_async = AsyncMock()
+
+        def render_page(_content, *, first_page, last_page, **_kwargs):
+            time.sleep(0.01)
+            rasterized.append((first_page, last_page))
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        async def process_pages(page_iterator, *, source_file_indices, page_count, **_kwargs):
+            assert page_count == 2
+            assert iter(page_iterator) is page_iterator
+            seen_shapes = []
+            for index, page in enumerate(page_iterator):
+                seen_shapes.append(page.shape)
+                assert source_file_indices[index] == 0
+            assert seen_shapes == [(20, 30, 3), (20, 30, 3)]
+            result = replace(
+                mock_ocr_result,
+                document=DocumentInfo(page_count=2, main_language="pt", has_tables=False),
+            )
+            yield {"type": "result", "result": result}
+
+        engine.process_images_progress_async = process_pages
+        engine_override(engine)
+        monkeypatch.setattr("app.api.routes.extract_images_from_pdf", render_page)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("exam.pdf", content, "application/pdf"))],
+        )
+
+        assert response.status_code == 200
+        assert rasterized == [(1, 1), (2, 2)]
+        assert response.json()["document"]["pageCount"] == 2
+        assert response.json()["processingTimeMs"] < mock_ocr_result.processing_time_ms
+        engine.process_image_async.assert_not_awaited()
+
+    def test_multi_page_pdf_rasterization_failure_remains_a_bad_request(
+        self, client, engine_override, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        rendered_pages = []
+        engine = OCRProcessWorker(process_target=_page_input_error_worker)
+        engine_override(engine)
+
+        def render_page(_content, *, first_page, **_kwargs):
+            rendered_pages.append(first_page)
+            if first_page == 2:
+                raise RuntimeError("synthetic page render failure")
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        monkeypatch.setattr(
+            "app.api.routes.extract_images_from_pdf",
+            render_page,
+        )
+
+        try:
+            response = client.post(
+                "/ocr/v1/extract",
+                files=[("images", ("exam.pdf", content, "application/pdf"))],
+            )
+        finally:
+            engine.shutdown()
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Failed to process uploaded file"
+        assert rendered_pages == [1, 2]
+
+    def test_single_page_pdf_processing_time_uses_engine_measurement(
+        self, client, engine_override, mock_ocr_result, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        engine = MagicMock()
+        engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
+        engine_override(engine)
+        original_processing_time_ms = mock_ocr_result.processing_time_ms
+
+        def render_page(_content, **_kwargs):
+            time.sleep(0.02)
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        monkeypatch.setattr("app.api.routes.extract_images_from_pdf", render_page)
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("exam.pdf", content, "application/pdf"))],
+        )
+
+        assert response.status_code == 200
+        assert response.json()["processingTimeMs"] == original_processing_time_ms
 
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch
@@ -472,6 +592,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)
@@ -507,6 +628,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)
@@ -526,6 +648,7 @@ class TestFileValidation:
         mock_engine = MagicMock()
         mock_engine.process_image_async = AsyncMock(return_value=MagicMock(
             status="success",
+            processing_time_ms=0,
             to_dict=lambda: {"status": "success", "requestId": "test"}
         ))
         engine_override(mock_engine)

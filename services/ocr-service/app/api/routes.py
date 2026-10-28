@@ -19,6 +19,7 @@ from app.config import settings
 from app.ocr import (
     get_engine,
     OCRProcessWorker,
+    OCRPageInputError,
     OCRResult,
     load_image_from_bytes,
 )
@@ -293,10 +294,11 @@ async def extract_text(
                 error_type=type(e).__name__,
             )
 
-    # Process images
-    all_images = []
-    native_text_pages = []
+    # Keep compressed uploads, but decode only the current page. A PDF's rendered
+    # rasters are much larger than its upload and should not all remain resident.
+    prepared_files = []
     source_file_indices = []
+    page_count = 0
     total_upload_bytes = 0
     total_rendered_pixels = 0
 
@@ -319,41 +321,31 @@ async def extract_text(
             # Handle PDF files
             if file_type == 'pdf':
                 remaining_pixels = settings.max_ocr_pixels_per_request - total_rendered_pixels
-                validate_pdf(
+                file_rendered_pixels = validate_pdf(
                     content,
                     max_pages=settings.max_pdf_pages,
                     max_total_pixels=remaining_pixels,
                 )
-                pdf_images = extract_images_from_pdf(
-                    content,
-                    dpi=settings.target_dpi,
-                    max_total_pixels=remaining_pixels,
-                )
-                if len(all_images) + len(pdf_images) > settings.max_ocr_pages_per_request:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Maximum "
-                            f"{settings.max_ocr_pages_per_request} pages allowed per request"
-                        ),
-                    )
-                all_images.extend(pdf_images)
-                total_rendered_pixels += sum(
-                    int(image.shape[0]) * int(image.shape[1]) for image in pdf_images
-                )
-                source_file_indices.extend([source_file_index] * len(pdf_images))
-                logger.debug(
-                    "Extracted images from PDF",
-                    request_id=request_id,
-                    num_pages=len(pdf_images),
-                )
+                file_page_count = int(get_pdf_info(content).get("page_count") or 0)
+                if file_page_count < 1:
+                    raise ValueError("Invalid PDF page count")
             else:
-                # Load regular image
-                remaining_pixels = settings.max_ocr_pixels_per_request - total_rendered_pixels
-                image = load_image_from_bytes(content, max_pixels=remaining_pixels)
-                total_rendered_pixels += int(image.shape[0]) * int(image.shape[1])
-                all_images.append(image)
-                source_file_indices.append(source_file_index)
+                file_page_count = 1
+                file_rendered_pixels = image_pixel_count(content)
+                if file_rendered_pixels > settings.max_ocr_pixels_per_request - total_rendered_pixels:
+                    raise ValueError("Request exceeds the maximum total rendered pixel count")
+
+            if page_count + file_page_count > settings.max_ocr_pages_per_request:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Maximum "
+                        f"{settings.max_ocr_pages_per_request} pages allowed per request"
+                    ),
+                )
+            page_count += file_page_count
+            total_rendered_pixels += file_rendered_pixels
+            prepared_files.append((source_file_index, file_type, content, file_page_count))
 
         except HTTPException:
             raise
@@ -370,24 +362,70 @@ async def extract_text(
                 detail="Failed to process uploaded file"
             )
 
-    if not all_images:
+    if page_count == 0:
         raise HTTPException(status_code=400, detail="No valid images could be extracted")
+
+    rasterization_ms = 0.0
+
+    def rasterized_pages():
+        nonlocal rasterization_ms
+        rasterized_pixels = 0
+        for source_file_index, file_type, content, file_page_count in prepared_files:
+            for local_page in range(1, file_page_count + 1):
+                remaining_pixels = settings.max_ocr_pixels_per_request - rasterized_pixels
+                raster_started = time.perf_counter()
+                try:
+                    if file_type == "pdf":
+                        pages = extract_images_from_pdf(
+                            content,
+                            dpi=settings.target_dpi,
+                            first_page=local_page,
+                            last_page=local_page,
+                            max_total_pixels=remaining_pixels,
+                        )
+                        if len(pages) != 1:
+                            raise ValueError("PDF page rendering returned an unexpected page count")
+                        image = pages[0]
+                    else:
+                        image = load_image_from_bytes(content, max_pixels=remaining_pixels)
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail="Failed to process uploaded file") from exc
+
+                rasterization_ms += (time.perf_counter() - raster_started) * 1000
+                rasterized_pixels += int(image.shape[0]) * int(image.shape[1])
+                source_file_indices.append(source_file_index)
+                yield image
 
     # Run OCR
     try:
-        if len(all_images) == 1:
+        if page_count == 1:
+            image = next(rasterized_pages())
             result = await engine.process_image_async(
-                all_images[0],
+                image,
                 page_index=0,
                 request_id=request_id,
                 source_file_index=source_file_indices[0],
             )
         else:
-            result = await engine.process_images_async(
-                all_images,
+            result = None
+            async for update in engine.process_images_progress_async(
+                rasterized_pages(),
                 request_id=request_id,
                 source_file_indices=source_file_indices,
-            )
+                page_count=page_count,
+            ):
+                if update.get("type") == "result":
+                    result = update["result"]
+            if result is None:
+                raise RuntimeError("OCR processing returned no result")
+
+        if page_count > 1:
+            result.processing_time_ms = max(0, result.processing_time_ms - int(rasterization_ms))
+            if result.timings and "totalMs" in result.timings:
+                result.timings = {
+                    **result.timings,
+                    "totalMs": round(max(0.0, result.timings["totalMs"] - rasterization_ms), 1),
+                }
 
         processing_time = int((time.time() - start_time) * 1000)
 
@@ -405,6 +443,13 @@ async def extract_text(
             status_code=_status_code_for_result(result.status),
         )
 
+    except OCRPageInputError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to process uploaded file",
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "OCR processing failed",

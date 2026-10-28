@@ -403,7 +403,8 @@ This service is part of the Kixi platform and is licensed under Apache License 2
 |---|---|---|
 | `OCR_PIPELINE` | `ppocr` | `vl` = PaddleOCR-VL, GPU only |
 | `OCR_DET_MODEL_NAME` / `OCR_REC_MODEL_NAME` | `PP-OCRv5_mobile_det` / `latin_PP-OCRv5_mobile_rec` | PP-OCRv4 has no `pt` model in PaddleOCR 3.x (it answered every request with 500) |
-| `OCR_FALLBACK_DET_MODEL_NAME` | `PP-OCRv5_server_det` | pages that give fewer than `OCR_MIN_QUESTIONS` (2) questions are read again with the thorough detector (25 to 40 s) |
+| `OCR_FALLBACK_DET_MODEL_NAME` | `PP-OCRv5_mobile_det` | pages that give fewer than `OCR_MIN_QUESTIONS` (2) questions are read again at higher detector resolution; reusing the primary model avoids a second resident detector. Set a different model name to opt into a separate fallback model. |
+| `OCR_FALLBACK_DET_MAX_SIDE_LEN` | `1920` | maximum image side passed to the reused primary detector during fallback inference. |
 | `OCR_ENABLE_MKLDNN` | `true` | needs `paddlepaddle==3.2.2`; 3.3.1 dies with `ConvertPirAttribute2RuntimeAttribute not support` and the read goes from ~10 s to 30 to 140 s |
 | `OCR_LAYOUT_*` | on, `PP-DocLayout_plus-L` | figure/table regions; a layout failure only costs the figures, never the text |
 | `OCR_FORMULA_IMAGES` | `false` | the layout model takes the cotação line and handwriting for a formula |

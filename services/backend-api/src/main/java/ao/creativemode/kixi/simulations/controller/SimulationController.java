@@ -11,6 +11,7 @@ import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultRes
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
+import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -38,13 +39,29 @@ public class SimulationController {
         this.submissionService = submissionService;
     }
 
+    /**
+     * Optional filters ({@code statementId}, {@code status}) and paging ({@code page} from 0, {@code size} up
+     * to 200). Without {@code size} the whole list is returned, as before; {@code X-Total-Count} carries how
+     * many match for the caller.
+     */
     @GetMapping
-    public Mono<ResponseEntity<List<SimulationResponse>>> findAll() {
-        return authorizedContext().flatMapMany(context -> context.admin() || context.teacher()
-                ? service.findAllAuthorized(context.accountId(), context.admin(), context.teacher())
-                : service.findAllActiveForAccount(context.accountId()))
-                .collectList()
-                .map(ResponseEntity::ok);
+    public Mono<ResponseEntity<List<SimulationResponse>>> findAll(
+            @RequestParam(required = false) Long statementId,
+            @RequestParam(required = false) SimulationStatus status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+        return authorizedContext().flatMap(context -> context.admin() || context.teacher()
+                ? service.findAllAuthorized(context.accountId(), context.admin(), context.teacher(),
+                        statementId, status, page, size)
+                : service.findAllActiveForAccount(context.accountId())
+                        .filter(item -> (statementId == null || (item.statement() != null
+                                && statementId.equals(item.statement().id())))
+                                && (status == null || status == item.status()))
+                        .collectList()
+                        .map(items -> new SimulationService.SimulationPage(items.size(), items)))
+                .map(result -> ResponseEntity.ok()
+                        .header("X-Total-Count", String.valueOf(result.total()))
+                        .body(result.items()));
     }
 
     @GetMapping("/trash")
