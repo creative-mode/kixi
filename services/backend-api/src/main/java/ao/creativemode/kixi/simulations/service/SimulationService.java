@@ -98,7 +98,7 @@ public class SimulationService {
         Mono<Simulation> lookup = includeDeleted ? repository.findById(id)
                 : repository.findByIdAndDeletedAtIsNull(id);
         return lookup
-                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation not found: " + id)))
                 .flatMap(simulation -> {
                     if (admin)
                         return Mono.just(simulation);
@@ -172,11 +172,11 @@ public class SimulationService {
     private Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin,
             boolean authorizeStatement, boolean rejectAnyNonClosedRoom, boolean requireVisibleStatement) {
         return accountRepository.findById(dto.accountId())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Account not found")))
                 .then((requireVisibleStatement
                         ? statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(dto.statementId())
                         : statementLookup(dto.statementId()))
-                        .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+                        .switchIfEmpty(Mono.error(() -> ApiException.notFound("Statement not found")))
                         .flatMap(statement -> !authorizeStatement
                                 ? Mono.just(statement)
                                 : statementWriteAccess == null
@@ -204,7 +204,7 @@ public class SimulationService {
                         .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
-                                .switchIfEmpty(Mono.error(ApiException.notFound("SchoolYear not found")))
+                                .switchIfEmpty(Mono.error(() -> ApiException.notFound("SchoolYear not found")))
                                 .then(Mono.just(true));
                     }
                     return Mono.just(true);

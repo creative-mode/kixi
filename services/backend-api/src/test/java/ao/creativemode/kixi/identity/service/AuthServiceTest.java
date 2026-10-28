@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -216,10 +217,6 @@ class AuthServiceTest {
         when(accountRepository.findByEmailAndDeletedAtIsNull("existing@kixi.ao")).thenReturn(Mono.just(existing));
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
         when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
-        // findOrCreateAccountFromGoogle() builds its .switchIfEmpty(createAccountAndUserFromGoogle(...))
-        // argument eagerly, which calls roleRepository.findByNameAndDeletedAtIsNull(...) immediately,
-        // even though this branch is never subscribed once the email lookup above succeeds.
-        when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
@@ -227,6 +224,8 @@ class AuthServiceTest {
 
         assertThat(existing.getGoogleSub()).isEqualTo("google-sub");
         verify(accountRepository, never()).save(org.mockito.ArgumentMatchers.argThat(a -> !a.getId().equals(1L)));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+        verify(passwordEncoder, never()).encode(anyString());
     }
 
     @Test

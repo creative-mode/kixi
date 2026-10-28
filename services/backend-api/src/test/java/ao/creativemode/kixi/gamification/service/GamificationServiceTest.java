@@ -41,6 +41,7 @@ class GamificationServiceTest {
                 Clock.fixed(Instant.parse("2026-10-11T12:00:00Z"), ZoneId.of("UTC")));
         userStats = stats(7L, 0L, 1, 0, 1, null);
         when(repository.ensureStats(7L)).thenReturn(Mono.just(1));
+        when(repository.findByAccountId(7L)).thenReturn(Mono.just(userStats));
         when(repository.lockByAccountId(7L)).thenReturn(Mono.just(userStats));
         when(repository.findSimulationAward(10L)).thenReturn(Mono.empty());
         when(repository.saveSimulationAward(eq(10L), eq(7L), nullable(Long.class), any(), any(), any()))
@@ -98,6 +99,18 @@ class GamificationServiceTest {
         assertThat(userStats.getLastActivityDate()).isEqualTo(LocalDate.parse("2026-10-10"));
         verify(repository, never()).unlockBadge(7L, "FIRST_SIMULATION", null,
                 LocalDateTime.parse("2026-10-11T12:00:00"));
+    }
+
+    @Test
+    void statsReadDoesNotWriteAndUsesDefaultsBeforeFirstSimulation() {
+        when(repository.findByAccountId(7L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.getStats(7L))
+                .expectNext(new ao.creativemode.kixi.gamification.dto.UserStatsResponse(
+                        7L, 0L, 1, 0, 0, 1, null))
+                .verifyComplete();
+
+        verify(repository, never()).ensureStats(7L);
     }
 
     private static UserStats stats(Long accountId, Long xp, Integer level, Integer streak,
