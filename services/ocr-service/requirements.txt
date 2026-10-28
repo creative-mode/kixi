@@ -23,7 +23,7 @@ PyMuPDF==1.28.2
 
 # Configuration and validation
 pydantic==2.14.1
-pydantic-settings==2.14.2
+pydantic-settings==2.16.1
 python-dotenv==1.2.4
 
 # Logging and monitoring
