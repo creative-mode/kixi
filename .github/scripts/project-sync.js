@@ -10,7 +10,7 @@
 // Precisa do secret PROJECT_TOKEN (PAT com permissões "project" e "repo"/Issues).
 // O GITHUB_TOKEN normal NÃO consegue escrever em Projects de organização.
 
-const { closingRefs } = require('./pr-check.js');
+const { closingRefs, linkedRefs } = require('./pr-check.js');
 
 const ALIASES = {
   backlog: ['backlog', 'todo', 'to do', 'a fazer', 'por fazer'],
@@ -62,7 +62,9 @@ module.exports = async ({ github, context, core }) => {
     try { return (await github.rest.issues.get({ owner, repo, issue_number: n })).data.node_id; }
     catch { core.warning(`Issue #${n} não encontrada.`); return null; }
   }
-  async function linked(pr) { return Promise.all(closingRefs(pr.body, `${owner}/${repo}`).map(issueNode)); }
+  async function linked(pr, refs = linkedRefs) {
+    return Promise.all(refs(pr.body, `${owner}/${repo}`).map(issueNode));
+  }
 
   if (ev === 'issues') {
     if (p.action === 'opened') await setStatus(p.issue.node_id, 'backlog');
@@ -73,10 +75,14 @@ module.exports = async ({ github, context, core }) => {
     if (m) { const id = await issueNode(Number(m[1])); if (id) await setStatus(id, 'progress', { keepDone: true }); }
   } else if (ev === 'pull_request') {
     const pr = p.pull_request;
-    const ids = (await linked(pr)).filter(Boolean);
+    const ids = [...new Set((await linked(pr)).filter(Boolean))];
     if (p.action === 'closed' && pr.merged) {
       await setStatus(pr.node_id, 'done');
-      for (const id of ids) await setStatus(id, 'done');
+      const closingIds = new Set((await linked(pr, closingRefs)).filter(Boolean));
+      for (const id of ids) {
+        if (closingIds.has(id)) await setStatus(id, 'done');
+        else await setStatus(id, 'progress', { keepDone: true });
+      }
     } else if (p.action === 'closed' || p.action === 'converted_to_draft') {
       for (const id of ids) await setStatus(id, 'progress', { keepDone: true });
     } else if (!pr.draft) {
