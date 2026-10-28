@@ -227,24 +227,33 @@ public class AuthService {
                 .flatMap(account -> Boolean.TRUE.equals(account.getActive())
                         ? Mono.just(account)
                         : Mono.error(ApiException.unauthorized("Google account is inactive")))
-                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(email)
-                        .flatMap(existing -> {
-                            if (!Boolean.TRUE.equals(existing.getActive())
-                                    || !Boolean.TRUE.equals(existing.getEmailVerified())
-                                    || (existing.getGoogleSub() != null
-                                            && !existing.getGoogleSub().equals(info.sub()))) {
-                                return Mono.error(ApiException.unauthorized(
-                                        "Google identity is not linked to this account"));
-                            }
-                            existing.setGoogleSub(info.sub());
-                            return accountRepository.save(existing)
-                                    .onErrorMap(DuplicateKeyException.class,
-                                            error -> ApiException.conflict("Google identity is already linked"));
-                        })
-                        .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNotNull(email)
-                                .flatMap(deleted -> Mono.<Account>error(ApiException.conflict(
-                                        "Google email belongs to a deleted account")))
-                                .switchIfEmpty(Mono.defer(() -> createAccountAndUserFromGoogle(email, info)))))));
+                .switchIfEmpty(Mono.defer(() -> {
+                    Mono<Account> deletedGoogleIdentity = accountRepository
+                            .findByGoogleSubAndDeletedAtIsNotNull(info.sub())
+                            .flatMap(deleted -> Mono.<Account>error(ApiException.conflict(
+                                    "Google identity belongs to a deleted account")));
+                    return deletedGoogleIdentity.switchIfEmpty(Mono.defer(() -> findOrCreateByGoogleEmail(email, info)));
+                }));
+    }
+
+    private Mono<Account> findOrCreateByGoogleEmail(String email, GoogleUserInfo info) {
+        return accountRepository.findByEmailAndDeletedAtIsNull(email)
+                .flatMap(existing -> {
+                    if (!Boolean.TRUE.equals(existing.getActive())
+                            || !Boolean.TRUE.equals(existing.getEmailVerified())
+                            || (existing.getGoogleSub() != null && !existing.getGoogleSub().equals(info.sub()))) {
+                        return Mono.error(ApiException.unauthorized(
+                                "Google identity is not linked to this account"));
+                    }
+                    existing.setGoogleSub(info.sub());
+                    return accountRepository.save(existing)
+                            .onErrorMap(DuplicateKeyException.class,
+                                    error -> ApiException.conflict("Google identity is already linked"));
+                })
+                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNotNull(email)
+                        .flatMap(deleted -> Mono.<Account>error(ApiException.conflict(
+                                "Google email belongs to a deleted account")))
+                        .switchIfEmpty(Mono.defer(() -> createAccountAndUserFromGoogle(email, info)))));
     }
 
     private Mono<Account> createAccountAndUserFromGoogle(String email, GoogleUserInfo info) {

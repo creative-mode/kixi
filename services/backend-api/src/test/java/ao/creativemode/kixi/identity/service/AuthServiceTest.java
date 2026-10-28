@@ -53,6 +53,7 @@ class AuthServiceTest {
 
         when(jwtService.generateToken(anyLong(), anyList())).thenReturn("jwt-token");
         when(jwtService.getExpirationMs()).thenReturn(86_400_000L);
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNotNull(any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -485,6 +486,32 @@ class AuthServiceTest {
                 })
                 .verify();
 
+        verify(accountRepository, never()).save(any(Account.class));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+    }
+
+    @Test
+    void googleRejectsIdentityOwnedBySoftDeletedAccountBeforeCreatingDuplicate() {
+        when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
+        when(googleOAuth2Client.getUserInfo("access-token"))
+                .thenReturn(Mono.just(new GoogleUserInfo("sub-X", "changed@kixi.ao", true,
+                        "Former User", null)));
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNull("sub-X")).thenReturn(Mono.empty());
+        Account deleted = account(8L, "old-user", "hash");
+        deleted.setEmail("old@kixi.ao");
+        deleted.setGoogleSub("sub-X");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNotNull("sub-X")).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.loginWithGoogle("code"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error).hasMessage("Google identity belongs to a deleted account");
+                })
+                .verify();
+
+        verify(accountRepository, never()).findByEmailAndDeletedAtIsNull(any());
         verify(accountRepository, never()).save(any(Account.class));
         verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
     }
