@@ -279,6 +279,37 @@ class CriticalExamFlowPostgresIntegrationTest {
     }
 
     @Test
+    void listFiltersAndPagesInSqlForTheStatementsTeacher() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        bearer(studentToken)
+                .post()
+                .uri("/api/v1/simulations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}")
+                .exchange()
+                .expectStatus().isCreated();
+
+        bearer(teacherToken)
+                .get()
+                .uri("/api/v1/simulations?statementId=" + STATEMENT + "&status=IN_PROGRESS&page=0&size=1")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueMatches("X-Total-Count", "[1-9][0-9]*")
+                .expectBody()
+                .jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].statement.id").isEqualTo((int) STATEMENT);
+
+        bearer(teacherToken)
+                .get()
+                .uri("/api/v1/simulations?statementId=999999999")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("X-Total-Count", "0")
+                .expectBody()
+                .jsonPath("$.length()").isEqualTo(0);
+    }
+
+    @Test
     void theIntegrationAccountReadsAnyStudentsSimulationButIsRefusedEverythingElse() {
         sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
         bearer(studentToken)

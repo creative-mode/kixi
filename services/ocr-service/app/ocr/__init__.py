@@ -12,6 +12,7 @@ Components:
 from .engine import (
     OCREngine,
     OCRProcessWorker,
+    OCRPageInputError,
     OCRResult,
     DocumentInfo,
     get_engine,
@@ -46,6 +47,7 @@ __all__ = [
     # Engine
     "OCREngine",
     "OCRProcessWorker",
+    "OCRPageInputError",
     "OCRResult",
     "DocumentInfo",
     "get_engine",
