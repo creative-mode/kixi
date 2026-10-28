@@ -52,6 +52,16 @@ Os testes `QuestionWriteAuthorizationTest`, `StatementTeacherScopeTest`, `Enroll
 - JWT, chaves de serviços e credenciais de base de dados são configuração de ambiente. O perfil `prod` recusa segredo JWT ausente, curto ou reconhecido como placeholder. O Compose não fornece uma palavra-passe de base de dados por omissão.
 - Logs não devem conter tokens, passwords, emails, nomes de utilizador, nomes originais de ficheiros ou IDs de conta. Usar request ID e tipo de erro para correlacionar incidentes.
 
+## CORS efetivo (auditado em 28/10/2026)
+
+Definido por `CorsConfig` a partir de `APP_CORS_ALLOWED_ORIGINS` (lista separada por vírgulas, sem curingas): só as origens listadas recebem `Access-Control-Allow-Origin`, com `allowCredentials=true`, métodos `GET, POST, PUT, PATCH, DELETE, OPTIONS`, cabeçalhos `Authorization, Content-Type, X-Request-Id` e `max-age` de 1 h. Lista vazia significa só mesma origem.
+
+Em produção o valor é `https://kixi.creativemode.ao` (uma origem exata, lida do contentor `backend-api`). Está certo: como há credenciais, nunca se usa `*`, e as outras apps (aluno e gestor) falam com o backend a partir do servidor Next, não do navegador. Cobertura: `CorsSecurityIntegrationTest`. Ao acrescentar um domínio, acrescentá-lo à variável, nunca relaxar o código.
+
+## Isolamento entre alunos
+
+`StudentIsolationPostgresIntegrationTest` percorre, com o aluno A, cada rota de simulações e respostas sobre recursos do aluno B (ler, alterar, submeter, apagar, avaliar) e exige 401, 403 ou 404 sem alterar nada. Encontrou que uma simulação livre de outro aluno respondia 400 ("Id must not be null") em vez de 404, o que permitia distinguir ids existentes de inexistentes; corrigido em `SimulationService.authorize`. Uma rota nova entra na lista de `routesOfStudentB`.
+
 ## Revisão de dependências
 
 Em 14/10/2026, `pip-audit -r services/ocr-service/requirements.txt` não encontrou vulnerabilidades conhecidas após atualizar o serviço OCR para PaddleOCR 3.7.0/PaddlePaddle 3.3.1 e atualizar as dependências com avisos corrigidos. A dependência `python-jose` foi removida do OCR porque não era usada; autenticação desse serviço usa API key.

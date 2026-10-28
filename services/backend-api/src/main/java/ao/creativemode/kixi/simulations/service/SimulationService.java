@@ -109,7 +109,9 @@ public class SimulationService {
                     if (simulation.getExamRoomId() == null && accountId.equals(simulation.getAccountId())) {
                         return Mono.just(simulation);
                     }
-                    if (examRoomAccess == null) {
+                    // Uma simulação livre de outro aluno é "não encontrada", igual a um id que não existe: sem sala
+                    // não há nada a perguntar à sala, e perguntar com null devolvia 400 e deixava enumerar ids (#453).
+                    if (examRoomAccess == null || simulation.getExamRoomId() == null) {
                         return Mono.error(ApiException.notFound("Simulation not found: " + id));
                     }
                     return examRoomAccess.canAccessSimulation(simulation.getExamRoomId(), simulation.getId(),
