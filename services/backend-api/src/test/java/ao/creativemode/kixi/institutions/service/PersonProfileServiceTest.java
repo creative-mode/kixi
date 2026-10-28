@@ -18,6 +18,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.ProfileSettingRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.BlockedAccountReader;
 import ao.creativemode.kixi.shared.service.PublicStatsReader;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,7 @@ class PersonProfileServiceTest {
     private InstitutionRepository institutions;
     private ProfileSettingRepository settings;
     private PublicStatsReader stats;
+    private BlockedAccountReader blockedAccounts;
     private PersonProfileService service;
 
     @BeforeEach
@@ -54,7 +56,10 @@ class PersonProfileServiceTest {
         institutions = mock(InstitutionRepository.class);
         settings = mock(ProfileSettingRepository.class);
         stats = mock(PublicStatsReader.class);
-        service = new PersonProfileService(users, teachers, studentLinks, teacherLinks, institutions, settings, stats);
+        blockedAccounts = mock(BlockedAccountReader.class);
+        when(blockedAccounts.blockedBetween(any(), any())).thenReturn(Mono.just(false));
+        service = new PersonProfileService(users, teachers, studentLinks, teacherLinks, institutions, settings, stats,
+                blockedAccounts);
 
         User target = user(TARGET_USER, TARGET_ACCOUNT, "Maria", "Santos");
         User viewer = user(VIEWER_USER, VIEWER_ACCOUNT, "João", "Pedro");
@@ -196,6 +201,17 @@ class PersonProfileServiceTest {
         StepVerifier.create(service.person(VIEWER_ACCOUNT, false, 404L))
             .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
             .verify();
+    }
+
+    @Test
+    void blockedProfileIsNotVisibleEvenWhenItIsPublic() {
+        when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
+        when(blockedAccounts.blockedBetween(VIEWER_ACCOUNT, TARGET_ACCOUNT)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.person(VIEWER_ACCOUNT, false, TARGET_USER))
+            .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+            .verify();
+        verify(settings, never()).findVisibility(TARGET_USER);
     }
 
     @Test
