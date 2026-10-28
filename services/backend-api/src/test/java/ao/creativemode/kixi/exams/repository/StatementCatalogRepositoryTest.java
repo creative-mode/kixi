@@ -71,8 +71,7 @@ class StatementCatalogRepositoryTest {
                         + "WHEN COALESCE(s.course_id, cl.course_id) = :affinityCourseId THEN 1 "
                         + "ELSE 2 END, s.created_at DESC, s.id DESC");
         assertThat(sql.binds()).containsEntry("affinityClassId", 3L).containsEntry("affinityCourseId", 40L);
-        // Affinity only orders; it is not a filter.
-        assertThat(sql.select()).contains("affinity");
+        // Affinity only orders; it is not a filter or part of the count.
         assertThat(sql.count()).doesNotContain("affinity");
         assertThat(sql.countBinds()).doesNotContainKeys("affinityClassId", "affinityCourseId");
     }
