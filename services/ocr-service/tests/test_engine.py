@@ -612,6 +612,7 @@ class TestOCREngine:
         messages = [call.args[0] for call in connection.send.call_args_list]
         assert [message["type"] for message in messages] == ["page", "feed_error"]
         assert messages[-1]["error_type"] == type(error).__name__
+        assert messages[-1]["error_kind"] == "source"
 
     def test_page_feeder_reports_unexpected_send_errors_when_the_pipe_remains_usable(self):
         connection = MagicMock()
@@ -629,6 +630,52 @@ class TestOCREngine:
 
         assert [message["type"] for message in sent] == ["feed_error"]
         assert sent[0]["error_type"] == "RuntimeError"
+        assert sent[0]["error_kind"] == "transport"
+
+    def test_ocr_process_preserves_page_transport_failure_as_server_error(self, monkeypatch):
+        from app.ocr import engine as engine_module
+
+        class Connection:
+            def __init__(self):
+                self.incoming = iter([
+                    {"type": "progress", "request_id": "req-test", "page_count": 1},
+                    {"type": "feed_error", "error_type": "RuntimeError", "error_kind": "transport"},
+                    {"type": "shutdown"},
+                ])
+                self.sent = []
+
+            def recv(self):
+                return next(self.incoming)
+
+            def send(self, message):
+                self.sent.append(message)
+
+            def close(self):
+                pass
+
+        class Engine:
+            def __init__(self, **_kwargs):
+                pass
+
+            def initialize(self):
+                pass
+
+            def process_images_with_progress(self, pages, *_args, **_kwargs):
+                list(pages)
+
+            def shutdown(self):
+                pass
+
+        connection = Connection()
+        monkeypatch.setattr(engine_module, "OCREngine", Engine)
+
+        engine_module._ocr_process_main(connection)
+
+        assert connection.sent[0] == {"type": "ready"}
+        assert connection.sent[1] == {
+            "type": "error",
+            "error_type": "RuntimeError",
+        }
 
     def test_ocr_process_preserves_lazy_page_input_failure(self, monkeypatch):
         from app.ocr import engine as engine_module

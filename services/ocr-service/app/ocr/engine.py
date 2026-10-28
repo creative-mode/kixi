@@ -1580,6 +1580,8 @@ def _ocr_process_main(connection) -> None:
                         if item["type"] == "end":
                             return
                         if item["type"] == "feed_error":
+                            if item.get("error_kind") == "transport":
+                                raise RuntimeError("OCR page transport failed")
                             raise OCRPageInputError("OCR page input could not be prepared")
                         source_indices.append(item["source_file_index"])
                         native_pages.append(item["native_text_page"])
@@ -1820,11 +1822,15 @@ class OCRProcessWorker:
         def should_stop() -> bool:
             return cancelled is not None and cancelled.is_set()
 
-        def report_input_error(error: Exception) -> None:
+        def report_input_error(error: Exception, *, error_kind: str = "source") -> None:
             if should_stop():
                 return
             try:
-                connection.send({"type": "feed_error", "error_type": type(error).__name__})
+                connection.send({
+                    "type": "feed_error",
+                    "error_type": type(error).__name__,
+                    "error_kind": error_kind,
+                })
             except (BrokenPipeError, EOFError, OSError, RuntimeError):
                 pass
 
@@ -1866,7 +1872,7 @@ class OCRProcessWorker:
             except (BrokenPipeError, EOFError, OSError):
                 return
             except Exception as error:
-                report_input_error(error)
+                report_input_error(error, error_kind="transport")
                 return
             index += 1
 
@@ -1877,7 +1883,7 @@ class OCRProcessWorker:
         except (BrokenPipeError, EOFError, OSError):
             return
         except Exception as error:
-            report_input_error(error)
+            report_input_error(error, error_kind="transport")
 
 
 # Default engine process
