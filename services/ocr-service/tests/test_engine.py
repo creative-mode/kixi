@@ -685,13 +685,14 @@ class TestOCREngine:
         engine._ocr = MagicMock()
         engine._ocr.predict.return_value = [{"rec_texts": ["1."], "rec_scores": [0.9]}]
         monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_model_name", engine.det_model_name)
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_max_side_len", 2048)
         paddle_ocr = MagicMock()
         monkeypatch.setattr("app.ocr.engine._get_paddle_ocr", lambda: paddle_ocr)
 
         result = engine._run_ocr(sample_image, fallback=True)
 
         assert len(result) == 1
-        engine._ocr.predict.assert_called_once_with(sample_image, text_det_limit_side_len=1920)
+        engine._ocr.predict.assert_called_once_with(sample_image, text_det_limit_side_len=2048)
         paddle_ocr.assert_not_called()
         assert engine._fallback_ocr is None
 

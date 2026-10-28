@@ -530,7 +530,10 @@ class OCREngine:
             if settings.ocr_fallback_det_model_name == self.det_model_name:
                 if self._ocr is None:
                     raise RuntimeError("OCR engine is not initialized")
-                return list(self._ocr.predict(image, text_det_limit_side_len=1920))
+                return list(self._ocr.predict(
+                    image,
+                    text_det_limit_side_len=settings.ocr_fallback_det_max_side_len,
+                ))
             if self._fallback_ocr is None:
                 self._fallback_ocr = _get_paddle_ocr()(**self._ocr_options(settings.ocr_fallback_det_model_name))
             return list(self._fallback_ocr.predict(image))

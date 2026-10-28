@@ -294,6 +294,30 @@ class TestExtractEndpoint:
         assert response.json()["detail"] == "Failed to process uploaded file"
         assert rendered_pages == [1, 2]
 
+    def test_single_page_pdf_processing_time_excludes_rasterization(
+        self, client, engine_override, mock_ocr_result, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        engine = MagicMock()
+        engine.process_image_async = AsyncMock(return_value=mock_ocr_result)
+        engine_override(engine)
+
+        def render_page(_content, **_kwargs):
+            time.sleep(0.02)
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        monkeypatch.setattr("app.api.routes.extract_images_from_pdf", render_page)
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("exam.pdf", content, "application/pdf"))],
+        )
+
+        assert response.status_code == 200
+        assert response.json()["processingTimeMs"] < mock_ocr_result.processing_time_ms
+
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch
     ):

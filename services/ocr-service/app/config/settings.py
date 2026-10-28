@@ -69,6 +69,10 @@ class Settings(BaseSettings):
         default="PP-OCRv5_mobile_det",
         description="Detector for a second read when the fast one finds fewer than ocr_min_questions questions. The default reuses the mobile detector at higher resolution to avoid a second resident model; set a different model name for a separate fallback model. Empty disables the second read.",
     )
+    ocr_fallback_det_max_side_len: int = Field(
+        default=1920, ge=1, le=4096,
+        description="Maximum detector image side length for fallback inference when reusing the primary model.",
+    )
     ocr_min_questions: int = Field(default=2, ge=0, description="Below this many questions the page is read again with the fallback detector")
     ocr_pipeline: str = Field(
         default="ppocr",
