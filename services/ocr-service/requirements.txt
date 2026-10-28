@@ -19,7 +19,7 @@ numpy==1.26.4
 
 # PDF support
 pdf2image==1.17.0
-PyMuPDF==1.28.2
+PyMuPDF==2.0
 
 # Configuration and validation
 pydantic==2.14.1
