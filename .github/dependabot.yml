@@ -1,0 +1,35 @@
+# Análise automática de dependências (kixi#452). Os PRs vão para `dev`, como todos os outros, e o `pr-check` deixa passar os de bots.
+# Semanal e com limite de PRs abertos, para não afogar a revisão: o Spring Boot e o Flyway sobem em bloco com o BOM, por isso agrupam-se.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /services/backend-api
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    labels: [dependencies, area:backend]
+    commit-message: { prefix: "chore(deps)" }
+    groups:
+      spring:
+        patterns: ["org.springframework*", "org.flywaydb*", "org.springdoc*"]
+  - package-ecosystem: pip
+    directory: /services/ocr-service
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    labels: [dependencies, area:ocr]
+    commit-message: { prefix: "chore(deps)" }
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+    labels: [dependencies, devops]
+    commit-message: { prefix: "chore(ci)" }
+  - package-ecosystem: docker
+    directory: /infra/docker
+    target-branch: dev
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+    labels: [dependencies, devops]
+    commit-message: { prefix: "chore(deps)" }
