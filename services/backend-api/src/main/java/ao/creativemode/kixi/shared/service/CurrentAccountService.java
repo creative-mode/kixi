@@ -3,6 +3,7 @@ package ao.creativemode.kixi.shared.service;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -33,7 +34,11 @@ public class CurrentAccountService {
                 .map(context -> context.getAuthentication())
                 .filter(this::isAuthenticated)
                 .map(authentication -> authentication.getAuthorities().stream()
-                        .anyMatch(requiredAuthorities::contains))
+                        .anyMatch(requiredAuthorities::contains)
+                        // A conta de integração vê como um administrador o que IntegrationScope lhe deixa
+                        // chegar (o filtro do JWT recusa tudo o resto antes de aqui se perguntar).
+                        || (requiredAuthorities.contains(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                                && authentication.getAuthorities().contains(new SimpleGrantedAuthority("ROLE_INTEGRATION"))))
                 .defaultIfEmpty(false);
     }
 
