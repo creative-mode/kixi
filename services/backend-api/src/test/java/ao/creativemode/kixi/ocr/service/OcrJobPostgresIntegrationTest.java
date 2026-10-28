@@ -161,6 +161,8 @@ class OcrJobPostgresIntegrationTest {
 
     @Test
     void httpAcceptsAValidatedUploadAndScopesStatusAndCancellationToItsTeacher() {
+        sql("UPDATE ocr_job_worker_lock SET owner = '00000000-0000-0000-0000-000000000425', "
+            + "lease_until = CURRENT_TIMESTAMP + INTERVAL '1 hour' WHERE singleton = TRUE");
         MultipartBodyBuilder multipart = new MultipartBodyBuilder();
         StringBuilder fixture = new StringBuilder("%PDF-1.4\n");
         for (int page = 1; page <= 10; page++) {
