@@ -18,8 +18,20 @@ from PIL import Image
 from app.main import app
 from app.config import settings
 from app.api.routes import get_ocr_engine as route_get_ocr_engine, resolve_file_type
-from app.ocr.engine import OCRResult, DocumentInfo
+from app.ocr.engine import OCRProcessWorker, OCRResult, DocumentInfo
 from app.ocr.postprocessing import ExtractedMetadata, ExtractedQuestion, QuestionType, UnmappedContent
+
+
+def _page_input_error_worker(connection):
+    connection.send({"type": "ready"})
+    command = connection.recv()
+    assert command["type"] == "progress"
+    while True:
+        message = connection.recv()
+        if message["type"] == "feed_error":
+            connection.send({"type": "input_error", "error_type": "OCRPageInputError"})
+            return
+        assert message["type"] == "page"
 
 
 # =============================================================================
@@ -246,6 +258,41 @@ class TestExtractEndpoint:
         assert response.json()["document"]["pageCount"] == 2
         assert response.json()["processingTimeMs"] < mock_ocr_result.processing_time_ms
         engine.process_image_async.assert_not_awaited()
+
+    def test_multi_page_pdf_rasterization_failure_remains_a_bad_request(
+        self, client, engine_override, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        rendered_pages = []
+        engine = OCRProcessWorker(process_target=_page_input_error_worker)
+        engine_override(engine)
+
+        def render_page(_content, *, first_page, **_kwargs):
+            rendered_pages.append(first_page)
+            if first_page == 2:
+                raise RuntimeError("synthetic page render failure")
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        monkeypatch.setattr(
+            "app.api.routes.extract_images_from_pdf",
+            render_page,
+        )
+
+        try:
+            response = client.post(
+                "/ocr/v1/extract",
+                files=[("images", ("exam.pdf", content, "application/pdf"))],
+            )
+        finally:
+            engine.shutdown()
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Failed to process uploaded file"
+        assert rendered_pages == [1, 2]
 
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch

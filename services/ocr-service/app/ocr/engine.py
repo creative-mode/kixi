@@ -48,6 +48,11 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+
+class OCRPageInputError(Exception):
+    """A lazy page source failed while preparing an OCR input page."""
+
+
 # PaddleOCR is loaded lazily because model dependencies are expensive and the
 # service must remain importable for unit tests and health endpoints.
 PaddleOCR = None
@@ -1572,7 +1577,7 @@ def _ocr_process_main(connection) -> None:
                         if item["type"] == "end":
                             return
                         if item["type"] == "feed_error":
-                            raise RuntimeError("OCR page input could not be prepared")
+                            raise OCRPageInputError("OCR page input could not be prepared")
                         source_indices.append(item["source_file_index"])
                         native_pages.append(item["native_text_page"])
                         yield item["image"]
@@ -1592,7 +1597,7 @@ def _ocr_process_main(connection) -> None:
                     connection.send({"type": "result", "result": result})
                 except BaseException as error:
                     connection.send({
-                        "type": "error",
+                        "type": "input_error" if isinstance(error, OCRPageInputError) else "error",
                         "error_type": type(error).__name__,
                     })
                 continue
@@ -1762,8 +1767,9 @@ class OCRProcessWorker:
             connection = self._connection
             connection.send({"type": "progress", "request_id": request_id,
                              "page_count": page_count})
+            feeder_cancelled = threading.Event()
             feeder = asyncio.create_task(asyncio.to_thread(
-                self._feed_pages, connection, images, sources, native_pages
+                self._feed_pages, connection, images, sources, native_pages, feeder_cancelled
             ))
             completed = False
             try:
@@ -1779,12 +1785,17 @@ class OCRProcessWorker:
                         completed = True
                         yield {"type": "result", "result": message["result"]}
                         return
+                    elif message["type"] == "input_error":
+                        await feeder
+                        completed = True
+                        raise OCRPageInputError("OCR page input could not be prepared")
                     else:
                         raise RuntimeError(
                             f"OCR worker failed ({message.get('error_type', 'unknown')})"
                         )
             finally:
                 if not completed:
+                    feeder_cancelled.set()
                     process = self._process
                     logger.info(
                         "Terminating OCR inference process after request cancellation",
@@ -1796,22 +1807,74 @@ class OCRProcessWorker:
                         feeder.cancel()
 
     @staticmethod
-    def _feed_pages(connection, images, source_indices, native_pages) -> None:
+    def _feed_pages(
+        connection,
+        images,
+        source_indices,
+        native_pages,
+        cancelled: Optional[threading.Event] = None,
+    ) -> None:
+        def should_stop() -> bool:
+            return cancelled is not None and cancelled.is_set()
+
+        def report_input_error(error: Exception) -> None:
+            if should_stop():
+                return
+            try:
+                connection.send({"type": "feed_error", "error_type": type(error).__name__})
+            except (BrokenPipeError, EOFError, OSError, RuntimeError):
+                pass
+
         try:
-            for index, image in enumerate(images):
+            image_iterator = iter(images)
+        except Exception as error:
+            report_input_error(error)
+            return
+
+        index = 0
+        while True:
+            if should_stop():
+                return
+            try:
+                image = next(image_iterator)
+            except StopIteration:
+                break
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
                 source_index = source_indices[index] if index < len(source_indices) else 0
                 native_page = native_pages[index] if index < len(native_pages) else None
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
                 connection.send({"type": "page", "image": image,
                                  "source_file_index": source_index,
                                  "native_text_page": native_page})
-            connection.send({"type": "end"})
-        except (BrokenPipeError, EOFError, OSError, RuntimeError):
-            return
-        except Exception as error:
-            try:
-                connection.send({"type": "feed_error", "error_type": type(error).__name__})
             except (BrokenPipeError, EOFError, OSError):
                 return
+            except Exception as error:
+                report_input_error(error)
+                return
+            index += 1
+
+        if should_stop():
+            return
+        try:
+            connection.send({"type": "end"})
+        except (BrokenPipeError, EOFError, OSError):
+            return
+        except Exception as error:
+            report_input_error(error)
 
 
 # Default engine process

@@ -19,6 +19,7 @@ from app.config import settings
 from app.ocr import (
     get_engine,
     OCRProcessWorker,
+    OCRPageInputError,
     OCRResult,
     load_image_from_bytes,
 )
@@ -440,6 +441,11 @@ async def extract_text(
             status_code=_status_code_for_result(result.status),
         )
 
+    except OCRPageInputError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to process uploaded file",
+        ) from exc
     except HTTPException:
         raise
     except Exception as e:
