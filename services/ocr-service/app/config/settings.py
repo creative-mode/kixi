@@ -66,8 +66,8 @@ class Settings(BaseSettings):
         description="Box score threshold of the text detector; unset keeps PaddleOCR's 0.6. Opt-in for the same reason as ocr_det_thresh.",
     )
     ocr_fallback_det_model_name: Optional[str] = Field(
-        default="PP-OCRv5_server_det",
-        description="Detector for a second read when the fast one finds fewer than ocr_min_questions questions. Slower (25 to 40 s) and sees faint lines the mobile model misses. Empty disables the second read.",
+        default="PP-OCRv5_mobile_det",
+        description="Detector for a second read when the fast one finds fewer than ocr_min_questions questions. The default reuses the mobile detector at higher resolution to avoid a second resident model; set a different model name for a separate fallback model. Empty disables the second read.",
     )
     ocr_min_questions: int = Field(default=2, ge=0, description="Below this many questions the page is read again with the fallback detector")
     ocr_pipeline: str = Field(
@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     ocr_formula_latex: bool = Field(default=True, description="Recognize printed and inline formulas as LaTeX text (#262). Disable to keep raw OCR text and formula crops only.")
     ocr_formula_model_enabled: bool = Field(default=True, description="Run the local image-to-LaTeX model on printed formula regions detected by the layout model.")
     ocr_formula_model_name: str = Field(default="PP-FormulaNet_plus-S", description="PaddleOCR formula recognition model. The plus-S model is the bounded CPU default.")
-    ocr_formula_batch_size: int = Field(default=8, ge=1, le=32, description="Formula crops inferred together per page.")
+    ocr_formula_batch_size: int = Field(default=1, ge=1, le=32, description="Formula crops inferred together per page; a single crop bounds CPU inference memory.")
     ocr_formula_max_latex_chars: int = Field(default=2000, ge=16, le=10000, description="Reject unexpectedly large model output before it reaches a renderer.")
 
     # Processing configuration

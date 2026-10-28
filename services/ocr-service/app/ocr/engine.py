@@ -391,9 +391,9 @@ class OCREngine:
         fallback_predictions: FormulaPredictions,
         page_index: int,
     ) -> FormulaPredictions:
-        """Keep formula reads from the enhanced image when fallback OCR uses the raw photo.
+        """Keep formula reads from the enhanced image when the secondary OCR pass uses the raw photo.
 
-        The fallback detector is better at recovering faint prose, but its formula
+        A separately configured fallback detector may recover faint prose, but its formula
         crops can lose contrast or become clipped. Layout boxes can shift slightly
         between the two image frames, so match them by overlap rather than exact keys.
         An explicit fallback prediction remains authoritative; a primary prediction
@@ -514,7 +514,7 @@ class OCREngine:
 
         Args:
             image: Image as numpy array (BGR format)
-            fallback: Use the slower detector that sees the faint lines the fast one misses
+            fallback: Run the second pass at higher resolution or with the separately configured detector
 
         Returns:
             PaddleOCR 3.x results: one dict-like per image with rec_texts, rec_scores and rec_polys
@@ -522,6 +522,10 @@ class OCREngine:
         self._ensure_initialized()
 
         if fallback:
+            if settings.ocr_fallback_det_model_name == self.det_model_name:
+                if self._ocr is None:
+                    raise RuntimeError("OCR engine is not initialized")
+                return list(self._ocr.predict(image, text_det_limit_side_len=1920))
             if self._fallback_ocr is None:
                 self._fallback_ocr = _get_paddle_ocr()(**self._ocr_options(settings.ocr_fallback_det_model_name))
             return list(self._fallback_ocr.predict(image))
@@ -925,11 +929,8 @@ class OCREngine:
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
             parsing_ms = time.perf_counter() - parsing_started
 
-            # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
-            # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
-            # fast detector hide faint lines from the thorough one (the parcelar exam gave 3 of its 5 questions on
-            # the preprocessed image, and finds the lines of the other two on the raw one). Its layout is taken
-            # on the same image, so text, figures and the crop frame all share one set of coordinates.
+            # A page the primary pass could not make questions of, or numbered with gaps, is read again on the
+            # original photo at higher detector resolution. Layout and formula crops keep the same image frame.
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
@@ -1312,7 +1313,16 @@ class OCREngine:
                     all_warnings.append(warning)
 
         # Determine main language (most common)
-        main_language = max(set(languages), key=languages.count) if languages else self.lang
+        if languages:
+            language_counts = {language: languages.count(language) for language in set(languages)}
+            highest_language_count = max(language_counts.values())
+            main_language = (
+                self.lang
+                if language_counts.get(self.lang) == highest_language_count
+                else next(language for language in languages if language_counts[language] == highest_language_count)
+            )
+        else:
+            main_language = self.lang
 
         # Calculate overall confidence
         if all_questions:
@@ -1561,6 +1571,8 @@ def _ocr_process_main(connection) -> None:
                         item = connection.recv()
                         if item["type"] == "end":
                             return
+                        if item["type"] == "feed_error":
+                            raise RuntimeError("OCR page input could not be prepared")
                         source_indices.append(item["source_file_index"])
                         native_pages.append(item["native_text_page"])
                         yield item["image"]
@@ -1795,6 +1807,11 @@ class OCRProcessWorker:
             connection.send({"type": "end"})
         except (BrokenPipeError, EOFError, OSError, RuntimeError):
             return
+        except Exception as error:
+            try:
+                connection.send({"type": "feed_error", "error_type": type(error).__name__})
+            except (BrokenPipeError, EOFError, OSError):
+                return
 
 
 # Default engine process

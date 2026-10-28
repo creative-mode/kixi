@@ -20,6 +20,7 @@ from app.ocr.engine import (
     OCRResult,
     PageOcrContext,
     DocumentInfo,
+    OCRProcessWorker,
     get_engine,
     initialize_engine,
     shutdown_engine,
@@ -598,6 +599,37 @@ class TestExtractedQuestion:
 class TestOCREngine:
     """Tests for OCREngine class."""
 
+    def test_page_feeder_notifies_worker_when_lazy_rasterization_fails(self):
+        connection = MagicMock()
+
+        def pages():
+            yield np.zeros((2, 2, 3), dtype=np.uint8)
+            raise ValueError("page render failed")
+
+        OCRProcessWorker._feed_pages(connection, pages(), [0], [])
+
+        messages = [call.args[0] for call in connection.send.call_args_list]
+        assert [message["type"] for message in messages] == ["page", "feed_error"]
+        assert messages[-1]["error_type"] == "ValueError"
+
+    def test_fallback_reuses_primary_detector_at_higher_resolution_when_configured_identically(
+        self, sample_image, monkeypatch
+    ):
+        engine = OCREngine()
+        engine._initialized = True
+        engine._ocr = MagicMock()
+        engine._ocr.predict.return_value = [{"rec_texts": ["1."], "rec_scores": [0.9]}]
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_model_name", engine.det_model_name)
+        paddle_ocr = MagicMock()
+        monkeypatch.setattr("app.ocr.engine._get_paddle_ocr", lambda: paddle_ocr)
+
+        result = engine._run_ocr(sample_image, fallback=True)
+
+        assert len(result) == 1
+        engine._ocr.predict.assert_called_once_with(sample_image, text_det_limit_side_len=1920)
+        paddle_ocr.assert_not_called()
+        assert engine._fallback_ocr is None
+
     def test_init(self):
         """Test engine initialization."""
         engine = OCREngine(
@@ -850,6 +882,18 @@ class TestOCREngine:
         result = engine.process_images([sample_image, sample_image], request_id="req-292")
 
         assert result.status == "error"
+
+    def test_main_language_ties_prefer_configured_language(self, sample_image):
+        engine = OCREngine()
+        first = self._page_result("success")
+        first.document.main_language = "en"
+        second = self._page_result("success")
+        second.document.main_language = "pt"
+        engine.process_image = MagicMock(side_effect=[first, second])
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-language-tie")
+
+        assert result.document.main_language == "pt"
 
     def test_shutdown(self):
         """Test engine shutdown."""

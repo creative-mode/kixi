@@ -9,7 +9,8 @@ def main() -> None:
 
     detectors = [settings.ocr_det_model_name]
     if settings.ocr_fallback_det_model_name:
-        detectors.append(settings.ocr_fallback_det_model_name)  # the thorough one, for the second read
+        detectors.append(settings.ocr_fallback_det_model_name)
+    detectors = list(dict.fromkeys(detectors))
     for detector in detectors:
         PaddleOCR(
             use_doc_orientation_classify=False,
