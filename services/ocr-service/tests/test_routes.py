@@ -294,7 +294,7 @@ class TestExtractEndpoint:
         assert response.json()["detail"] == "Failed to process uploaded file"
         assert rendered_pages == [1, 2]
 
-    def test_single_page_pdf_processing_time_excludes_rasterization(
+    def test_single_page_pdf_processing_time_uses_engine_measurement(
         self, client, engine_override, mock_ocr_result, monkeypatch
     ):
         pdf = fitz.open()
@@ -317,7 +317,7 @@ class TestExtractEndpoint:
         )
 
         assert response.status_code == 200
-        assert response.json()["processingTimeMs"] < original_processing_time_ms
+        assert response.json()["processingTimeMs"] == original_processing_time_ms
 
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch

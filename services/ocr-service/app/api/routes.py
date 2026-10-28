@@ -419,12 +419,13 @@ async def extract_text(
             if result is None:
                 raise RuntimeError("OCR processing returned no result")
 
-        result.processing_time_ms = max(0, result.processing_time_ms - int(rasterization_ms))
-        if result.timings and "totalMs" in result.timings:
-            result.timings = {
-                **result.timings,
-                "totalMs": round(max(0.0, result.timings["totalMs"] - rasterization_ms), 1),
-            }
+        if page_count > 1:
+            result.processing_time_ms = max(0, result.processing_time_ms - int(rasterization_ms))
+            if result.timings and "totalMs" in result.timings:
+                result.timings = {
+                    **result.timings,
+                    "totalMs": round(max(0.0, result.timings["totalMs"] - rasterization_ms), 1),
+                }
 
         processing_time = int((time.time() - start_time) * 1000)
 
