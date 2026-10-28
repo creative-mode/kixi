@@ -120,6 +120,9 @@ class FeedPostgresIntegrationTest {
                 + STUDENT + ", 'Ana', 'Neto'), (" + OTHER_STUDENT + ", 'Carla', 'Dias'), ("
                 + CLASSMATE + ", 'Bruno', 'Silva')");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
+        // Um aluno registado tem sempre o papel na base, de onde o login o tira para o token; desde kixi#450 o filtro confirma-o ali.
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT a.id, r.id FROM (VALUES ("
+                + STUDENT + "), (" + OTHER_STUDENT + "), (" + CLASSMATE + ")) AS a(id) CROSS JOIN roles r WHERE r.name = 'STUDENT'");
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id, status, created_at, updated_at) VALUES ("
                 + STUDENT + ", " + CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
                 + OTHER_STUDENT + ", " + OTHER_CLASS + ", " + YEAR + ", 'ACTIVE', now(), now()), ("
