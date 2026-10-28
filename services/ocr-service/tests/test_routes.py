@@ -10,7 +10,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 import io
+import time
 import fitz
+import numpy as np
 from PIL import Image
 
 from app.main import app
@@ -198,6 +200,52 @@ class TestExtractEndpoint:
         )
 
         assert response.status_code in [200, 207]
+
+    def test_multi_page_pdf_is_rasterized_one_page_at_a_time(
+        self, client, engine_override, mock_ocr_result, monkeypatch
+    ):
+        pdf = fitz.open()
+        pdf.new_page()
+        pdf.new_page()
+        content = pdf.tobytes()
+        pdf.close()
+        rasterized = []
+        engine = MagicMock()
+        engine.process_image_async = AsyncMock()
+
+        def render_page(_content, *, first_page, last_page, **_kwargs):
+            time.sleep(0.01)
+            rasterized.append((first_page, last_page))
+            return [np.zeros((20, 30, 3), dtype=np.uint8)]
+
+        async def process_pages(page_iterator, *, source_file_indices, page_count, **_kwargs):
+            assert page_count == 2
+            assert iter(page_iterator) is page_iterator
+            seen_shapes = []
+            for index, page in enumerate(page_iterator):
+                seen_shapes.append(page.shape)
+                assert source_file_indices[index] == 0
+            assert seen_shapes == [(20, 30, 3), (20, 30, 3)]
+            result = replace(
+                mock_ocr_result,
+                document=DocumentInfo(page_count=2, main_language="pt", has_tables=False),
+            )
+            yield {"type": "result", "result": result}
+
+        engine.process_images_progress_async = process_pages
+        engine_override(engine)
+        monkeypatch.setattr("app.api.routes.extract_images_from_pdf", render_page)
+
+        response = client.post(
+            "/ocr/v1/extract",
+            files=[("images", ("exam.pdf", content, "application/pdf"))],
+        )
+
+        assert response.status_code == 200
+        assert rasterized == [(1, 1), (2, 2)]
+        assert response.json()["document"]["pageCount"] == 2
+        assert response.json()["processingTimeMs"] < mock_ocr_result.processing_time_ms
+        engine.process_image_async.assert_not_awaited()
 
     def test_rejects_image_over_pixel_limit_before_calling_ocr(
         self, client, engine_override, sample_image_bytes, monkeypatch
