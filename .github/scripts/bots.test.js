@@ -9,7 +9,7 @@ const B = { dev: 'dev', qua: 'qua', prod: 'prod' };
 const base = { head: 'feature/23-login-com-jwt', base: 'dev', body: 'Closes #23', ownRepo: 'creative-mode/kixi', branches: B };
 
 test('PR conforme', () => assert.deepEqual(evaluate(base), []));
-test('Refs associa a issue da branch sem marcar a issue como concluída', () => {
+test('Refs associa a issue sem a classificar como encerrada', () => {
   assert.deepEqual(evaluate({ ...base, body: 'Refs #23' }), []);
   assert.deepEqual(closingRefs('Refs #23', 'creative-mode/kixi'), []);
   assert.deepEqual(linkedRefs('Refs #23', 'creative-mode/kixi'), [23]);
@@ -33,7 +33,7 @@ test('hotfix pode ir a prod; dependabot isento', () => {
   assert.deepEqual(evaluate({ ...base, head: 'dependabot/npm/x', body: '' }), []);
 });
 test('closingRefs', () => assert.deepEqual(closingRefs('Closes #1, #2', 'a/b'), [1, 2]));
-test('linkedRefs aceita refs internas e ignora outro repositório', () => {
+test('linkedRefs aceita refs internas e ignora refs de outro repositório', () => {
   assert.deepEqual(linkedRefs('Refs #1, creative-mode/kixi#2, creative-mode/kixi-frontend#3', 'creative-mode/kixi'), [1, 2]);
 });
 
@@ -93,6 +93,16 @@ test('merge do PR fecha a issue e avisa', async () => {
   assert.ok(posted.some((p) => p.issue_number === 105 && /Desbloqueada/.test(p.body)));
 });
 
+test('merge de PR que só referencia uma issue não a fecha nem envia alerta de conclusão', async () => {
+  const posted = [];
+  await alert({ github: mockGithub(posted), core, context: {
+    eventName: 'pull_request',
+    repo: { owner: 'creative-mode', repo: 'kixi' },
+    payload: { pull_request: { merged: true, number: 201, base: { ref: 'dev' }, body: 'Refs #105' } },
+  } });
+  assert.deepEqual(posted, []);
+});
+
 test('sem permissão cross-repo só gera aviso', async () => {
   const posted = [];
   await alert({ github: mockGithub(posted, new Set(['kixi-frontend'])), core, context: { eventName: 'issues', repo: { owner: 'creative-mode', repo: 'kixi' },
@@ -143,6 +153,39 @@ test('sync: issue aberta → Backlog; branch → In progress; PR → In review; 
   calls = [];
   await sync({ github: mockProject(calls), core, context: ctx('pull_request', { action: 'converted_to_draft', pull_request: { node_id: 'PR1', draft: true, body: 'Closes #104' } }) });
   assert.deepEqual(sets(calls), ['item-N104:o-In progress']);
+  delete process.env.PROJECT_TOKEN_SET;
+});
+
+test('sync: Refs vai a In review e regressa a In progress após merge sem encerrar a issue', async () => {
+  process.env.PROJECT_TOKEN_SET = 'true';
+  let calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'opened',
+    pull_request: { node_id: 'PR-REF', draft: false, body: 'Refs #425' },
+  }) });
+  assert.deepEqual(sets(calls), ['item-PR-REF:o-In review', 'item-N425:o-In review']);
+
+  calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'closed',
+    pull_request: { node_id: 'PR-REF', merged: true, body: 'Refs #425' },
+  }) });
+  assert.deepEqual(sets(calls), ['item-PR-REF:o-Done', 'item-N425:o-In progress']);
+  delete process.env.PROJECT_TOKEN_SET;
+});
+
+test('sync: merge fecha só a issue marcada Closes e mantém a issue Refs em progresso', async () => {
+  process.env.PROJECT_TOKEN_SET = 'true';
+  const calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'closed',
+    pull_request: { node_id: 'PR-MIXED', merged: true, body: 'Closes #104\nRefs #425' },
+  }) });
+  assert.deepEqual(sets(calls), [
+    'item-PR-MIXED:o-Done',
+    'item-N104:o-Done',
+    'item-N425:o-In progress',
+  ]);
   delete process.env.PROJECT_TOKEN_SET;
 });
 

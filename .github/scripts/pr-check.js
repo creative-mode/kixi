@@ -3,7 +3,7 @@
 //
 // Regras:
 //  1. A branch segue  <tipo>/<n.º da issue>-<descricao-curta>   (ex.: feature/23-login-com-jwt)
-//  2. O PR associa a issue: "Closes #23" ou "Refs #23" (o n.º coincide com a branch)
+//  2. O PR associa a issue da branch com "Closes #23" ou "Refs #23".
 //  3. O PR aponta para a branch de integração (dev). Promoções seguem dev → qua → prod.
 //  4. hotfix/* pode apontar a qualquer ambiente.
 
@@ -56,9 +56,9 @@ function evaluate({ head, base, body, ownRepo, branches, isBot = false }) {
 
   const refs = linkedRefs(body, ownRepo);
   if (refs.length === 0) {
-    problems.push('O PR tem de associar a issue da branch com `Closes #<n.º>` ou `Refs #<n.º>`.');
+    problems.push('O PR tem de associar a issue da branch com Closes ou Refs.');
   } else if (m && !refs.includes(Number(m[2]))) {
-    problems.push(`A branch refere a issue #${m[2]}, mas o PR só associa ${refs.map((n) => `#${n}`).join(', ')}. Acrescenta \`Refs #${m[2]}\` ou \`Closes #${m[2]}\`, ou corrige o nome da branch.`);
+    problems.push(`A branch refere a issue #${m[2]}, mas o PR só associa ${refs.map((n) => `#${n}`).join(', ')}. Acrescenta Refs ou Closes para #${m[2]}, ou corrige o nome da branch.`);
   }
   return problems;
 }
