@@ -90,7 +90,7 @@ public class AccountSessionGate {
         }
         Mono<Verdict> loaded = load(accountId)
                 .onErrorResume(error -> {
-                    log.warn("Could not revalidate account {}; trusting the token this time", accountId, error);
+                    log.warn("Could not revalidate an account session; trusting the token this time: type={}", error.getClass().getSimpleName());
                     cache.remove(accountId);
                     return Mono.just(Verdict.UNKNOWN);
                 })
