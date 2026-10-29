@@ -28,6 +28,8 @@ def test_stream_reports_preparation_each_completed_page_and_final_measured_resul
     engine = MagicMock()
 
     async def updates(*_args, **_kwargs):
+        yield {"type": "rasterized", "page": 1, "pageCount": 2}
+        yield {"type": "rasterized", "page": 2, "pageCount": 2}
         yield {"page": 1, "pageCount": 2, "timings": {"ocrMs": 12.5, "parsingMs": 2.0}}
         yield {"page": 2, "pageCount": 2, "timings": {"ocrMs": 15.0, "parsingMs": 3.0}}
         from app.ocr.engine import DocumentInfo, OCRResult

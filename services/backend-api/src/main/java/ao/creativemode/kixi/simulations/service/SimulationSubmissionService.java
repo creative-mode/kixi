@@ -100,7 +100,7 @@ public class SimulationSubmissionService {
         Mono<Simulation> lookup = staff
                 ? simulations.findByIdAndDeletedAtIsNull(id)
                 : simulations.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId);
-        return lookup.switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
+        return lookup.switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation not found: " + id)))
                 .flatMap(simulation -> {
                     if (simulation.getStatus() != SimulationStatus.IN_PROGRESS) {
                         return Mono.error(ApiException.conflict("Simulation has already been submitted"));

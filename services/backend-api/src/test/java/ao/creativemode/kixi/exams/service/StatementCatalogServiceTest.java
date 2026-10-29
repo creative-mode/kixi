@@ -13,7 +13,7 @@ import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Criteria;
 import ao.creativemode.kixi.exams.repository.StatementCatalogRepository.Sort;
-import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
+import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.service.MeService;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import java.util.List;
@@ -41,7 +41,7 @@ class StatementCatalogServiceTest {
         repository = mock(StatementCatalogRepository.class);
         meService = mock(MeService.class);
         service = new StatementCatalogService(repository, meService);
-        when(repository.findPage(any())).thenReturn(Flux.empty());
+        when(repository.findPageWithTotal(any())).thenReturn(Flux.empty());
         when(repository.count(any())).thenReturn(Mono.just(0L));
         when(repository.countQuestions(any())).thenReturn(Mono.just(java.util.Map.of()));
     }
@@ -100,7 +100,8 @@ class StatementCatalogServiceTest {
 
     @Test
     void anAccountWithNoAffiliationSeesEverySchool() {
-        when(meService.getMe(STUDENT)).thenReturn(Mono.just(me(null, null, null)));
+        when(meService.getCatalogAffiliation(STUDENT))
+                .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(null, null, null)));
 
         StepVerifier.create(service.catalog(filter(null, null, null, 0, 20), STUDENT))
                 .expectNextCount(1)
@@ -115,8 +116,9 @@ class StatementCatalogServiceTest {
     @Test
     void thePageCarriesTheTotalAcrossEveryPage() {
         givenTheStudentIsEnrolled();
-        when(repository.findPage(any())).thenReturn(Flux.just(statement(1L), statement(2L)));
-        when(repository.count(any())).thenReturn(Mono.just(45L));
+        when(repository.findPageWithTotal(any())).thenReturn(Flux.just(
+                new StatementCatalogRepository.PageRow(statement(1L), 45L),
+                new StatementCatalogRepository.PageRow(statement(2L), 45L)));
 
         StepVerifier.create(service.catalog(filter(null, null, null, 2, 10), STUDENT))
                 .assertNext(page -> {
@@ -134,10 +136,25 @@ class StatementCatalogServiceTest {
     }
 
     @Test
+    void anEmptyPageStillCarriesTheTotalUsingTheFallbackCount() {
+        givenTheStudentIsEnrolled();
+        when(repository.findPageWithTotal(any())).thenReturn(Flux.empty());
+        when(repository.count(any())).thenReturn(Mono.just(45L));
+
+        StepVerifier.create(service.catalog(filter(null, null, null, 5, 10), STUDENT))
+                .assertNext(page -> assertThat(page.content()).isEmpty())
+                .verifyComplete();
+
+        verify(repository).count(any());
+    }
+
+    @Test
     void everyStatementCarriesItsQuestionCountFromOneGroupedQuery() {
         // #178. A statement with no live questions is missing from the counts: zero.
         givenTheStudentIsEnrolled();
-        when(repository.findPage(any())).thenReturn(Flux.just(statement(1L), statement(2L)));
+        when(repository.findPageWithTotal(any())).thenReturn(Flux.just(
+                new StatementCatalogRepository.PageRow(statement(1L), 0L),
+                new StatementCatalogRepository.PageRow(statement(2L), 0L)));
         when(repository.countQuestions(List.of(1L, 2L))).thenReturn(Mono.just(java.util.Map.of(1L, 12L)));
 
         StepVerifier.create(service.catalog(filter(null, null, null, 0, 20), STUDENT))
@@ -189,28 +206,19 @@ class StatementCatalogServiceTest {
     }
 
     private void givenTheStudentIsEnrolled() {
-        when(meService.getMe(STUDENT)).thenReturn(Mono.just(me(ITEL, COURSE, CLASS)));
+        when(meService.getCatalogAffiliation(STUDENT))
+                .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(ITEL, COURSE, CLASS)));
     }
 
     private Criteria capturedCriteria() {
         ArgumentCaptor<Criteria> captor = ArgumentCaptor.forClass(Criteria.class);
-        verify(repository).findPage(captor.capture());
-        verify(repository).count(captor.getValue());
+        verify(repository).findPageWithTotal(captor.capture());
         return captor.getValue();
     }
 
     private static StatementCatalogFilter filter(Long institutionId, String scope, String sort, int page, int size) {
         return new StatementCatalogFilter(
                 institutionId, null, null, null, null, null, null, null, null, scope, sort, page, size);
-    }
-
-    private static MeResponse me(Long schoolId, Long courseId, Long classId) {
-        return new MeResponse(
-                STUDENT, "aluno", "aluno@itel.ao", "Ana", "Silva", null, List.of("STUDENT"),
-                schoolId == null ? null : new MeResponse.SchoolInfo(schoolId, "ITEL", "ITEL"),
-                courseId == null ? null : new MeResponse.CourseInfo(courseId, "TI", "Informática"),
-                classId == null ? null : new MeResponse.ClassInfo(classId, "TI12A", 12, 2024L, "2024/2025"),
-                false);
     }
 
     private static Statement statement(Long id) {

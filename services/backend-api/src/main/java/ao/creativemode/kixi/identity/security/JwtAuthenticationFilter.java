@@ -72,6 +72,14 @@ public class JwtAuthenticationFilter implements WebFilter {
     }
 
     private Mono<Void> authenticate(ServerWebExchange exchange, WebFilterChain chain, Long accountId, List<String> roles) {
+        if (roles.contains(IntegrationScope.ROLE)) {
+            // Uma conta de integração vale só o que IntegrationScope lista, e não soma papéis a isso.
+            if (!IntegrationScope.allows(exchange.getRequest().getMethod(), exchange.getRequest().getPath().value())) {
+                exchange.getResponse().setStatusCode(org.springframework.http.HttpStatus.FORBIDDEN);
+                return exchange.getResponse().setComplete();
+            }
+            roles = List.of(IntegrationScope.ROLE);
+        }
         List<SimpleGrantedAuthority> authorities = roles.stream()
                 .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
                 .collect(Collectors.toList());

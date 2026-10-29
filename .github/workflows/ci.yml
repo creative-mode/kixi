@@ -97,6 +97,23 @@ jobs:
         shell: bash
         run: ./mvnw -B test 2>&1 | tee "$RUNNER_TEMP/mvn.log"
 
+      # Cobertura (sem limite mínimo na primeira fase): o resumo vai para a página do job e o relatório fica como artefacto.
+      - name: Cobertura JaCoCo
+        if: always()
+        shell: bash
+        run: |
+          if [ -f target/site/jacoco/jacoco.csv ]; then
+            awk -F, 'NR>1 {m+=$4; c+=$5; bm+=$6; bc+=$7} END {printf "### Cobertura (JaCoCo)\n\n- Instruções: %.1f%%\n- Ramos: %.1f%%\n", 100*c/(m+c), 100*bc/(bm+bc)}' target/site/jacoco/jacoco.csv >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Relatório de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-backend
+          path: services/backend-api/target/site/jacoco
+          if-no-files-found: ignore
+
       # O registo completo do job não é descarregável por quem usa só a API; as linhas de erro
       # do Maven passam a anotações, que se leem na página da verificação.
       - name: Erros do Maven em anotações

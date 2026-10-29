@@ -11,6 +11,8 @@ Components:
 
 from .engine import (
     OCREngine,
+    OCRProcessWorker,
+    OCRPageInputError,
     OCRResult,
     DocumentInfo,
     get_engine,
@@ -44,6 +46,8 @@ from .formulas import FormulaSegment, extract_inline_formulas, recognize_region
 __all__ = [
     # Engine
     "OCREngine",
+    "OCRProcessWorker",
+    "OCRPageInputError",
     "OCRResult",
     "DocumentInfo",
     "get_engine",

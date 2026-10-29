@@ -6,11 +6,12 @@ formulas) that the postprocessor ties to the questions. PaddleOCR-VL is availabl
 """
 
 import asyncio
+import multiprocessing
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import Optional, List, Dict, Any, Tuple, Callable
+from typing import Optional, List, Dict, Any, Tuple, Callable, Iterable
 import hashlib
 import re
 import uuid
@@ -46,6 +47,11 @@ from app.ocr.postprocessing import (
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+class OCRPageInputError(Exception):
+    """A lazy page source failed while preparing an OCR input page."""
+
 
 # PaddleOCR is loaded lazily because model dependencies are expensive and the
 # service must remain importable for unit tests and health endpoints.
@@ -390,9 +396,9 @@ class OCREngine:
         fallback_predictions: FormulaPredictions,
         page_index: int,
     ) -> FormulaPredictions:
-        """Keep formula reads from the enhanced image when fallback OCR uses the raw photo.
+        """Keep formula reads from the enhanced image when the secondary OCR pass uses the raw photo.
 
-        The fallback detector is better at recovering faint prose, but its formula
+        A separately configured fallback detector may recover faint prose, but its formula
         crops can lose contrast or become clipped. Layout boxes can shift slightly
         between the two image frames, so match them by overlap rather than exact keys.
         An explicit fallback prediction remains authoritative; a primary prediction
@@ -513,7 +519,7 @@ class OCREngine:
 
         Args:
             image: Image as numpy array (BGR format)
-            fallback: Use the slower detector that sees the faint lines the fast one misses
+            fallback: Run the second pass at higher resolution or with the separately configured detector
 
         Returns:
             PaddleOCR 3.x results: one dict-like per image with rec_texts, rec_scores and rec_polys
@@ -521,6 +527,13 @@ class OCREngine:
         self._ensure_initialized()
 
         if fallback:
+            if settings.ocr_fallback_det_model_name == self.det_model_name:
+                if self._ocr is None:
+                    raise RuntimeError("OCR engine is not initialized")
+                return list(self._ocr.predict(
+                    image,
+                    text_det_limit_side_len=settings.ocr_fallback_det_max_side_len,
+                ))
             if self._fallback_ocr is None:
                 self._fallback_ocr = _get_paddle_ocr()(**self._ocr_options(settings.ocr_fallback_det_model_name))
             return list(self._fallback_ocr.predict(image))
@@ -924,11 +937,8 @@ class OCREngine:
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
             parsing_ms = time.perf_counter() - parsing_started
 
-            # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
-            # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
-            # fast detector hide faint lines from the thorough one (the parcelar exam gave 3 of its 5 questions on
-            # the preprocessed image, and finds the lines of the other two on the raw one). Its layout is taken
-            # on the same image, so text, figures and the crop frame all share one set of coordinates.
+            # A page the primary pass could not make questions of, or numbered with gaps, is read again on the
+            # original photo at higher detector resolution. Layout and formula crops keep the same image frame.
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
@@ -1144,12 +1154,14 @@ class OCREngine:
         on_page_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
         cancelled: Optional[threading.Event] = None,
         native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
     ) -> OCRResult:
         """
         Process pages sequentially and report measured completion after each page.
 
         Args:
-            images: List of images as numpy arrays
+            images: Images as numpy arrays. Iterators require an explicit page_count.
             request_id: Optional request ID for tracking
 
         Returns:
@@ -1158,13 +1170,18 @@ class OCREngine:
         start_time = time.perf_counter()
         request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
 
+        if page_count is None:
+            if not hasattr(images, "__len__"):
+                raise ValueError("page_count is required for an image iterator")
+            page_count = len(images)  # type: ignore[arg-type]
+
         logger.info(
             "Processing multiple images",
             request_id=request_id,
-            num_images=len(images),
+            num_images=page_count,
         )
 
-        if not images:
+        if page_count == 0:
             return OCRResult(
                 status="error",
                 request_id=request_id,
@@ -1197,9 +1214,20 @@ class OCREngine:
             "parsingMs": 0.0,
         }
 
-        for idx, image in enumerate(images):
+        processed_pages = 0
+        image_iterator = iter(images)
+        while True:
             if cancelled is not None and cancelled.is_set():
                 break
+            try:
+                image = next(image_iterator)
+            except StopIteration:
+                break
+            idx = processed_pages
+            if on_page_rasterized is not None:
+                on_page_rasterized(idx + 1)
+                if cancelled is not None and cancelled.is_set():
+                    break
             result = self.process_image(
                 image,
                 page_index=idx,
@@ -1239,9 +1267,10 @@ class OCREngine:
             if on_page_complete is not None:
                 on_page_complete({
                     "page": idx + 1,
-                    "pageCount": len(images),
+                    "pageCount": page_count,
                     "timings": result.timings or {},
                 })
+            processed_pages += 1
 
             # Use metadata from first page
             if idx == 0:
@@ -1250,7 +1279,7 @@ class OCREngine:
         # Parse the complete document after each page has been recognized. This retains streaming page
         # progress but lets a question or alínea continue across a physical page break without dropping text.
         combined_parsing_ms = 0.0
-        if len(page_contexts) == len(images) and page_contexts:
+        if processed_pages == page_count and page_contexts:
             combined_started = time.perf_counter()
             all_blocks = [block for page in page_contexts for block in page.text_blocks]
             page_dimensions = {page.page_index: (page.width, page.height) for page in page_contexts}
@@ -1267,7 +1296,7 @@ class OCREngine:
             }
             metadata, all_questions, all_images_to_upload, all_unmapped, document_warnings = self.postprocessor.process(
                 all_blocks,
-                page_count=len(images),
+                page_count=page_count,
                 page_dimensions=page_dimensions,
                 source_file_indices=source_indices,
                 layout_regions=layout_regions,
@@ -1292,7 +1321,16 @@ class OCREngine:
                     all_warnings.append(warning)
 
         # Determine main language (most common)
-        main_language = max(set(languages), key=languages.count) if languages else self.lang
+        if languages:
+            language_counts = {language: languages.count(language) for language in set(languages)}
+            highest_language_count = max(language_counts.values())
+            main_language = (
+                self.lang
+                if language_counts.get(self.lang) == highest_language_count
+                else next(language for language in languages if language_counts[language] == highest_language_count)
+            )
+        else:
+            main_language = self.lang
 
         # Calculate overall confidence
         if all_questions:
@@ -1308,7 +1346,7 @@ class OCREngine:
         if not all_questions and not read_any_text:
             status = "error"
         elif has_unreadable_page or has_partial_content_page or (
-            has_partial_page and len(page_contexts) < len(images)
+            has_partial_page and len(page_contexts) < page_count
         ) or not all_questions or overall_confidence < 0.5:
             status = "partial"
         else:
@@ -1320,7 +1358,7 @@ class OCREngine:
             processing_time_ms=processing_time_ms,
             overall_confidence=overall_confidence,
             document=DocumentInfo(
-                page_count=len(images),
+                page_count=page_count,
                 main_language=main_language,
                 has_tables=has_tables,
             ),
@@ -1338,10 +1376,12 @@ class OCREngine:
 
     async def process_images_progress_async(
         self,
-        images: List[np.ndarray],
+        images: Iterable[np.ndarray],
         request_id: Optional[str] = None,
         source_file_indices: Optional[List[int]] = None,
         native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
     ):
         """Yield a bounded, backpressured event after each completed page and then the result."""
         loop = asyncio.get_running_loop()
@@ -1360,6 +1400,11 @@ class OCREngine:
                     return
             pending.cancel()
 
+        def report_rasterized(page: int) -> None:
+            if on_page_rasterized is not None:
+                extra = on_page_rasterized(page) or {}
+                report({"type": "rasterized", "page": page, "pageCount": page_count, **extra})
+
         task = loop.run_in_executor(
             self._executor,
             self.process_images_with_progress,
@@ -1369,6 +1414,8 @@ class OCREngine:
             report,
             cancelled,
             native_text_pages,
+            page_count,
+            report_rasterized,
         )
         try:
             while not task.done():
@@ -1504,11 +1551,346 @@ class OCREngine:
         self._initialized = False
 
 
-# Default engine instance
-_default_engine: Optional[OCREngine] = None
+def _ocr_process_main(connection) -> None:
+    """Own Paddle in a killable process so cancellation can stop native inference."""
+    engine = OCREngine(
+        lang=settings.ocr_lang,
+        use_gpu=settings.ocr_use_gpu,
+        use_angle_cls=settings.ocr_use_angle_cls,
+        det_model_dir=settings.ocr_det_model_dir,
+        rec_model_dir=settings.ocr_rec_model_dir,
+        cls_model_dir=settings.ocr_cls_model_dir,
+        show_log=settings.ocr_show_log,
+    )
+    try:
+        engine.initialize()
+        connection.send({"type": "ready"})
+        while True:
+            command = connection.recv()
+            if command["type"] == "shutdown":
+                engine.shutdown()
+                return
+            if command["type"] == "progress":
+                source_indices: List[int] = []
+                native_pages: List[Optional[Dict[str, Any]]] = []
+
+                def pages():
+                    while True:
+                        item = connection.recv()
+                        if item["type"] == "end":
+                            return
+                        if item["type"] == "feed_error":
+                            if item.get("error_kind") == "transport":
+                                raise RuntimeError("OCR page transport failed")
+                            raise OCRPageInputError("OCR page input could not be prepared")
+                        source_indices.append(item["source_file_index"])
+                        native_pages.append(item["native_text_page"])
+                        yield item["image"]
+
+                try:
+                    result = engine.process_images_with_progress(
+                        pages(),
+                        command["request_id"],
+                        source_indices,
+                        lambda event: connection.send({"type": "event", "event": event}),
+                        native_text_pages=native_pages,
+                        page_count=command["page_count"],
+                        on_page_rasterized=lambda page: connection.send(
+                            {"type": "rasterized", "page": page}
+                        ),
+                    )
+                    connection.send({"type": "result", "result": result})
+                except BaseException as error:
+                    connection.send({
+                        "type": "input_error" if isinstance(error, OCRPageInputError) else "error",
+                        "error_type": type(error).__name__,
+                    })
+                continue
+
+            try:
+                operation = command["type"]
+                if operation == "process_image":
+                    result = engine.process_image(**command["kwargs"])
+                elif operation == "process_images":
+                    result = engine.process_images(**command["kwargs"])
+                else:
+                    raise ValueError("Unsupported OCR worker operation")
+                connection.send({"type": "result", "result": result})
+            except BaseException as error:
+                connection.send({"type": "error", "error_type": type(error).__name__})
+    except BaseException as error:
+        try:
+            connection.send({"type": "startup_error", "error_type": type(error).__name__})
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        connection.close()
 
 
-def get_engine() -> OCREngine:
+class OCRProcessWorker:
+    """Serialize OCR through a persistent, killable Paddle process."""
+
+    def __init__(self, process_target=_ocr_process_main):
+        self._context = multiprocessing.get_context("spawn")
+        self._process_target = process_target
+        self._process = None
+        self._connection = None
+        self._lock = asyncio.Lock()
+        self._ready = False
+
+    def initialize(self) -> None:
+        self._ensure_process()
+
+    def _ensure_process(self) -> None:
+        if self._process is not None and self._process.is_alive() and self._ready:
+            return
+        self._stop_process()
+        parent, child = self._context.Pipe(duplex=True)
+        process = self._context.Process(
+            target=self._process_target,
+            args=(child,),
+            name="kixi-ocr-inference",
+            daemon=True,
+        )
+        try:
+            process.start()
+        except BaseException:
+            parent.close()
+            child.close()
+            raise
+        child.close()
+        self._process, self._connection = process, parent
+        if not parent.poll(240):
+            self._stop_process()
+            raise TimeoutError("OCR inference worker initialization timed out")
+        message = parent.recv()
+        if message.get("type") != "ready":
+            self._stop_process()
+            raise RuntimeError(
+                f"OCR inference worker failed to initialize ({message.get('error_type', 'unknown')})"
+            )
+        self._ready = True
+
+    def _stop_process(self) -> None:
+        process, connection = self._process, self._connection
+        self._process = self._connection = None
+        self._ready = False
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        if process is not None:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            if not process.is_alive():
+                process.close()
+
+    def shutdown(self) -> None:
+        process, connection = self._process, self._connection
+        if process is not None and process.is_alive() and connection is not None:
+            try:
+                connection.send({"type": "shutdown"})
+                process.join(timeout=5)
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+        self._stop_process()
+
+    def health_check(self) -> Dict[str, Any]:
+        alive = self._process is not None and self._process.is_alive() and self._ready
+        return {
+            "status": "healthy" if alive else "not_initialized",
+            "initialized": bool(alive),
+            "message": "OCR worker ready" if alive else "OCR worker starts on demand",
+        }
+
+    async def _call(self, operation: str, **kwargs):
+        async with self._lock:
+            await asyncio.to_thread(self._ensure_process)
+            connection = self._connection
+            await asyncio.to_thread(connection.send, {"type": operation, "kwargs": kwargs})
+            message = await asyncio.to_thread(self._receive)
+            if message["type"] != "result":
+                raise RuntimeError(f"OCR worker failed ({message.get('error_type', 'unknown')})")
+            return message["result"]
+
+    def _receive(self):
+        connection = self._connection
+        while True:
+            if connection.poll(0.25):
+                return connection.recv()
+            if self._process is None or not self._process.is_alive():
+                raise RuntimeError("OCR inference worker exited unexpectedly")
+
+    def process_image(self, image: np.ndarray, page_index: int = 0,
+                      request_id: Optional[str] = None, source_file_index: int = 0,
+                      native_text_page: Optional[Dict[str, Any]] = None) -> OCRResult:
+        return asyncio.run(self._call(
+            "process_image", image=image, page_index=page_index,
+            request_id=request_id, source_file_index=source_file_index,
+            native_text_page=native_text_page,
+        ))
+
+    async def process_image_async(self, image: np.ndarray, page_index: int = 0,
+                                  request_id: Optional[str] = None,
+                                  source_file_index: int = 0) -> OCRResult:
+        return await self._call("process_image", image=image, page_index=page_index,
+                                request_id=request_id, source_file_index=source_file_index)
+
+    def process_images(self, images: List[np.ndarray], request_id: Optional[str] = None,
+                       source_file_indices: Optional[List[int]] = None) -> OCRResult:
+        return asyncio.run(self.process_images_async(images, request_id, source_file_indices))
+
+    async def process_images_async(self, images: List[np.ndarray],
+                                   request_id: Optional[str] = None,
+                                   source_file_indices: Optional[List[int]] = None) -> OCRResult:
+        return await self._call("process_images", images=images, request_id=request_id,
+                                source_file_indices=source_file_indices)
+
+    async def process_images_progress_async(
+        self,
+        images: Iterable[np.ndarray],
+        request_id: Optional[str] = None,
+        source_file_indices: Optional[List[int]] = None,
+        native_text_pages: Optional[List[Optional[Dict[str, Any]]]] = None,
+        page_count: Optional[int] = None,
+        on_page_rasterized: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
+    ):
+        if page_count is None:
+            if not hasattr(images, "__len__"):
+                raise ValueError("page_count is required for an image iterator")
+            page_count = len(images)  # type: ignore[arg-type]
+        sources = source_file_indices if source_file_indices is not None else []
+        native_pages = native_text_pages if native_text_pages is not None else []
+
+        async with self._lock:
+            await asyncio.to_thread(self._ensure_process)
+            connection = self._connection
+            connection.send({"type": "progress", "request_id": request_id,
+                             "page_count": page_count})
+            feeder_cancelled = threading.Event()
+            feeder = asyncio.create_task(asyncio.to_thread(
+                self._feed_pages, connection, images, sources, native_pages, feeder_cancelled
+            ))
+            completed = False
+            try:
+                while True:
+                    message = await asyncio.to_thread(self._receive)
+                    if message["type"] == "event":
+                        yield message["event"]
+                    elif message["type"] == "rasterized":
+                        extra = on_page_rasterized(message["page"]) if on_page_rasterized else {}
+                        yield {"type": "rasterized", "page": message["page"], **(extra or {})}
+                    elif message["type"] == "result":
+                        await feeder
+                        completed = True
+                        yield {"type": "result", "result": message["result"]}
+                        return
+                    elif message["type"] == "input_error":
+                        await feeder
+                        completed = True
+                        raise OCRPageInputError("OCR page input could not be prepared")
+                    else:
+                        raise RuntimeError(
+                            f"OCR worker failed ({message.get('error_type', 'unknown')})"
+                        )
+            finally:
+                if not completed:
+                    feeder_cancelled.set()
+                    process = self._process
+                    logger.info(
+                        "Terminating OCR inference process after request cancellation",
+                        request_id=request_id,
+                        worker_pid=process.pid if process is not None else None,
+                    )
+                    await asyncio.to_thread(self._stop_process)
+                    if not feeder.done():
+                        feeder.cancel()
+
+    @staticmethod
+    def _feed_pages(
+        connection,
+        images,
+        source_indices,
+        native_pages,
+        cancelled: Optional[threading.Event] = None,
+    ) -> None:
+        def should_stop() -> bool:
+            return cancelled is not None and cancelled.is_set()
+
+        def report_input_error(error: Exception, *, error_kind: str = "source") -> None:
+            if should_stop():
+                return
+            try:
+                connection.send({
+                    "type": "feed_error",
+                    "error_type": type(error).__name__,
+                    "error_kind": error_kind,
+                })
+            except (BrokenPipeError, EOFError, OSError, RuntimeError):
+                pass
+
+        try:
+            image_iterator = iter(images)
+        except Exception as error:
+            report_input_error(error)
+            return
+
+        index = 0
+        while True:
+            if should_stop():
+                return
+            try:
+                image = next(image_iterator)
+            except StopIteration:
+                break
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
+                source_index = source_indices[index] if index < len(source_indices) else 0
+                native_page = native_pages[index] if index < len(native_pages) else None
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
+                connection.send({"type": "page", "image": image,
+                                 "source_file_index": source_index,
+                                 "native_text_page": native_page})
+            except (BrokenPipeError, EOFError, OSError):
+                return
+            except Exception as error:
+                report_input_error(error, error_kind="transport")
+                return
+            index += 1
+
+        if should_stop():
+            return
+        try:
+            connection.send({"type": "end"})
+        except (BrokenPipeError, EOFError, OSError):
+            return
+        except Exception as error:
+            report_input_error(error, error_kind="transport")
+
+
+# Default engine process
+_default_engine: Optional[OCRProcessWorker] = None
+
+
+def get_engine() -> OCRProcessWorker:
     """
     Get the default OCR engine instance.
 
@@ -1517,15 +1899,7 @@ def get_engine() -> OCREngine:
     global _default_engine
 
     if _default_engine is None:
-        _default_engine = OCREngine(
-            lang=settings.ocr_lang,
-            use_gpu=settings.ocr_use_gpu,
-            use_angle_cls=settings.ocr_use_angle_cls,
-            det_model_dir=settings.ocr_det_model_dir,
-            rec_model_dir=settings.ocr_rec_model_dir,
-            cls_model_dir=settings.ocr_cls_model_dir,
-            show_log=settings.ocr_show_log,
-        )
+        _default_engine = OCRProcessWorker()
 
     return _default_engine
 

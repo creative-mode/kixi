@@ -90,6 +90,11 @@ public class ApiAbuseRateLimiter {
                 properties.getSearchMaxAttempts(), properties.getSearchWindowSeconds(), "search");
     }
 
+    public Mono<Void> checkReport(Long accountId) {
+        return check("report:account:" + accountId,
+                properties.getReportMaxAttempts(), properties.getReportWindowSeconds(), "report");
+    }
+
     private Mono<Void> check(String rawKey, int maxAttempts, long windowSeconds, String scope) {
         String rateKey = hash(rawKey);
         return databaseClient.sql(CLEANUP_SQL)

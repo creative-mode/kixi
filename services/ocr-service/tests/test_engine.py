@@ -20,6 +20,7 @@ from app.ocr.engine import (
     OCRResult,
     PageOcrContext,
     DocumentInfo,
+    OCRProcessWorker,
     get_engine,
     initialize_engine,
     shutdown_engine,
@@ -598,6 +599,150 @@ class TestExtractedQuestion:
 class TestOCREngine:
     """Tests for OCREngine class."""
 
+    @pytest.mark.parametrize("error", [ValueError("bad page"), RuntimeError("renderer failed")])
+    def test_page_feeder_notifies_worker_when_lazy_rasterization_fails(self, error):
+        connection = MagicMock()
+
+        def pages():
+            yield np.zeros((2, 2, 3), dtype=np.uint8)
+            raise error
+
+        OCRProcessWorker._feed_pages(connection, pages(), [0], [])
+
+        messages = [call.args[0] for call in connection.send.call_args_list]
+        assert [message["type"] for message in messages] == ["page", "feed_error"]
+        assert messages[-1]["error_type"] == type(error).__name__
+        assert messages[-1]["error_kind"] == "source"
+
+    def test_page_feeder_reports_unexpected_send_errors_when_the_pipe_remains_usable(self):
+        connection = MagicMock()
+        sent = []
+
+        def send(message):
+            if message["type"] == "page":
+                raise RuntimeError("page could not be serialized")
+            sent.append(message)
+
+        connection.send.side_effect = send
+        pages = [np.zeros((2, 2, 3), dtype=np.uint8)]
+
+        OCRProcessWorker._feed_pages(connection, pages, [0], [])
+
+        assert [message["type"] for message in sent] == ["feed_error"]
+        assert sent[0]["error_type"] == "RuntimeError"
+        assert sent[0]["error_kind"] == "transport"
+
+    def test_ocr_process_preserves_page_transport_failure_as_server_error(self, monkeypatch):
+        from app.ocr import engine as engine_module
+
+        class Connection:
+            def __init__(self):
+                self.incoming = iter([
+                    {"type": "progress", "request_id": "req-test", "page_count": 1},
+                    {"type": "feed_error", "error_type": "RuntimeError", "error_kind": "transport"},
+                    {"type": "shutdown"},
+                ])
+                self.sent = []
+
+            def recv(self):
+                return next(self.incoming)
+
+            def send(self, message):
+                self.sent.append(message)
+
+            def close(self):
+                pass
+
+        class Engine:
+            def __init__(self, **_kwargs):
+                pass
+
+            def initialize(self):
+                pass
+
+            def process_images_with_progress(self, pages, *_args, **_kwargs):
+                list(pages)
+
+            def shutdown(self):
+                pass
+
+        connection = Connection()
+        monkeypatch.setattr(engine_module, "OCREngine", Engine)
+
+        engine_module._ocr_process_main(connection)
+
+        assert connection.sent[0] == {"type": "ready"}
+        assert connection.sent[1] == {
+            "type": "error",
+            "error_type": "RuntimeError",
+        }
+
+    def test_ocr_process_preserves_lazy_page_input_failure(self, monkeypatch):
+        from app.ocr import engine as engine_module
+
+        class Connection:
+            def __init__(self):
+                self.incoming = iter([
+                    {"type": "progress", "request_id": "req-test", "page_count": 2},
+                    {"type": "page", "image": np.zeros((2, 2, 3)),
+                     "source_file_index": 0, "native_text_page": None},
+                    {"type": "feed_error", "error_type": "RuntimeError"},
+                    {"type": "shutdown"},
+                ])
+                self.sent = []
+
+            def recv(self):
+                return next(self.incoming)
+
+            def send(self, message):
+                self.sent.append(message)
+
+            def close(self):
+                pass
+
+        class Engine:
+            def __init__(self, **_kwargs):
+                pass
+
+            def initialize(self):
+                pass
+
+            def process_images_with_progress(self, pages, *_args, **_kwargs):
+                list(pages)
+
+            def shutdown(self):
+                pass
+
+        connection = Connection()
+        monkeypatch.setattr(engine_module, "OCREngine", Engine)
+
+        engine_module._ocr_process_main(connection)
+
+        assert connection.sent[0] == {"type": "ready"}
+        assert connection.sent[1] == {
+            "type": "input_error",
+            "error_type": "OCRPageInputError",
+        }
+
+    def test_fallback_reuses_primary_detector_at_higher_resolution_when_configured_identically(
+        self, sample_image, monkeypatch
+    ):
+        engine = OCREngine()
+        engine._initialized = True
+        engine._ocr = MagicMock()
+        engine._ocr.predict.return_value = [{"rec_texts": ["1."], "rec_scores": [0.9]}]
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_model_name", engine.det_model_name)
+        monkeypatch.setattr("app.ocr.engine.settings.ocr_fallback_det_max_side_len", 2048)
+        paddle_ocr = MagicMock()
+        monkeypatch.setattr("app.ocr.engine._get_paddle_ocr", lambda: paddle_ocr)
+
+        result = engine._run_ocr(sample_image, fallback=True)
+
+        assert len(result) == 1
+        engine._ocr.predict.assert_called_once_with(sample_image, text_det_limit_side_len=2048)
+        paddle_ocr.assert_not_called()
+        assert engine._fallback_ocr is None
+
     def test_init(self):
         """Test engine initialization."""
         engine = OCREngine(
@@ -851,6 +996,18 @@ class TestOCREngine:
 
         assert result.status == "error"
 
+    def test_main_language_ties_prefer_configured_language(self, sample_image):
+        engine = OCREngine()
+        first = self._page_result("success")
+        first.document.main_language = "en"
+        second = self._page_result("success")
+        second.document.main_language = "pt"
+        engine.process_image = MagicMock(side_effect=[first, second])
+
+        result = engine.process_images([sample_image, sample_image], request_id="req-language-tie")
+
+        assert result.document.main_language == "pt"
+
     def test_shutdown(self):
         """Test engine shutdown."""
         engine = OCREngine()
@@ -925,7 +1082,8 @@ class TestModuleFunctions:
         """Test that get_engine creates a new instance."""
         engine = get_engine()
 
-        assert isinstance(engine, OCREngine)
+        from app.ocr.engine import OCRProcessWorker
+        assert isinstance(engine, OCRProcessWorker)
 
     @patch("app.ocr.engine._default_engine", None)
     def test_get_engine_returns_same_instance(self):
@@ -935,16 +1093,12 @@ class TestModuleFunctions:
 
         assert engine1 is engine2
 
-    @patch("app.ocr.engine.PaddleOCR")
+    @patch("app.ocr.engine.OCRProcessWorker.initialize")
     @patch("app.ocr.engine._default_engine", None)
-    def test_initialize_engine(self, mock_paddle):
+    def test_initialize_engine(self, mock_initialize):
         """Test initialize_engine function."""
-        mock_paddle.return_value = MagicMock()
-
         initialize_engine()
-
-        engine = get_engine()
-        assert engine._initialized is True
+        mock_initialize.assert_called_once()
 
     @patch("app.ocr.engine._default_engine")
     def test_shutdown_engine(self, mock_engine):
@@ -1070,6 +1224,24 @@ class TestVlPipeline:
 @pytest.mark.integration
 class TestOCRIntegration:
     """Integration tests that require actual PaddleOCR."""
+
+    @pytest.mark.slow
+    def test_real_paddle_predict_accepts_fallback_detection_limit(self, monkeypatch):
+        """Exercise the fallback keyword against PaddleOCR, not a mocked predict()."""
+        fixture_path = Path(__file__).parent / "fixtures" / "ogi_12b.png"
+        image = cv2.imread(str(fixture_path))
+        assert image is not None, f"Could not read integration fixture: {fixture_path}"
+
+        engine = OCREngine()
+        monkeypatch.setattr(
+            "app.ocr.engine.settings.ocr_fallback_det_model_name",
+            engine.det_model_name,
+        )
+
+        results = engine._run_ocr(image, fallback=True)
+
+        assert isinstance(results, list)
+        assert results
 
     @pytest.mark.slow
     def test_real_exam_upload_pipeline_reads_image_and_pdf(self):

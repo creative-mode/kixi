@@ -659,6 +659,53 @@ class SimulationServiceTest {
         verify(repository).delete(deleted);
     }
 
+    @Test
+    void findAllAuthorizedPagesInIdOrderAndReportsTheTotal() {
+        Simulation one = simulation(1L, SimulationStatus.FINISHED);
+        Simulation two = simulation(2L, SimulationStatus.FINISHED);
+        Simulation three = simulation(3L, SimulationStatus.FINISHED);
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.just(three, one, two));
+        for (Simulation each : java.util.List.of(one, two, three)) {
+            when(repository.findByIdAndDeletedAtIsNull(each.getId())).thenReturn(Mono.just(each));
+        }
+
+        StepVerifier.create(service.findAllAuthorized(9L, true, false, null, null, 1, 2))
+                .assertNext(page -> {
+                    assertThat(page.total()).isEqualTo(3);
+                    assertThat(page.items()).extracting(item -> item.id()).containsExactly(3L);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void findAllAuthorizedReadsEachAccountStatementAndYearOncePerRequest() {
+        Simulation one = simulation(1L, SimulationStatus.FINISHED);
+        Simulation two = simulation(2L, SimulationStatus.FINISHED);
+        when(repository.findByDeletedAtIsNull()).thenReturn(Flux.just(one, two));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(one));
+        when(repository.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(two));
+
+        StepVerifier.create(service.findAllAuthorized(9L, true, false, null, null, null, null))
+                .assertNext(page -> assertThat(page.items()).hasSize(2))
+                .verifyComplete();
+
+        org.mockito.Mockito.verify(accountRepository, org.mockito.Mockito.times(1)).findById(1L);
+        org.mockito.Mockito.verify(statementRepository, org.mockito.Mockito.times(1)).findById(1L);
+        org.mockito.Mockito.verify(schoolYearRepository, org.mockito.Mockito.times(1)).findById(1L);
+    }
+
+    @Test
+    void findAllAuthorizedWithAFilterUsesTheFilteredQuery() {
+        Simulation one = simulation(1L, SimulationStatus.FINISHED);
+        when(repository.findActiveFiltered(1L, "FINISHED")).thenReturn(Flux.just(one));
+        when(repository.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(one));
+
+        StepVerifier.create(service.findAllAuthorized(9L, true, false, 1L, SimulationStatus.FINISHED, null, null))
+                .assertNext(page -> assertThat(page.total()).isEqualTo(1))
+                .verifyComplete();
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).findByDeletedAtIsNull();
+    }
+
     private Simulation simulation(Long id, SimulationStatus status) {
         Simulation simulation = new Simulation();
         simulation.setId(id);

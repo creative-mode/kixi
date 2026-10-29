@@ -82,7 +82,7 @@ public class SimulationResultService {
                 : simulations.findByIdAndAccountIdAndDeletedAtIsNull(simulationId, accountId))
             // A simulation that belongs to somebody else is not found, the same
             // answer as one that does not exist.
-            .switchIfEmpty(Mono.error(ApiException.notFound(
+            .switchIfEmpty(Mono.error(() -> ApiException.notFound(
                 "Simulation not found: " + simulationId)))
             .flatMap(this::requireFinished)
             .flatMap(simulation -> answerKeyVisible(simulation)
