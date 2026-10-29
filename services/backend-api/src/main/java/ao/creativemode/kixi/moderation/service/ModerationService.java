@@ -128,6 +128,8 @@ public class ModerationService implements BlockedAccountReader {
     private Mono<BlockResponse> atomicToggle(Long low, Long high) {
         return blocks.togglePair(low, high)
                 .defaultIfEmpty(false)
-                .map(BlockResponse::new);
+                .map(BlockResponse::new)
+                .onErrorMap(DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("Could not update the block state"));
     }
 }
