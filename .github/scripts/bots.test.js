@@ -15,7 +15,7 @@ test('Refs associa a issue sem a classificar como encerrada', () => {
   assert.deepEqual(linkedRefs('Refs #23', 'creative-mode/kixi'), [23]);
 });
 test('branch fora do padrão', () => assert.equal(evaluate({ ...base, head: 'feat/auth-register' }).length, 1));
-test('destino errado', () => assert.match(evaluate({ ...base, base: 'prod' })[0], /apontam para `dev`/));
+test('destino errado', () => assert.match(evaluate({ ...base, base: 'qua' })[0], /apontam para `dev`/));
 test('sem referência', () => assert.match(evaluate({ ...base, body: 'só texto' })[0], /associar a issue/));
 test('Closes de outra issue', () => assert.match(evaluate({ ...base, body: 'Closes #99' })[0], /refere a issue #23/));
 test('Refs de outra issue não satisfaz a associação da branch', () => assert.match(evaluate({ ...base, body: 'Refs #99' })[0], /branch refere a issue #23/));
@@ -28,9 +28,13 @@ test('promoções', () => {
   assert.deepEqual(evaluate({ ...base, head: 'qua', base: 'prod', body: '' }), []);
   assert.equal(evaluate({ ...base, head: 'dev', base: 'prod', body: '' }).length, 1);
 });
-test('hotfix pode ir a prod; dependabot isento', () => {
-  assert.deepEqual(evaluate({ ...base, head: 'hotfix/40-crash', base: 'prod', body: 'Closes #40' }), []);
+test('hotfix não escapa a prod; dependabot isento', () => {
+  assert.match(evaluate({ ...base, head: 'hotfix/40-crash', base: 'prod', body: 'Closes #40' })[0], /só aceita merges vindos de `qua`/);
+  assert.deepEqual(evaluate({ ...base, head: 'hotfix/40-crash', base: 'dev', body: 'Closes #40' }), []);
   assert.deepEqual(evaluate({ ...base, head: 'dependabot/npm/x', body: '' }), []);
+});
+test('prod só aceita qua, nem branch normal escapa', () => {
+  assert.match(evaluate({ ...base, base: 'prod' })[0], /só aceita merges vindos de `qua`/);
 });
 test('closingRefs', () => assert.deepEqual(closingRefs('Closes #1, #2', 'a/b'), [1, 2]));
 test('linkedRefs aceita refs internas e ignora refs de outro repositório', () => {
