@@ -14,6 +14,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.institutions.repository.ProfileSettingRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.BlockedAccountReader;
 import ao.creativemode.kixi.shared.service.PublicStatsReader;
 import java.util.List;
 import java.util.Optional;
@@ -38,6 +39,7 @@ public class PersonProfileService {
     private final InstitutionRepository institutions;
     private final ProfileSettingRepository settings;
     private final PublicStatsReader stats;
+    private final BlockedAccountReader blockedAccounts;
 
     public PersonProfileService(
         UserRepository users,
@@ -46,7 +48,8 @@ public class PersonProfileService {
         InstitutionTeacherRepository teacherLinks,
         InstitutionRepository institutions,
         ProfileSettingRepository settings,
-        PublicStatsReader stats
+        PublicStatsReader stats,
+        BlockedAccountReader blockedAccounts
     ) {
         this.users = users;
         this.teachers = teachers;
@@ -55,16 +58,20 @@ public class PersonProfileService {
         this.institutions = institutions;
         this.settings = settings;
         this.stats = stats;
+        this.blockedAccounts = blockedAccounts;
     }
 
     public Mono<PersonProfile> person(Long viewerAccountId, boolean viewerIsAdmin, Long userId) {
         return users
             .findByIdAndDeletedAtIsNull(userId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Profile not found")))
-            .flatMap(user -> Mono.zip(
+            .flatMap(user -> blockedAccounts.blockedBetween(viewerAccountId, user.getAccountId())
+                .flatMap(blocked -> blocked
+                    ? Mono.error(ApiException.notFound("Profile not found"))
+                    : Mono.zip(
                     settings.findVisibility(userId).defaultIfEmpty(ProfileSetting.SCHOOL),
                     schoolIdsOfAccount(user.getAccountId()),
-                    teacherOf(user.getAccountId()))
+                    teacherOf(user.getAccountId())))
                 .flatMap(facts -> {
                     String visibility = facts.getT1();
                     Set<Long> theirSchools = facts.getT2();

@@ -15,6 +15,12 @@ import reactor.core.publisher.Mono;
 public interface SimulationRepository extends ReactiveCrudRepository<Simulation, Long> {
     Flux<Simulation> findByDeletedAtIsNull();
     Flux<Simulation> findByDeletedAtIsNotNull();
+
+    /** The list endpoint's optional filters, applied in SQL so an unrelated simulation is never loaded or authorised. */
+    @Query("SELECT * FROM simulations WHERE deleted_at IS NULL "
+            + "AND (CAST(:statementId AS bigint) IS NULL OR statement_id = CAST(:statementId AS bigint)) "
+            + "AND (CAST(:status AS varchar) IS NULL OR status::text = CAST(:status AS varchar)) ORDER BY id")
+    Flux<Simulation> findActiveFiltered(Long statementId, String status);
     Flux<Simulation> findByAccountIdAndDeletedAtIsNull(Long accountId);
     Flux<Simulation> findByAccountId(Long accountId);
     Mono<Simulation> findByIdAndDeletedAtIsNull(Long id);

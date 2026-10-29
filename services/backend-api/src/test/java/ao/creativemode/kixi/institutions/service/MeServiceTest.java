@@ -2,7 +2,9 @@ package ao.creativemode.kixi.institutions.service;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +30,7 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
 import ao.creativemode.kixi.institutions.model.Institution;
 import ao.creativemode.kixi.institutions.model.InstitutionStudent;
+import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
@@ -43,6 +46,7 @@ class MeServiceTest {
     private RoleRepository roles;
     private UserRepository users;
     private EnrollmentRepository enrollments;
+    private EnrollmentCatalogQuery enrollmentCatalogQuery;
     private ClassRepository classes;
     private CourseRepository courses;
     private SchoolYearRepository schoolYears;
@@ -57,12 +61,13 @@ class MeServiceTest {
         roles = mock(RoleRepository.class);
         users = mock(UserRepository.class);
         enrollments = mock(EnrollmentRepository.class);
+        enrollmentCatalogQuery = mock(EnrollmentCatalogQuery.class);
         classes = mock(ClassRepository.class);
         courses = mock(CourseRepository.class);
         schoolYears = mock(SchoolYearRepository.class);
         studentLinks = mock(InstitutionStudentRepository.class);
         institutions = mock(InstitutionRepository.class);
-        service = new MeService(accounts, accountRoles, roles, users, enrollments,
+        service = new MeService(accounts, accountRoles, roles, users, enrollments, enrollmentCatalogQuery,
                 classes, courses, schoolYears, studentLinks, institutions);
     }
 
@@ -82,12 +87,15 @@ class MeServiceTest {
                     && me.currentClass() != null && me.currentClass().grade().equals(10)
                     && me.currentClass().schoolYear().equals("2024/2025"))
             .verifyComplete();
+
+        verify(enrollments, times(1)).findLatestActiveByAccountId(42L);
+        verify(classes, times(1)).findByIdAndDeletedAtIsNull(7L);
     }
 
     @Test
     void getMeWithoutEnrollmentLeavesAcademicContextNull() {
         stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", null, "STUDENT");
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
         when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
 
@@ -108,6 +116,59 @@ class MeServiceTest {
     }
 
     @Test
+    void catalogAffiliationUsesOnlyTheCurrentEnrollmentAndClass() {
+        Account account = new Account();
+        account.setId(42L);
+        account.setActive(true);
+        when(accounts.findById(42L)).thenReturn(Mono.just(account));
+        when(enrollmentCatalogQuery.findCurrentActiveByAccountId(42L))
+                .thenReturn(Mono.just(new EnrollmentCatalogQuery.CatalogAffiliation(11L, 3L, 7L)));
+
+        StepVerifier.create(service.getCatalogAffiliation(42L))
+            .expectNext(new EnrollmentCatalogQuery.CatalogAffiliation(11L, 3L, 7L))
+            .verifyComplete();
+
+        verify(enrollmentCatalogQuery).findCurrentActiveByAccountId(42L);
+        verifyNoInteractions(accountRoles, roles, users, courses, schoolYears,
+                studentLinks, institutions);
+    }
+
+    @Test
+    void catalogAffiliationRejectsInactiveAccountBeforeAcademicLookup() {
+        Account account = new Account();
+        account.setId(42L);
+        account.setActive(false);
+        when(accounts.findById(42L)).thenReturn(Mono.just(account));
+
+        StepVerifier.create(service.getCatalogAffiliation(42L))
+            .verifyErrorMatches(error -> error instanceof ApiException api
+                    && api.getStatus() == HttpStatus.NOT_FOUND);
+
+        verifyNoInteractions(enrollmentCatalogQuery);
+    }
+
+    @Test
+    void catalogAffiliationFallsBackToLinkedInstitutionWithoutEnrollment() {
+        Account account = new Account();
+        account.setId(42L);
+        account.setActive(true);
+        when(accounts.findById(42L)).thenReturn(Mono.just(account));
+        when(enrollmentCatalogQuery.findCurrentActiveByAccountId(42L)).thenReturn(Mono.empty());
+        when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user(9L, 42L)));
+        when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L))
+                .thenReturn(Flux.just(new InstitutionStudent(11L, 9L)));
+
+        StepVerifier.create(service.getCatalogAffiliation(42L))
+            .expectNext(new EnrollmentCatalogQuery.CatalogAffiliation(11L, null, null))
+            .verifyComplete();
+
+        verify(enrollmentCatalogQuery).findCurrentActiveByAccountId(42L);
+        verify(users).findByAccountIdAndDeletedAtIsNull(42L);
+        verify(studentLinks).findAllByUserIdAndDeletedAtIsNull(9L);
+        verifyNoInteractions(accountRoles, roles, courses, schoolYears, institutions);
+    }
+
+    @Test
     void updateMeChangesOnlyProvidedFields() {
         User user = user(9L, 42L);
         user.setFirstName("Ada");
@@ -116,7 +177,7 @@ class MeServiceTest {
         when(users.findByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(user));
         when(users.save(any(User.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         stubIdentity(42L, "ada", "ada@kixi.ao", "Ada", "Lovelace", "new.png", "STUDENT");
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.updateMe(42L, new MeUpdateRequest(null, null, "new.png")))
@@ -147,7 +208,7 @@ class MeServiceTest {
             return Mono.just(saved);
         });
         when(studentLinks.findAllByUserIdAndDeletedAtIsNull(10L)).thenReturn(Flux.empty());
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.empty());
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.updateMe(42L, new MeUpdateRequest("Ada", "Lovelace", null)))
             .expectNextMatches(me -> me.firstName().equals("Ada") && me.lastName().equals("Lovelace"))
@@ -210,7 +271,7 @@ class MeServiceTest {
 
         Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(enrollment));
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
         when(clazz.getId()).thenReturn(7L);
@@ -260,7 +321,7 @@ class MeServiceTest {
 
         Enrollment enrollment = new Enrollment(42L, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(42L)).thenReturn(Flux.just(enrollment));
+        when(enrollments.findLatestActiveByAccountId(42L)).thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
         when(clazz.getCourseId()).thenReturn(3L);
@@ -294,8 +355,8 @@ class MeServiceTest {
     private void stubAcademicContext(Long accountId) {
         Enrollment enrollment = new Enrollment(accountId, 7L, 2024L);
         enrollment.setId(3L);
-        when(enrollments.findAllByAccountIdAndDeletedAtIsNull(accountId))
-            .thenReturn(Flux.just(enrollment));
+        when(enrollments.findLatestActiveByAccountId(accountId))
+            .thenReturn(Mono.just(enrollment));
 
         Class clazz = mock(Class.class);
         when(clazz.getId()).thenReturn(7L);

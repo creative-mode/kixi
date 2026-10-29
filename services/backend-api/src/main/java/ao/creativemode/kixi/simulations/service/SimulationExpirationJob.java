@@ -80,7 +80,7 @@ public class SimulationExpirationJob {
         simulations.findByStatusAndDeletedAtIsNull(SimulationStatus.IN_PROGRESS)
                 .concatMap(simulation -> closeIfExpired(simulation, now))
                 .then()
-                .doOnError(error -> log.error("Simulation expiration sweep failed", error))
+                .doOnError(error -> log.error("Simulation expiration sweep failed: type={}", error.getClass().getSimpleName()))
                 .onErrorResume(error -> Mono.empty())
                 .block(SWEEP_TIMEOUT);
     }
@@ -95,7 +95,7 @@ public class SimulationExpirationJob {
                 .filter(Boolean.TRUE::equals)
                 .flatMap(expired -> close(simulation))
                 .onErrorResume(error -> {
-                    log.warn("Could not close expired simulation {}", simulation.getId(), error);
+                    log.warn("Could not close expired simulation {}: type={}", simulation.getId(), error.getClass().getSimpleName());
                     return Mono.empty();
                 });
     }

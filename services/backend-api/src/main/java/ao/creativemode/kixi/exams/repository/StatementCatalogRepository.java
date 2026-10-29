@@ -47,15 +47,17 @@ public class StatementCatalogRepository {
         this.converter = converter;
     }
 
-    /** The requested page, in the requested order. */
-    public Flux<Statement> findPage(Criteria criteria) {
+    /** The requested page, in the requested order, with its total in each row. */
+    public Flux<PageRow> findPageWithTotal(Criteria criteria) {
         Sql sql = build(criteria);
         return bindAll(databaseClient.sql(sql.select()), sql.binds())
-                .map((row, metadata) -> converter.read(Statement.class, row, metadata))
+                .map((row, metadata) -> new PageRow(
+                        converter.read(Statement.class, row, metadata),
+                        ((Number) row.get("total")).longValue()))
                 .all();
     }
 
-    /** How many statements match across every page. */
+    /** Total fallback for an empty page, because a window count has no row to carry it. */
     public Mono<Long> count(Criteria criteria) {
         Sql sql = build(criteria);
         return bindAll(databaseClient.sql(sql.count()), sql.countBinds())
@@ -99,8 +101,9 @@ public class StatementCatalogRepository {
     }
 
     /**
-     * Builds the page and count statements for the criteria. Package-private and pure so
-     * the SQL can be checked without a database.
+     * Builds the page statement for the criteria. The window count keeps the total and
+     * the page in one round-trip. Package-private and pure so the SQL can be checked
+     * without a database.
      */
     static Sql build(Criteria criteria) {
         List<String> where = new ArrayList<>();
@@ -152,12 +155,11 @@ public class StatementCatalogRepository {
         binds.put("limit", criteria.limit());
         binds.put("offset", criteria.offset());
 
-        String select = "SELECT s.*\n" + FROM + whereClause
+        String select = "SELECT s.*, COUNT(*) OVER() AS total\n" + FROM + whereClause
                 + "ORDER BY " + orderBy + "\n"
                 + "LIMIT :limit OFFSET :offset";
-        String count = "SELECT COUNT(*) AS total\n" + FROM + whereClause;
 
-        // The count shares the filters but not the order or the page window.
+        String count = "SELECT COUNT(*) AS total\n" + FROM + whereClause;
         Map<String, Object> countBinds = new LinkedHashMap<>(binds);
         countBinds.remove("limit");
         countBinds.remove("offset");
@@ -224,5 +226,12 @@ public class StatementCatalogRepository {
             long offset
     ) { }
 
-    record Sql(String select, String count, Map<String, Object> binds, Map<String, Object> countBinds) { }
+    public record PageRow(Statement statement, long total) { }
+
+    record Sql(
+            String select,
+            String count,
+            Map<String, Object> binds,
+            Map<String, Object> countBinds
+    ) { }
 }

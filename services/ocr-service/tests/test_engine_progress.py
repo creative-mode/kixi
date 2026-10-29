@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.ocr.engine import OCREngine, OCRProcessWorker
+from app.ocr.engine import OCRPageInputError, OCREngine, OCRProcessWorker
 from app.ocr.postprocessing import ExtractedMetadata
 
 
@@ -49,6 +49,24 @@ def _successful_process_worker(connection):
     })
     assert connection.recv()["type"] == "end"
     connection.send({"type": "result", "result": {"status": "success"}})
+
+
+def _input_error_then_success_process_worker(connection):
+    connection.send({"type": "ready"})
+    command = connection.recv()
+    assert command["type"] == "progress"
+    assert connection.recv()["type"] == "page"
+    assert connection.recv()["type"] == "feed_error"
+    connection.send({"type": "input_error", "error_type": "OCRPageInputError"})
+
+    command = connection.recv()
+    assert command["type"] == "progress"
+    assert connection.recv()["type"] == "page"
+    assert connection.recv()["type"] == "end"
+    connection.send({"type": "rasterized", "page": 1})
+    connection.send({"type": "event", "event": {"page": 1, "pageCount": 1}})
+    connection.send({"type": "result", "result": {"status": "success"}})
+    assert connection.recv()["type"] == "shutdown"
 
 
 @pytest.mark.asyncio
@@ -94,6 +112,53 @@ def test_page_iterator_rasterizes_only_the_page_about_to_be_processed(monkeypatc
 
     assert counts == {"yielded": 3, "processed": 3}
     assert result.document.page_count == 3
+
+
+def test_page_feeder_does_not_start_another_page_after_cancellation():
+    render_started = threading.Event()
+    render_release = threading.Event()
+    render_finished = threading.Event()
+    third_page_started = threading.Event()
+    cancelled = threading.Event()
+
+    class Connection:
+        def __init__(self):
+            self.messages = []
+
+        def send(self, message):
+            self.messages.append(message)
+
+    connection = Connection()
+
+    def pages():
+        try:
+            yield np.zeros((2, 2, 3), dtype=np.uint8)
+            render_started.set()
+            render_release.wait(timeout=2)
+            yield np.zeros((2, 2, 3), dtype=np.uint8)
+            third_page_started.set()
+            yield np.zeros((2, 2, 3), dtype=np.uint8)
+        finally:
+            render_finished.set()
+
+    feeder = threading.Thread(
+        target=OCRProcessWorker._feed_pages,
+        args=(connection, pages(), [], [], cancelled),
+        daemon=True,
+    )
+    feeder.start()
+    try:
+        assert render_started.wait(timeout=2)
+        cancelled.set()
+        render_release.set()
+        feeder.join(timeout=2)
+        assert not feeder.is_alive()
+        assert render_finished.is_set()
+        assert not third_page_started.is_set()
+        assert [message["type"] for message in connection.messages] == ["page"]
+    finally:
+        render_release.set()
+        feeder.join(timeout=2)
 
 
 def test_cancellation_does_not_rasterize_the_next_page(monkeypatch):
@@ -228,3 +293,35 @@ def test_process_worker_streams_progress_and_result():
         assert worker.health_check()["initialized"] is True
     finally:
         worker.shutdown()
+
+
+def test_process_worker_preserves_page_source_errors_and_reuses_healthy_worker():
+    worker = OCRProcessWorker(process_target=_input_error_then_success_process_worker)
+
+    def pages():
+        yield np.zeros((2, 2, 3), dtype=np.uint8)
+        raise RuntimeError("renderer failed")
+
+    async def collect():
+        return [event async for event in worker.process_images_progress_async(
+            pages(), page_count=2
+        )]
+
+    try:
+        with pytest.raises(OCRPageInputError, match="could not be prepared"):
+            asyncio.run(collect())
+        assert worker.health_check()["initialized"] is True
+        worker_pid = worker._process.pid
+
+        events = asyncio.run(collect_successful_request(worker))
+        assert events[-1] == {"type": "result", "result": {"status": "success"}}
+        assert worker.health_check()["initialized"] is True
+        assert worker._process.pid == worker_pid
+    finally:
+        worker.shutdown()
+
+
+async def collect_successful_request(worker):
+    return [event async for event in worker.process_images_progress_async(
+        [np.zeros((2, 2, 3), dtype=np.uint8)], page_count=1
+    )]

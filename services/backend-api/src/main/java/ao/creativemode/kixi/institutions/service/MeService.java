@@ -1,6 +1,5 @@
 package ao.creativemode.kixi.institutions.service;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -11,6 +10,7 @@ import ao.creativemode.kixi.academic.model.SchoolYear;
 import ao.creativemode.kixi.academic.repository.ClassRepository;
 import ao.creativemode.kixi.academic.repository.CourseRepository;
 import ao.creativemode.kixi.academic.repository.SchoolYearRepository;
+import ao.creativemode.kixi.identity.model.Account;
 import ao.creativemode.kixi.identity.model.Role;
 import ao.creativemode.kixi.identity.model.User;
 import ao.creativemode.kixi.identity.repository.AccountRepository;
@@ -21,6 +21,8 @@ import ao.creativemode.kixi.institutions.dto.enrollment.MeResponse;
 import ao.creativemode.kixi.institutions.dto.enrollment.MeUpdateRequest;
 import ao.creativemode.kixi.institutions.model.Enrollment;
 import ao.creativemode.kixi.institutions.model.Institution;
+import ao.creativemode.kixi.institutions.model.InstitutionStudent;
+import ao.creativemode.kixi.institutions.repository.EnrollmentCatalogQuery;
 import ao.creativemode.kixi.institutions.repository.EnrollmentRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository;
@@ -45,6 +47,7 @@ public class MeService {
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
     private final EnrollmentRepository enrollmentRepository;
+    private final EnrollmentCatalogQuery enrollmentCatalogQuery;
     private final ClassRepository classRepository;
     private final CourseRepository courseRepository;
     private final SchoolYearRepository schoolYearRepository;
@@ -57,6 +60,7 @@ public class MeService {
         RoleRepository roleRepository,
         UserRepository userRepository,
         EnrollmentRepository enrollmentRepository,
+        EnrollmentCatalogQuery enrollmentCatalogQuery,
         ClassRepository classRepository,
         CourseRepository courseRepository,
         SchoolYearRepository schoolYearRepository,
@@ -68,6 +72,7 @@ public class MeService {
         this.roleRepository = roleRepository;
         this.userRepository = userRepository;
         this.enrollmentRepository = enrollmentRepository;
+        this.enrollmentCatalogQuery = enrollmentCatalogQuery;
         this.classRepository = classRepository;
         this.courseRepository = courseRepository;
         this.schoolYearRepository = schoolYearRepository;
@@ -76,18 +81,18 @@ public class MeService {
     }
 
     public Mono<MeResponse> getMe(Long accountId) {
-        return Mono.defer(() -> accountRepository.findById(accountId)
-                .filter(account -> account.getDeletedAt() == null && Boolean.TRUE.equals(account.getActive()))
-                .switchIfEmpty(Mono.error(ApiException.notFound("Account not found"))))
-            .flatMap(account -> Mono.zip(
-                userRepository.findByAccountIdAndDeletedAtIsNull(accountId).singleOrEmpty()
-                    .defaultIfEmpty(new User()),
-                loadRoleNames(accountId).collectList(),
-                currentEnrollment(accountId).map(Optional::<EnrollmentContext>of)
-                    .defaultIfEmpty(Optional.empty()),
-                resolveSchool(accountId).map(Optional::<MeResponse.SchoolInfo>of)
-                    .defaultIfEmpty(Optional.empty())
-            ).map(tuple -> {
+        return Mono.defer(() -> activeAccount(accountId))
+            .flatMap(account -> {
+                Mono<EnrollmentSeat> seat = currentEnrollmentSeat(accountId).cache();
+                return Mono.zip(
+                    userRepository.findByAccountIdAndDeletedAtIsNull(accountId).singleOrEmpty()
+                        .defaultIfEmpty(new User()),
+                    loadRoleNames(accountId).collectList(),
+                    currentEnrollment(seat).map(Optional::<EnrollmentContext>of)
+                        .defaultIfEmpty(Optional.empty()),
+                    resolveSchool(accountId, seat).map(Optional::<MeResponse.SchoolInfo>of)
+                        .defaultIfEmpty(Optional.empty())
+                ).map(tuple -> {
                 User user = tuple.getT1();
                 List<String> roles = tuple.getT2();
                 Optional<EnrollmentContext> enrollment = tuple.getT3();
@@ -105,7 +110,33 @@ public class MeService {
                         .orElse(null),
                     account.getAccessibilityExtraTime()
             );
-            }));
+                });
+            });
+    }
+
+    /**
+     * The smallest academic lookup needed by the student statement catalog.
+     *
+     * <p>This deliberately does not call {@link #getMe(Long)}: the catalog needs
+     * three identifiers, not identity, roles, profile, course metadata or the
+     * school-year label.</p>
+     *
+     * <p>When there is no active enrollment, the institution link used by the
+     * profile is retained as the institution-only fallback.</p>
+     */
+    public Mono<EnrollmentCatalogQuery.CatalogAffiliation> getCatalogAffiliation(Long accountId) {
+        return Mono.defer(() -> activeAccount(accountId))
+                .then(Mono.defer(() -> enrollmentCatalogQuery.findCurrentActiveByAccountId(accountId)
+                        .switchIfEmpty(Mono.defer(() -> linkedInstitutionId(accountId)
+                                .map(institutionId -> new EnrollmentCatalogQuery.CatalogAffiliation(
+                                        institutionId, null, null))))
+                        .defaultIfEmpty(EnrollmentCatalogQuery.CatalogAffiliation.NONE)));
+    }
+
+    private Mono<Account> activeAccount(Long accountId) {
+        return accountRepository.findById(accountId)
+                .filter(account -> account.getDeletedAt() == null && Boolean.TRUE.equals(account.getActive()))
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Account not found")));
     }
 
     public Mono<MeResponse> updateMe(Long accountId, MeUpdateRequest request) {
@@ -143,17 +174,20 @@ public class MeService {
             .map(Role::getName);
     }
 
-    /** Most recent active enrollment, fully resolved (empty when none). */
-    private Mono<EnrollmentContext> currentEnrollment(Long accountId) {
-        return enrollmentRepository.findAllByAccountIdAndDeletedAtIsNull(accountId)
-            .sort(Comparator.comparing(Enrollment::getId).reversed())
-            .next()
-            .flatMap(enrollment -> Mono.zip(
-                classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId()),
-                schoolYearRepository.findByIdAndDeletedAtIsNull(enrollment.getSchoolYearId())
-            ).flatMap(tuple -> courseRepository
-                .findByIdAndDeletedAtIsNull(tuple.getT1().getCourseId())
-                .map(course -> new EnrollmentContext(tuple.getT1(), course, schoolYearLabel(tuple.getT2())))));
+    /** Most recent live enrollment and its class, shared by all /me projections. */
+    private Mono<EnrollmentSeat> currentEnrollmentSeat(Long accountId) {
+        return enrollmentRepository.findLatestActiveByAccountId(accountId)
+            .flatMap(enrollment -> classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId())
+                .map(clazz -> new EnrollmentSeat(enrollment, clazz)));
+    }
+
+    /** Resolve the course and school-year fields only for the complete /me context. */
+    private Mono<EnrollmentContext> currentEnrollment(Mono<EnrollmentSeat> seat) {
+        return seat.flatMap(current -> Mono.zip(
+                courseRepository.findByIdAndDeletedAtIsNull(current.clazz().getCourseId()),
+                schoolYearRepository.findByIdAndDeletedAtIsNull(current.enrollment().getSchoolYearId())
+            ).map(tuple -> new EnrollmentContext(
+                current.clazz(), tuple.getT1(), schoolYearLabel(tuple.getT2()))));
     }
 
     /**
@@ -163,21 +197,18 @@ public class MeService {
      * reads as a mistake on the screen. The link is what fills the gap when there is no
      * enrollment to read the school from.
      */
-    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId) {
-        return enrolledSchool(accountId).switchIfEmpty(linkedSchool(accountId));
+    private Mono<MeResponse.SchoolInfo> resolveSchool(Long accountId, Mono<EnrollmentSeat> seat) {
+        return enrolledSchool(seat).switchIfEmpty(linkedSchool(accountId));
     }
 
     /**
      * The school of the most recent active enrollment, resolved through the class.
      */
-    private Mono<MeResponse.SchoolInfo> enrolledSchool(Long accountId) {
-        return enrollmentRepository.findAllByAccountIdAndDeletedAtIsNull(accountId)
-            .sort(Comparator.comparing(Enrollment::getId).reversed())
-            .next()
-            .flatMap(enrollment -> classRepository.findByIdAndDeletedAtIsNull(enrollment.getClassId()))
-            .flatMap(clazz -> clazz.getInstitutionId() == null
+    private Mono<MeResponse.SchoolInfo> enrolledSchool(Mono<EnrollmentSeat> seat) {
+        return seat
+            .flatMap(current -> current.clazz().getInstitutionId() == null
                 ? Mono.empty()
-                : institutionRepository.findByIdAndDeletedAtIsNull(clazz.getInstitutionId()))
+                : institutionRepository.findByIdAndDeletedAtIsNull(current.clazz().getInstitutionId()))
             .map(MeService::toSchoolInfo);
     }
 
@@ -186,12 +217,17 @@ public class MeService {
      * enrollment to read a school from.
      */
     private Mono<MeResponse.SchoolInfo> linkedSchool(Long accountId) {
+        return linkedInstitutionId(accountId)
+            .flatMap(institutionRepository::findByIdAndDeletedAtIsNull)
+            .map(MeService::toSchoolInfo);
+    }
+
+    private Mono<Long> linkedInstitutionId(Long accountId) {
         return userRepository.findByAccountIdAndDeletedAtIsNull(accountId)
             .singleOrEmpty()
             .flatMapMany(user -> studentLinks.findAllByUserIdAndDeletedAtIsNull(user.getId()))
             .next()
-            .flatMap(link -> institutionRepository.findByIdAndDeletedAtIsNull(link.getInstitutionId()))
-            .map(MeService::toSchoolInfo);
+            .map(InstitutionStudent::getInstitutionId);
     }
 
     private static MeResponse.SchoolInfo toSchoolInfo(Institution institution) {
@@ -208,4 +244,10 @@ public class MeService {
         Course course,
         String schoolYearLabel
     ) { }
+
+    private record EnrollmentSeat(
+        Enrollment enrollment,
+        ao.creativemode.kixi.academic.model.Class clazz
+    ) { }
+
 }

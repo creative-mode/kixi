@@ -48,6 +48,11 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+
+class OCRPageInputError(Exception):
+    """A lazy page source failed while preparing an OCR input page."""
+
+
 # PaddleOCR is loaded lazily because model dependencies are expensive and the
 # service must remain importable for unit tests and health endpoints.
 PaddleOCR = None
@@ -391,9 +396,9 @@ class OCREngine:
         fallback_predictions: FormulaPredictions,
         page_index: int,
     ) -> FormulaPredictions:
-        """Keep formula reads from the enhanced image when fallback OCR uses the raw photo.
+        """Keep formula reads from the enhanced image when the secondary OCR pass uses the raw photo.
 
-        The fallback detector is better at recovering faint prose, but its formula
+        A separately configured fallback detector may recover faint prose, but its formula
         crops can lose contrast or become clipped. Layout boxes can shift slightly
         between the two image frames, so match them by overlap rather than exact keys.
         An explicit fallback prediction remains authoritative; a primary prediction
@@ -514,7 +519,7 @@ class OCREngine:
 
         Args:
             image: Image as numpy array (BGR format)
-            fallback: Use the slower detector that sees the faint lines the fast one misses
+            fallback: Run the second pass at higher resolution or with the separately configured detector
 
         Returns:
             PaddleOCR 3.x results: one dict-like per image with rec_texts, rec_scores and rec_polys
@@ -522,6 +527,13 @@ class OCREngine:
         self._ensure_initialized()
 
         if fallback:
+            if settings.ocr_fallback_det_model_name == self.det_model_name:
+                if self._ocr is None:
+                    raise RuntimeError("OCR engine is not initialized")
+                return list(self._ocr.predict(
+                    image,
+                    text_det_limit_side_len=settings.ocr_fallback_det_max_side_len,
+                ))
             if self._fallback_ocr is None:
                 self._fallback_ocr = _get_paddle_ocr()(**self._ocr_options(settings.ocr_fallback_det_model_name))
             return list(self._fallback_ocr.predict(image))
@@ -925,11 +937,8 @@ class OCREngine:
             metadata, questions, images_to_upload, unmapped, warnings = interpret(text_blocks)
             parsing_ms = time.perf_counter() - parsing_started
 
-            # A page the fast detector could not make questions of, or numbered with gaps, is read again with the
-            # thorough detector. The second read is on the photo as it came: the denoise and deskew that help the
-            # fast detector hide faint lines from the thorough one (the parcelar exam gave 3 of its 5 questions on
-            # the preprocessed image, and finds the lines of the other two on the raw one). Its layout is taken
-            # on the same image, so text, figures and the crop frame all share one set of coordinates.
+            # A page the primary pass could not make questions of, or numbered with gaps, is read again on the
+            # original photo at higher detector resolution. Layout and formula crops keep the same image frame.
             if (
                 settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
@@ -1312,7 +1321,16 @@ class OCREngine:
                     all_warnings.append(warning)
 
         # Determine main language (most common)
-        main_language = max(set(languages), key=languages.count) if languages else self.lang
+        if languages:
+            language_counts = {language: languages.count(language) for language in set(languages)}
+            highest_language_count = max(language_counts.values())
+            main_language = (
+                self.lang
+                if language_counts.get(self.lang) == highest_language_count
+                else next(language for language in languages if language_counts[language] == highest_language_count)
+            )
+        else:
+            main_language = self.lang
 
         # Calculate overall confidence
         if all_questions:
@@ -1561,6 +1579,10 @@ def _ocr_process_main(connection) -> None:
                         item = connection.recv()
                         if item["type"] == "end":
                             return
+                        if item["type"] == "feed_error":
+                            if item.get("error_kind") == "transport":
+                                raise RuntimeError("OCR page transport failed")
+                            raise OCRPageInputError("OCR page input could not be prepared")
                         source_indices.append(item["source_file_index"])
                         native_pages.append(item["native_text_page"])
                         yield item["image"]
@@ -1580,7 +1602,7 @@ def _ocr_process_main(connection) -> None:
                     connection.send({"type": "result", "result": result})
                 except BaseException as error:
                     connection.send({
-                        "type": "error",
+                        "type": "input_error" if isinstance(error, OCRPageInputError) else "error",
                         "error_type": type(error).__name__,
                     })
                 continue
@@ -1750,8 +1772,9 @@ class OCRProcessWorker:
             connection = self._connection
             connection.send({"type": "progress", "request_id": request_id,
                              "page_count": page_count})
+            feeder_cancelled = threading.Event()
             feeder = asyncio.create_task(asyncio.to_thread(
-                self._feed_pages, connection, images, sources, native_pages
+                self._feed_pages, connection, images, sources, native_pages, feeder_cancelled
             ))
             completed = False
             try:
@@ -1767,12 +1790,17 @@ class OCRProcessWorker:
                         completed = True
                         yield {"type": "result", "result": message["result"]}
                         return
+                    elif message["type"] == "input_error":
+                        await feeder
+                        completed = True
+                        raise OCRPageInputError("OCR page input could not be prepared")
                     else:
                         raise RuntimeError(
                             f"OCR worker failed ({message.get('error_type', 'unknown')})"
                         )
             finally:
                 if not completed:
+                    feeder_cancelled.set()
                     process = self._process
                     logger.info(
                         "Terminating OCR inference process after request cancellation",
@@ -1784,17 +1812,78 @@ class OCRProcessWorker:
                         feeder.cancel()
 
     @staticmethod
-    def _feed_pages(connection, images, source_indices, native_pages) -> None:
+    def _feed_pages(
+        connection,
+        images,
+        source_indices,
+        native_pages,
+        cancelled: Optional[threading.Event] = None,
+    ) -> None:
+        def should_stop() -> bool:
+            return cancelled is not None and cancelled.is_set()
+
+        def report_input_error(error: Exception, *, error_kind: str = "source") -> None:
+            if should_stop():
+                return
+            try:
+                connection.send({
+                    "type": "feed_error",
+                    "error_type": type(error).__name__,
+                    "error_kind": error_kind,
+                })
+            except (BrokenPipeError, EOFError, OSError, RuntimeError):
+                pass
+
         try:
-            for index, image in enumerate(images):
+            image_iterator = iter(images)
+        except Exception as error:
+            report_input_error(error)
+            return
+
+        index = 0
+        while True:
+            if should_stop():
+                return
+            try:
+                image = next(image_iterator)
+            except StopIteration:
+                break
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
                 source_index = source_indices[index] if index < len(source_indices) else 0
                 native_page = native_pages[index] if index < len(native_pages) else None
+            except Exception as error:
+                report_input_error(error)
+                return
+
+            if should_stop():
+                return
+
+            try:
                 connection.send({"type": "page", "image": image,
                                  "source_file_index": source_index,
                                  "native_text_page": native_page})
-            connection.send({"type": "end"})
-        except (BrokenPipeError, EOFError, OSError, RuntimeError):
+            except (BrokenPipeError, EOFError, OSError):
+                return
+            except Exception as error:
+                report_input_error(error, error_kind="transport")
+                return
+            index += 1
+
+        if should_stop():
             return
+        try:
+            connection.send({"type": "end"})
+        except (BrokenPipeError, EOFError, OSError):
+            return
+        except Exception as error:
+            report_input_error(error, error_kind="transport")
 
 
 # Default engine process

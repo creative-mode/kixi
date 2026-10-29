@@ -32,6 +32,9 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByGoogleSubAndDeletedAtIsNull(String googleSub);
 
+    /** Includes soft-deleted rows so Google identities remain explicitly reserved. */
+    Mono<Account> findByGoogleSubAndDeletedAtIsNotNull(String googleSub);
+
     Mono<Account> findByUsernameAndIdNotAndDeletedAtIsNull(String username, Long id);
 
     Flux<Account> findAllByIdInAndDeletedAtIsNull(Collection<Long> ids);

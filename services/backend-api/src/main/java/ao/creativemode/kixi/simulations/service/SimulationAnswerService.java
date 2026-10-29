@@ -78,7 +78,7 @@ public class SimulationAnswerService {
         Mono<SimulationAnswer> lookup = includeDeleted ? repository.findById(answerId)
             : repository.findByIdAndDeletedAtIsNull(answerId);
         return lookup
-            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
+            .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation answer not found")))
             .flatMap(answer -> authorizeSimulation(answer.getSimulationId(), accountId, admin, teacher,
                 includeDeleted));
     }
@@ -166,7 +166,7 @@ public class SimulationAnswerService {
                 return repository
                     .insertIfInProgress(answer.getSimulationId(), answer.getQuestionId(),
                         answer.getSelectedOptionId(), answer.getAnswerText(), answer.getAnsweredAt())
-                    .switchIfEmpty(Mono.error(ApiException.conflict("Simulation no longer accepts answers")))
+                    .switchIfEmpty(Mono.error(() -> ApiException.conflict("Simulation no longer accepts answers")))
                     .flatMap(this::toResponse)
                     .onErrorMap(DataIntegrityViolationException.class, e ->
                         ApiException.conflict(
@@ -178,14 +178,14 @@ public class SimulationAnswerService {
 
     private Mono<Void> requireSimulationAndQuestion(Long simulationId, Long questionId, Long optionId) {
         return simulationRepository.findByIdAndDeletedAtIsNull(simulationId)
-            .switchIfEmpty(Mono.error(ApiException.badRequest("Simulation not found: " + simulationId)))
+            .switchIfEmpty(Mono.error(() -> ApiException.badRequest("Simulation not found: " + simulationId)))
             .flatMap(simulation -> {
                 if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.IN_PROGRESS) {
                     return Mono.error(ApiException.conflict("Simulation no longer accepts answers"));
                 }
                 return requireNotExpired(simulation)
                         .then(questionLookup(questionId)
-                        .switchIfEmpty(Mono.error(ApiException.badRequest("Question not found: " + questionId)))
+                        .switchIfEmpty(Mono.error(() -> ApiException.badRequest("Question not found: " + questionId)))
                         .flatMap(question -> {
                             if (simulation.getStatementId() != null
                                     && !simulation.getStatementId().equals(question.getStatementId())) {

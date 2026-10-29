@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -52,6 +53,7 @@ class AuthServiceTest {
 
         when(jwtService.generateToken(anyLong(), anyList())).thenReturn("jwt-token");
         when(jwtService.getExpirationMs()).thenReturn(86_400_000L);
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNotNull(any())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -216,10 +218,6 @@ class AuthServiceTest {
         when(accountRepository.findByEmailAndDeletedAtIsNull("existing@kixi.ao")).thenReturn(Mono.just(existing));
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
         when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
-        // findOrCreateAccountFromGoogle() builds its .switchIfEmpty(createAccountAndUserFromGoogle(...))
-        // argument eagerly, which calls roleRepository.findByNameAndDeletedAtIsNull(...) immediately,
-        // even though this branch is never subscribed once the email lookup above succeeds.
-        when(roleRepository.findByNameAndDeletedAtIsNull("STUDENT")).thenReturn(Mono.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
@@ -227,6 +225,8 @@ class AuthServiceTest {
 
         assertThat(existing.getGoogleSub()).isEqualTo("google-sub");
         verify(accountRepository, never()).save(org.mockito.ArgumentMatchers.argThat(a -> !a.getId().equals(1L)));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+        verify(passwordEncoder, never()).encode(anyString());
     }
 
     @Test
@@ -486,6 +486,32 @@ class AuthServiceTest {
                 })
                 .verify();
 
+        verify(accountRepository, never()).save(any(Account.class));
+        verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
+    }
+
+    @Test
+    void googleRejectsIdentityOwnedBySoftDeletedAccountBeforeCreatingDuplicate() {
+        when(googleOAuth2Client.exchangeCodeForAccessToken("code")).thenReturn(Mono.just("access-token"));
+        when(googleOAuth2Client.getUserInfo("access-token"))
+                .thenReturn(Mono.just(new GoogleUserInfo("sub-X", "changed@kixi.ao", true,
+                        "Former User", null)));
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNull("sub-X")).thenReturn(Mono.empty());
+        Account deleted = account(8L, "old-user", "hash");
+        deleted.setEmail("old@kixi.ao");
+        deleted.setGoogleSub("sub-X");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(accountRepository.findByGoogleSubAndDeletedAtIsNotNull("sub-X")).thenReturn(Mono.just(deleted));
+
+        StepVerifier.create(service.loginWithGoogle("code"))
+                .expectErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error).hasMessage("Google identity belongs to a deleted account");
+                })
+                .verify();
+
+        verify(accountRepository, never()).findByEmailAndDeletedAtIsNull(any());
         verify(accountRepository, never()).save(any(Account.class));
         verify(roleRepository, never()).findByNameAndDeletedAtIsNull("STUDENT");
     }

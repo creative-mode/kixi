@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.simulations.service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -98,7 +99,7 @@ public class SimulationService {
         Mono<Simulation> lookup = includeDeleted ? repository.findById(id)
                 : repository.findByIdAndDeletedAtIsNull(id);
         return lookup
-                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found: " + id)))
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation not found: " + id)))
                 .flatMap(simulation -> {
                     if (admin)
                         return Mono.just(simulation);
@@ -108,7 +109,9 @@ public class SimulationService {
                     if (simulation.getExamRoomId() == null && accountId.equals(simulation.getAccountId())) {
                         return Mono.just(simulation);
                     }
-                    if (examRoomAccess == null) {
+                    // Uma simulação livre de outro aluno é "não encontrada", igual a um id que não existe: sem sala
+                    // não há nada a perguntar à sala, e perguntar com null devolvia 400 e deixava enumerar ids (#453).
+                    if (examRoomAccess == null || simulation.getExamRoomId() == null) {
                         return Mono.error(ApiException.notFound("Simulation not found: " + id));
                     }
                     return examRoomAccess.canAccessSimulation(simulation.getExamRoomId(), simulation.getId(),
@@ -119,11 +122,50 @@ public class SimulationService {
     }
 
     public Flux<SimulationResponse> findAllAuthorized(Long accountId, boolean admin, boolean teacher) {
-        return repository.findByDeletedAtIsNull()
+        return findAllAuthorized(accountId, admin, teacher, null, null, null, null)
+                .flatMapMany(page -> Flux.fromIterable(page.items()));
+    }
+
+    /** One page of the simulations the caller may see, and how many there are in all once the filters are applied. */
+    public record SimulationPage(long total, List<SimulationResponse> items) {
+    }
+
+    /**
+     * The list with optional filters ({@code statementId}, {@code status}) and optional paging. Without
+     * {@code size} every match is returned, as before. Authorisation still runs on every match (the total has
+     * to be the caller's), but the account, statement and school year of the page are each read once, not
+     * once per simulation.
+     */
+    public Mono<SimulationPage> findAllAuthorized(Long accountId, boolean admin, boolean teacher,
+            Long statementId, SimulationStatus status, Integer page, Integer size) {
+        Flux<Simulation> source = statementId == null && status == null
+                ? repository.findByDeletedAtIsNull()
+                : repository.findActiveFiltered(statementId, status == null ? null : status.name());
+        Lookups lookups = new Lookups();
+        return source
                 .flatMap(simulation -> authorize(simulation.getId(), accountId, admin, teacher)
                         .onErrorResume(error -> isHiddenFromCaller(error)
-                                ? Mono.empty() : Mono.error(error))
-                        .flatMap(this::toResponse));
+                                ? Mono.empty() : Mono.error(error)))
+                .collectSortedList(java.util.Comparator.comparing(Simulation::getId))
+                .flatMap(allowed -> {
+                    int pageSize = size == null ? allowed.size() : Math.max(1, Math.min(size, MAX_PAGE_SIZE));
+                    int from = size == null ? 0 : (int) Math.min((long) Math.max(0, page == null ? 0 : page) * pageSize,
+                            allowed.size());
+                    List<Simulation> slice = allowed.subList(from, Math.min(allowed.size(), from + pageSize));
+                    return Flux.fromIterable(slice)
+                            .concatMap(simulation -> toResponse(simulation, lookups))
+                            .collectList()
+                            .map(items -> new SimulationPage(allowed.size(), items));
+                });
+    }
+
+    static final int MAX_PAGE_SIZE = 200;
+
+    /** The rows a single request has already asked for, so a page of simulations of one statement reads it once. */
+    private static final class Lookups {
+        final java.util.Map<Long, Mono<Account>> accounts = new java.util.concurrent.ConcurrentHashMap<>();
+        final java.util.Map<Long, Mono<Statement>> statements = new java.util.concurrent.ConcurrentHashMap<>();
+        final java.util.Map<Long, Mono<SchoolYearResponse>> schoolYears = new java.util.concurrent.ConcurrentHashMap<>();
     }
 
     public Flux<SimulationResponse> findAllTrashedAuthorized(Long accountId, boolean admin, boolean teacher) {
@@ -172,11 +214,11 @@ public class SimulationService {
     private Mono<SimulationResponse> create(SimulationRequest dto, Long callerAccountId, boolean admin,
             boolean authorizeStatement, boolean rejectAnyNonClosedRoom, boolean requireVisibleStatement) {
         return accountRepository.findById(dto.accountId())
-                .switchIfEmpty(Mono.error(ApiException.notFound("Account not found")))
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Account not found")))
                 .then((requireVisibleStatement
                         ? statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(dto.statementId())
                         : statementLookup(dto.statementId()))
-                        .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
+                        .switchIfEmpty(Mono.error(() -> ApiException.notFound("Statement not found")))
                         .flatMap(statement -> !authorizeStatement
                                 ? Mono.just(statement)
                                 : statementWriteAccess == null
@@ -204,7 +246,7 @@ public class SimulationService {
                         .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
-                                .switchIfEmpty(Mono.error(ApiException.notFound("SchoolYear not found")))
+                                .switchIfEmpty(Mono.error(() -> ApiException.notFound("SchoolYear not found")))
                                 .then(Mono.just(true));
                     }
                     return Mono.just(true);
@@ -340,18 +382,25 @@ public class SimulationService {
     }
 
     private Mono<SimulationResponse> toResponse(Simulation simulation) {
-        Mono<Account> accountMono = accountRepository.findById(simulation.getAccountId())
-                .switchIfEmpty(Mono.fromSupplier(() -> accountWithIdOnly(simulation.getAccountId())));
+        return toResponse(simulation, new Lookups());
+    }
+
+    private Mono<SimulationResponse> toResponse(Simulation simulation, Lookups lookups) {
+        Mono<Account> accountMono = lookups.accounts.computeIfAbsent(simulation.getAccountId(),
+                id -> accountRepository.findById(id)
+                        .switchIfEmpty(Mono.fromSupplier(() -> accountWithIdOnly(id))).cache());
 
         Mono<Statement> statementMono = simulation.getStatementId() != null
-                ? statementRepository.findById(simulation.getStatementId())
-                    .defaultIfEmpty(new Statement())
+                ? lookups.statements.computeIfAbsent(simulation.getStatementId(),
+                        id -> statementRepository.findById(id).defaultIfEmpty(new Statement()).cache())
                 : Mono.just(new Statement());
 
         Mono<SchoolYearResponse> schoolYearMono = simulation.getSchoolYearId() != null
-                ? schoolYearRepository.findById(simulation.getSchoolYearId())
-                    .map(this::toSchoolYearResponse)
-                    .switchIfEmpty(Mono.just(new SchoolYearResponse(null, null, null, null, null, null)))
+                ? lookups.schoolYears.computeIfAbsent(simulation.getSchoolYearId(),
+                        id -> schoolYearRepository.findById(id)
+                                .map(this::toSchoolYearResponse)
+                                .switchIfEmpty(Mono.just(new SchoolYearResponse(null, null, null, null, null, null)))
+                                .cache())
                 : Mono.just(new SchoolYearResponse(null, null, null, null, null, null));
 
         Mono<LocalDateTime> deadlineLookup = deadlineService.deadline(simulation);

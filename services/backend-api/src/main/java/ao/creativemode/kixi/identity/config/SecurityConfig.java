@@ -85,6 +85,13 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/verification-requests", "/api/v1/verification-requests/**")
                         .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET, "/api/v1/profiles/accounts/*/block")
+                        .hasRole("STUDENT")
+                        .pathMatchers(HttpMethod.PUT, "/api/v1/profiles/accounts/*/block")
+                        .hasRole("STUDENT")
+                        .pathMatchers(HttpMethod.POST, "/api/v1/profiles/accounts/*/reports",
+                                "/api/v1/institutions/*/reports")
+                        .hasRole("STUDENT")
                         // Public profiles (issue #331): any signed-in account, read only.
                         .pathMatchers(HttpMethod.GET, "/api/v1/profiles/**")
                         .authenticated()
@@ -136,7 +143,7 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/exam-rooms", "/api/v1/exam-rooms/**",
                                 "/api/exam-rooms", "/api/exam-rooms/**")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/statements/review",
                                 "/api/v1/statements/from-ocr",
@@ -221,7 +228,7 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**",
@@ -229,7 +236,7 @@ public class SecurityConfig {
                                 "/api/v1/simulations/**",
                                 "/api/simulations",
                                 "/api/simulations/**")
-                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT", "INTEGRATION")
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulations/*/restore",
                                 "/api/simulations/*/restore")
@@ -238,7 +245,7 @@ public class SecurityConfig {
                                 "/api/v1/simulation-answers/*",
                                 "/api/v1/simulations/*",
                                 "/api/simulations/*")
-                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT", "INTEGRATION")
                         .pathMatchers("/api/v1/simulation-answers", "/api/v1/simulation-answers/**",
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
@@ -246,7 +253,7 @@ public class SecurityConfig {
                         // Dashboard (BE-14): staff only. What each one sees is narrowed
                         // by AnalyticsService, from the account, not from a parameter.
                         .pathMatchers("/api/v1/analytics", "/api/v1/analytics/**")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         // The relative ranking (issue #117). Any signed-in account may
                         // read it; the cohort comes from /me and never from a query
                         // parameter, so what keeps a ranking relative is the service,

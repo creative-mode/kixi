@@ -21,10 +21,18 @@ import ao.creativemode.kixi.identity.security.JwtAuthenticationFilter;
 import ao.creativemode.kixi.identity.controller.AccountController;
 import ao.creativemode.kixi.identity.dto.accounts.AccountAccessibilityRequest;
 import ao.creativemode.kixi.identity.dto.accounts.AccountResponse;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.identity.service.AccountService;
+import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.shared.service.ApiAbuseRateLimiter;
+import ao.creativemode.kixi.moderation.controller.ModerationController;
+import ao.creativemode.kixi.moderation.model.ModerationReport;
+import ao.creativemode.kixi.moderation.repository.ModerationBlockRepository;
+import ao.creativemode.kixi.moderation.repository.ModerationReportRepository;
+import ao.creativemode.kixi.moderation.service.ModerationService;
 import ao.creativemode.kixi.identity.service.JwtService;
 import ao.creativemode.kixi.ocr.service.OcrImageAssociationService;
 import ao.creativemode.kixi.ocr.service.OcrPersistenceService;
@@ -56,14 +64,15 @@ import reactor.core.publisher.Mono;
         OcrController.class,
         AccountController.class,
         StatementController.class,
-        ao.creativemode.kixi.institutions.controller.TeachingAssignmentController.class
+        ao.creativemode.kixi.institutions.controller.TeachingAssignmentController.class,
+        ModerationController.class
 })
 @TestPropertySource(properties = {
         "app.jwt.secret=test-only-secret-that-is-at-least-32-characters",
         "app.jwt.expiration-ms=86400000"
 })
 @Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class, CurrentAccountService.class, JwtAuthenticationFilter.class,
-        RequestIdWebFilter.class})
+        RequestIdWebFilter.class, ModerationService.class})
 class AuthorizationIntegrationTest {
 
     @Autowired
@@ -94,6 +103,18 @@ class AuthorizationIntegrationTest {
     private ApiAbuseRateLimiter abuseRateLimiter;
 
     @MockBean
+    private AccountRepository accountRepository;
+
+    @MockBean
+    private InstitutionRepository institutionRepository;
+
+    @MockBean
+    private ModerationBlockRepository moderationBlockRepository;
+
+    @MockBean
+    private ModerationReportRepository moderationReportRepository;
+
+    @MockBean
     private OcrPersistenceService ocrPersistenceService;
 
     @MockBean
@@ -115,6 +136,12 @@ class AuthorizationIntegrationTest {
                 .thenReturn(reactor.core.publisher.Mono.just(
                         ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS));
         when(abuseRateLimiter.checkUpload(anyLong())).thenReturn(Mono.empty());
+        when(abuseRateLimiter.checkReport(anyLong())).thenReturn(Mono.empty());
+        when(accountRepository.findByIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.just(new Account()));
+        when(moderationBlockRepository.existsPair(anyLong(), anyLong())).thenReturn(Mono.just(false));
+        when(moderationBlockRepository.togglePair(anyLong(), anyLong())).thenReturn(Mono.just(true));
+        when(moderationReportRepository.save(any(ModerationReport.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
     }
 
     @MockBean
@@ -144,6 +171,53 @@ class AuthorizationIntegrationTest {
                 .exchange()
                 .expectStatus().isUnauthorized()
                 .expectHeader().valueMatches("X-Request-ID", "req-[0-9a-f]+");
+    }
+
+    @Test
+    void moderationRoutesAreStudentOnly() {
+        client.get()
+                .uri("/api/v1/profiles/accounts/2/block")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.mutateWith(teacherJwt())
+                .get()
+                .uri("/api/v1/profiles/accounts/2/block")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(adminJwt())
+                .post()
+                .uri("/api/v1/institutions/2/reports")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"reason\":\"OTHER\",\"note\":\"spam\"}")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("/api/v1/profiles/accounts/2/block")
+                .exchange()
+                .expectStatus().isOk();
+
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("/api/v1/profiles/accounts/2/block")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("{\"blocked\":true}");
+
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/profiles/accounts/2/reports")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"reason\":\"OTHER\",\"note\":\"spam\"}")
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.target").isEqualTo("ACCOUNT")
+                .jsonPath("$.targetId").isEqualTo(2)
+                .jsonPath("$.reason").isEqualTo("OTHER");
     }
 
     @Test

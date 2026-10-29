@@ -36,6 +36,12 @@ public class SecurityRateLimitProperties {
     @Min(1)
     private long searchWindowSeconds = 60;
 
+    @Min(1)
+    private int reportMaxAttempts = 5;
+
+    @Min(1)
+    private long reportWindowSeconds = 3600;
+
     public int getLoginMaxAttempts() {
         return loginMaxAttempts;
     }
@@ -98,5 +104,21 @@ public class SecurityRateLimitProperties {
 
     public void setSearchWindowSeconds(long searchWindowSeconds) {
         this.searchWindowSeconds = searchWindowSeconds;
+    }
+
+    public int getReportMaxAttempts() {
+        return reportMaxAttempts;
+    }
+
+    public void setReportMaxAttempts(int reportMaxAttempts) {
+        this.reportMaxAttempts = reportMaxAttempts;
+    }
+
+    public long getReportWindowSeconds() {
+        return reportWindowSeconds;
+    }
+
+    public void setReportWindowSeconds(long reportWindowSeconds) {
+        this.reportWindowSeconds = reportWindowSeconds;
     }
 }

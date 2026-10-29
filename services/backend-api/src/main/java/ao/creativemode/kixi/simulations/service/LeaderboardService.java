@@ -191,7 +191,7 @@ public class LeaderboardService {
                 // with no institution is not enough to rank against.
                 .filter(seat -> scope == Scope.CLASS || seat.institutionId() != null)
                 .next()
-                .switchIfEmpty(Mono.error(ApiException.forbidden(switch (scope) {
+                .switchIfEmpty(Mono.error(() -> ApiException.forbidden(switch (scope) {
                     case CLASS -> "A class ranking needs an active enrollment in a class";
                     case SCHOOL -> "A school ranking needs an active enrollment in a school";
                     case FRIENDS -> "The friends ranking needs an active enrollment in a school";
@@ -228,7 +228,7 @@ public class LeaderboardService {
         return repository.statementExists(statementId)
                 .flatMap(exists -> exists
                         ? Mono.<Void>empty()
-                        : Mono.error(ApiException.notFound("No statement with id " + statementId)));
+                        : Mono.error(() -> ApiException.notFound("No statement with id " + statementId)));
     }
 
     /**

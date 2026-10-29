@@ -1,7 +1,7 @@
 // Testes dos bots:  node --test .github/scripts/bots.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { evaluate, closingRefs } = require('./pr-check.js');
+const { evaluate, closingRefs, linkedRefs } = require('./pr-check.js');
 const alert = require('./dependency-alert.js');
 const sync = require('./project-sync.js');
 
@@ -9,11 +9,18 @@ const B = { dev: 'dev', qua: 'qua', prod: 'prod' };
 const base = { head: 'feature/23-login-com-jwt', base: 'dev', body: 'Closes #23', ownRepo: 'creative-mode/kixi', branches: B };
 
 test('PR conforme', () => assert.deepEqual(evaluate(base), []));
+test('Refs associa a issue sem a classificar como encerrada', () => {
+  assert.deepEqual(evaluate({ ...base, body: 'Refs #23' }), []);
+  assert.deepEqual(closingRefs('Refs #23', 'creative-mode/kixi'), []);
+  assert.deepEqual(linkedRefs('Refs #23', 'creative-mode/kixi'), [23]);
+});
 test('branch fora do padrão', () => assert.equal(evaluate({ ...base, head: 'feat/auth-register' }).length, 1));
-test('destino errado', () => assert.match(evaluate({ ...base, base: 'prod' })[0], /apontam para `dev`/));
-test('sem Closes', () => assert.match(evaluate({ ...base, body: 'só texto' })[0], /fechar uma issue/));
+test('destino errado', () => assert.match(evaluate({ ...base, base: 'qua' })[0], /apontam para `dev`/));
+test('sem referência', () => assert.match(evaluate({ ...base, body: 'só texto' })[0], /associar a issue/));
 test('Closes de outra issue', () => assert.match(evaluate({ ...base, body: 'Closes #99' })[0], /refere a issue #23/));
+test('Refs de outra issue não satisfaz a associação da branch', () => assert.match(evaluate({ ...base, body: 'Refs #99' })[0], /branch refere a issue #23/));
 test('Closes em comentário/código não conta', () => assert.equal(evaluate({ ...base, body: '<!-- Closes #23 -->\n`Closes #23`' }).length, 1));
+test('Refs em comentário/código não conta', () => assert.equal(evaluate({ ...base, body: '<!-- Refs #23 -->\n`Refs #23`' }).length, 1));
 test('várias issues e fixes', () => assert.deepEqual(evaluate({ ...base, body: 'Fixes #5, #23 e #7' }), []));
 test('issue de outro repo não satisfaz', () => assert.equal(evaluate({ ...base, body: 'Closes creative-mode/kixi-frontend#23' }).length, 1));
 test('promoções', () => {
@@ -21,11 +28,18 @@ test('promoções', () => {
   assert.deepEqual(evaluate({ ...base, head: 'qua', base: 'prod', body: '' }), []);
   assert.equal(evaluate({ ...base, head: 'dev', base: 'prod', body: '' }).length, 1);
 });
-test('hotfix pode ir a prod; dependabot isento', () => {
-  assert.deepEqual(evaluate({ ...base, head: 'hotfix/40-crash', base: 'prod', body: 'Closes #40' }), []);
+test('hotfix não escapa a prod; dependabot isento', () => {
+  assert.match(evaluate({ ...base, head: 'hotfix/40-crash', base: 'prod', body: 'Closes #40' })[0], /só aceita merges vindos de `qua`/);
+  assert.deepEqual(evaluate({ ...base, head: 'hotfix/40-crash', base: 'dev', body: 'Closes #40' }), []);
   assert.deepEqual(evaluate({ ...base, head: 'dependabot/npm/x', body: '' }), []);
 });
+test('prod só aceita qua, nem branch normal escapa', () => {
+  assert.match(evaluate({ ...base, base: 'prod' })[0], /só aceita merges vindos de `qua`/);
+});
 test('closingRefs', () => assert.deepEqual(closingRefs('Closes #1, #2', 'a/b'), [1, 2]));
+test('linkedRefs aceita refs internas e ignora refs de outro repositório', () => {
+  assert.deepEqual(linkedRefs('Refs #1, creative-mode/kixi#2, creative-mode/kixi-frontend#3', 'creative-mode/kixi'), [1, 2]);
+});
 
 // ---------- Alerta de bloqueio ----------
 const issuesDb = {
@@ -83,6 +97,16 @@ test('merge do PR fecha a issue e avisa', async () => {
   assert.ok(posted.some((p) => p.issue_number === 105 && /Desbloqueada/.test(p.body)));
 });
 
+test('merge de PR que só referencia uma issue não a fecha nem envia alerta de conclusão', async () => {
+  const posted = [];
+  await alert({ github: mockGithub(posted), core, context: {
+    eventName: 'pull_request',
+    repo: { owner: 'creative-mode', repo: 'kixi' },
+    payload: { pull_request: { merged: true, number: 201, base: { ref: 'dev' }, body: 'Refs #105' } },
+  } });
+  assert.deepEqual(posted, []);
+});
+
 test('sem permissão cross-repo só gera aviso', async () => {
   const posted = [];
   await alert({ github: mockGithub(posted, new Set(['kixi-frontend'])), core, context: { eventName: 'issues', repo: { owner: 'creative-mode', repo: 'kixi' },
@@ -133,6 +157,39 @@ test('sync: issue aberta → Backlog; branch → In progress; PR → In review; 
   calls = [];
   await sync({ github: mockProject(calls), core, context: ctx('pull_request', { action: 'converted_to_draft', pull_request: { node_id: 'PR1', draft: true, body: 'Closes #104' } }) });
   assert.deepEqual(sets(calls), ['item-N104:o-In progress']);
+  delete process.env.PROJECT_TOKEN_SET;
+});
+
+test('sync: Refs vai a In review e regressa a In progress após merge sem encerrar a issue', async () => {
+  process.env.PROJECT_TOKEN_SET = 'true';
+  let calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'opened',
+    pull_request: { node_id: 'PR-REF', draft: false, body: 'Refs #425' },
+  }) });
+  assert.deepEqual(sets(calls), ['item-PR-REF:o-In review', 'item-N425:o-In review']);
+
+  calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'closed',
+    pull_request: { node_id: 'PR-REF', merged: true, body: 'Refs #425' },
+  }) });
+  assert.deepEqual(sets(calls), ['item-PR-REF:o-Done', 'item-N425:o-In progress']);
+  delete process.env.PROJECT_TOKEN_SET;
+});
+
+test('sync: merge fecha só a issue marcada Closes e mantém a issue Refs em progresso', async () => {
+  process.env.PROJECT_TOKEN_SET = 'true';
+  const calls = [];
+  await sync({ github: mockProject(calls), core, context: ctx('pull_request', {
+    action: 'closed',
+    pull_request: { node_id: 'PR-MIXED', merged: true, body: 'Closes #104\nRefs #425' },
+  }) });
+  assert.deepEqual(sets(calls), [
+    'item-PR-MIXED:o-Done',
+    'item-N104:o-Done',
+    'item-N425:o-In progress',
+  ]);
   delete process.env.PROJECT_TOKEN_SET;
 });
 

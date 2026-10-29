@@ -142,7 +142,7 @@ A **PR** is the proposal to merge the Issue branch into the main branch.
 
 ### Mandatory Rules
 
-* PR must **always be linked to an Issue** (`Closes #n`)
+* PR must **always be linked to its Issue**. Use `Closes #n` when the PR completes that issue; use `Refs #n` for partial work or a parent issue that remains open.
 * PR targets the main branch
 * PR without review **cannot be merged**
 
