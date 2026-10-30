@@ -71,7 +71,7 @@ Cada ronda de medição deve ser comentada na #499 com o resumo (sem fotos).
 
 ## 6. O que já se mediu com letra simulada (não substitui folhas reais)
 
-Teste de esforço com a própria `medir_folhas.py`: 7 fontes manuscritas muito diferentes (Caveat, Patrick Hand, Kalam, Indie Flower, Reenie Beanie, Shadows Into Light,
+Teste de esforço com a própria `medir_folhas.py`: 7 fontes manuscritas muito diferentes (Patrick Hand, Kalam, Indie Flower, Reenie Beanie, Shadows Into Light,
 Gloria Hallelujah, Covered By Your Grace) × 4 alunos × 4 condições (digitalização, foto, foto escura, foto com sombra e perspetiva), 28 folhas, 224 respostas objetivas:
 
 | | |
