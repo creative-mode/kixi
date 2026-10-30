@@ -2,6 +2,7 @@ package ao.creativemode.kixi.ocr.client;
 
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -265,6 +266,46 @@ public class OcrServiceClient {
                         response.requestId(), response.status()))
                 .doOnError(error -> log.error("OCR retained request failed: type={}",
                         error.getClass().getSimpleName()));
+    }
+
+    /**
+     * Read the answers students wrote on their sheets (kixi#499). The OCR service answers with the v1 contract of
+     * {@code /ocr/v1/answer-sheets/extract}; it is passed through as JSON because the caller (the SchoolOps engine)
+     * is the one that gives it meaning.
+     *
+     * @param files   the photos or scans of the sheets
+     * @param context the exam's structure as JSON: {@code {"statementId":…, "questions":[{id, number, type, options}]}}
+     */
+    public Mono<JsonNode> extractAnswerSheets(List<OcrUploadedFile> files, String context) {
+        if (files == null || files.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("At least one file is required"));
+        }
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        for (OcrUploadedFile file : files) {
+            builder.part("images", file.content())
+                    .filename(file.filename())
+                    .contentType(file.contentType() != null ? file.contentType() : getContentType(file.filename()));
+        }
+        builder.part("context", context);
+        log.info("Sending answer sheet OCR request: {} file(s)", files.size());
+        return webClient.post()
+                .uri("/ocr/v1/answer-sheets/extract")
+                .headers(this::applyAuthentication)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new OcrClientException(
+                                        "OCR request failed: " + body, response.statusCode().value()))))
+                .onStatus(HttpStatusCode::is5xxServerError, response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new OcrServerException(
+                                        "OCR service error: " + body, response.statusCode().value(), isContentError(body)))))
+                .bodyToMono(JsonNode.class)
+                .timeout(timeout)
+                .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1)).filter(this::isRetryable))
+                .doOnError(error -> log.error("Answer sheet OCR request failed: type={}", error.getClass().getSimpleName()));
     }
 
     /**
