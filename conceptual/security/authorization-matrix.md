@@ -22,6 +22,10 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 | Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido |
 | Rota sem regra explícita | Negado | Negado | Negado | Negado |
 
+## Registo escolar (`/api/v1/school-register/**`)
+
+Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escreve e lê (kixi#501). Só `ADMIN` e a conta `INTEGRATION` (dentro do `IntegrationScope`); professor e aluno recebem 403, e a sua leitura é do ecrã de pautas. Todas as escritas são idempotentes por chave; uma pauta `FECHADA` ou `ANULADA` não reabre.
+
 ## Papel `INTEGRATION` (serviços)
 
 Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria.

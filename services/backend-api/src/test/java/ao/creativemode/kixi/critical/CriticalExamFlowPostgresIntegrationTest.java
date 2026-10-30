@@ -94,6 +94,10 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .responseTimeout(Duration.ofSeconds(20))
                 .build();
 
+        sql("DELETE FROM register_appeals WHERE statement_id = " + STATEMENT);
+        sql("DELETE FROM register_exam_grades WHERE statement_id = " + STATEMENT);
+        sql("DELETE FROM register_term_entries WHERE sheet_id = 'PT-it-1'");
+        sql("DELETE FROM register_term_sheets WHERE sheet_id = 'PT-it-1'");
         sql("DELETE FROM simulation_answers WHERE simulation_id IN "
                 + "(SELECT id FROM simulations WHERE statement_id = " + STATEMENT + ")");
         sql("DELETE FROM exam_room_participants WHERE exam_room_id IN "
@@ -330,6 +334,65 @@ class CriticalExamFlowPostgresIntegrationTest {
         // Um token que diga ADMIN sem a conta o ter na base também não vale: a conta só tem INTEGRATION.
         String escalated = jwtService.generateToken(ENGINE, List.of("INTEGRATION", "ADMIN"));
         bearer(escalated).get().uri("/api/v1/accounts").exchange().expectStatus().isForbidden();
+    }
+
+    @Test
+    void theSchoolRegisterKeepsGradesAppealsAndTermSheetsIdempotently() {
+        String engine = jwtService.generateToken(ENGINE, List.of("INTEGRATION"));
+        String grades = "{\"grades\":[{\"alunoId\":\"" + STUDENT + "\",\"numero\":3,\"nome\":\"Ana\",\"nota\":14,\"situacao\":\"POSITIVA\"},"
+                + "{\"alunoId\":\"" + OTHER_TEACHER + "\",\"numero\":4,\"nome\":\"Rui\",\"nota\":null,\"situacao\":\"AUSENTE\"}]}";
+        String base = "/api/v1/school-register/exams/" + STATEMENT;
+
+        // Só o administrador e a conta de integração: um professor e um aluno são recusados.
+        bearer(teacherToken).put().uri(base + "/grades").contentType(MediaType.APPLICATION_JSON).bodyValue(grades)
+                .exchange().expectStatus().isForbidden();
+        bearer(studentToken).get().uri(base + "/grades").exchange().expectStatus().isForbidden();
+
+        // Repetir a escrita não duplica.
+        for (int i = 0; i < 2; i++) {
+            bearer(engine).put().uri(base + "/grades").contentType(MediaType.APPLICATION_JSON).bodyValue(grades)
+                    .exchange().expectStatus().isNoContent();
+        }
+        bearer(engine).get().uri(base + "/grades").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(2)
+                .jsonPath("$[0].nota").isEqualTo(14)
+                .jsonPath("$[1].nota").value(value -> assertThat(value).as("faltar não é zero").isNull());
+
+        // Reclamação: elegível só quem tem nota; fica pendente até ser tratada; a rectificação muda a nota uma só vez.
+        bearer(engine).post().uri(base + "/appeals/rec-1").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"alunoId\":\"" + OTHER_TEACHER + "\"}").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.elegivel").isEqualTo(false);
+        bearer(engine).post().uri(base + "/appeals/rec-2").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"alunoId\":\"" + STUDENT + "\"}").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.elegivel").isEqualTo(true).jsonPath("$.professorId").isEqualTo(String.valueOf(TEACHER));
+        bearer(engine).get().uri(base + "/appeals/pending-count").exchange().expectBody().jsonPath("$.count").isEqualTo(1);
+        String rectify = "{\"alunoId\":\"" + STUDENT + "\",\"pontosActuais\":2,\"pontosFinais\":5,\"decisao\":\"deferida\"}";
+        for (int i = 0; i < 2; i++) {
+            bearer(engine).post().uri(base + "/appeals/rec-2/rectify").contentType(MediaType.APPLICATION_JSON).bodyValue(rectify)
+                    .exchange().expectStatus().isNoContent();
+        }
+        bearer(engine).post().uri(base + "/appeals/rec-2/resolve").exchange().expectStatus().isNoContent();
+        bearer(engine).get().uri(base + "/appeals/pending-count").exchange().expectBody().jsonPath("$.count").isEqualTo(0);
+        bearer(engine).get().uri(base + "/grades").exchange().expectBody().jsonPath("$[0].nota").isEqualTo(17);
+
+        // Uma nota fora de 0..20 é recusada; uma pauta fechada não reabre.
+        bearer(engine).put().uri(base + "/grades").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"grades\":[{\"alunoId\":\"" + STUDENT + "\",\"nota\":25}]}").exchange().expectStatus().isBadRequest();
+        String sheet = "/api/v1/school-register/term-sheets/PT-it-1";
+        bearer(engine).put().uri(sheet).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"contexto\":{\"turma\":\"A1\"},\"estatisticas\":{\"media\":12},\"entradas\":[{\"alunoId\":\"" + STUDENT + "\",\"nota\":13}]}")
+                .exchange().expectStatus().isNoContent();
+        bearer(engine).put().uri(sheet + "/components/MAC").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"entradas\":[{\"alunoId\":\"" + STUDENT + "\",\"mac\":15}]}").exchange().expectStatus().isNoContent();
+        bearer(engine).post().uri(sheet + "/close").exchange().expectStatus().isNoContent();
+        bearer(engine).post().uri(sheet + "/close").exchange().expectStatus().isNoContent();
+        bearer(engine).post().uri(sheet + "/annul").exchange().expectStatus().isEqualTo(HttpStatus.CONFLICT);
+        bearer(engine).get().uri(sheet).exchange().expectBody().jsonPath("$.estado").isEqualTo("FECHADA")
+                .jsonPath("$.contexto.turma").isEqualTo("A1");
+        sql("DELETE FROM register_term_entries WHERE sheet_id = 'PT-it-1'");
+        sql("DELETE FROM register_term_sheets WHERE sheet_id = 'PT-it-1'");
+        sql("DELETE FROM register_appeals WHERE statement_id = " + STATEMENT);
+        sql("DELETE FROM register_exam_grades WHERE statement_id = " + STATEMENT);
     }
 
     @Test
