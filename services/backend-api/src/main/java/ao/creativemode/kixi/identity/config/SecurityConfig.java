@@ -116,6 +116,14 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
                         .hasRole("ADMIN")
+                        // Leitura das pautas (kixi#506): o professor e o administrador as da escola/turma, o aluno só a sua linha.
+                        // O serviço decide o que cada um vê; a conta de integração fica de fora (não está no seu âmbito).
+                        .pathMatchers(HttpMethod.GET, "/api/v1/term-sheets", "/api/v1/term-sheets/*")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/term-sheets", "/api/v1/term-sheets/**")
+                        .denyAll()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/me/term-sheets")
+                        .hasRole("STUDENT")
                         .pathMatchers("/api/v1/enrollments", "/api/v1/enrollments/**",
                                 "/api/v1/me", "/api/v1/me/**")
                         .authenticated()
