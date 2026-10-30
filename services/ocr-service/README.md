@@ -58,6 +58,7 @@ This service is part of the Kixi platform and is responsible for:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/ocr/v1/extract` | Extract text from one or more images/PDFs |
+| POST | `/ocr/v1/answer-sheets/extract` | Read the answers students wrote on answer sheets, guided by the exam's structure (kixi#499) |
 | POST | `/ocr/v1/extract/simple` | Simple single-image extraction |
 | GET | `/ocr/health` | Detailed health check |
 | GET | `/health` | Simple health check |
@@ -415,3 +416,20 @@ not depend on the internet and needs no model volume.
 Limits found on the real exams: a photo whose lines the mobile detector cannot see (a faded block, a red circle over
 a number) loses those questions even after the second read; the numbering repair (`_repair_lost_labels`) gives back
 a label the photo turned into a dot or a digit, but a whole missing line stays missing.
+
+## Answer sheets (`/ocr/v1/answer-sheets/extract`)
+
+Multipart: `images[]` (photos or PDF scans, the same limits as `/ocr/v1/extract`) and `context`, the structure of the exam:
+
+```json
+{ "statementId": 2, "questions": [
+  { "id": "5", "number": 1, "type": "multiple_choice", "options": ["A", "B", "C", "D"] },
+  { "id": "6", "number": 2, "type": "true_false" },
+  { "id": "7", "number": 3, "type": "open" } ] }
+```
+
+The response (`version: "1"`) has one entry in `sheets` per student: `student.number` and `student.name`, and per question `selected` (multiple choice, true/false: `A`..`E`, `V`/`F`) or `text` (open), each as `{value, confidence}`. A question that was not found has `value: null` and `confidence: 0`, never zero marks. `warnings` carry `LOW_CONFIDENCE` (< 0.9), `NOT_FOUND`, `AMBIGUOUS` (two different marks under one question) and `STUDENT_NOT_IDENTIFIED`, each with the `field` that has the problem. The service only says what it read: grading and matching the student to an account are the caller's (ADR-0008).
+
+**The sheet must follow a convention**: the header says "Nº 3" and/or "Nome: Ana Domingos"; each answer starts with its question number ("1) B", "2. Falso", "3 - texto"). A page with a header opens a new student's sheet; a page without one continues the previous sheet. Answers in pen are preferred over printed lines in an open answer.
+
+**What is and is not measured**: the parser is covered by unit tests and was run with the real engine on synthetic sheets (typed text in blue ink), where every answer was read. Accuracy on real student handwriting has **not** been measured: PP-OCRv5 reads handwriting much worse than print, so the confidence is what the caller must use to send a reading to a person. Do not rely on it for grading without the human validation step.
