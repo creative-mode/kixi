@@ -26,6 +26,19 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 
 Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escreve e lê (kixi#501). Só `ADMIN` e a conta `INTEGRATION` (dentro do `IntegrationScope`); professor e aluno recebem 403, e a sua leitura é do ecrã de pautas. Todas as escritas são idempotentes por chave; uma pauta `FECHADA` ou `ANULADA` não reabre.
 
+## Leitura das pautas (`GET /api/v1/term-sheets`, `GET /api/v1/term-sheets/{sheetId}`, `GET /api/v1/me/term-sheets`)
+
+O motor escreve as pautas em `/school-register` (só `ADMIN` e `INTEGRATION`); estas rotas são a **leitura** para quem as consulta (kixi#506). O acesso decide-se assim:
+
+| Papel | `GET /term-sheets` e `/{sheetId}` | `GET /me/term-sheets` |
+|---|---|---|
+| `ADMIN` | todas as pautas (`REGISTADA` e `FECHADA`); uma que não existe dá 404 | 403 |
+| `TEACHER` | só as pautas da **turma e da disciplina** que leciona (`teaching_assignments`, o par exato, como a leitura de enunciados); o que não pode ler e o que não existe dão ambos 403, para não revelar que pautas há | 403 |
+| `STUDENT` | 403 | só a **sua** linha (MAC, P1, P2, MT, estado), só de pautas `FECHADA`: nada de outros alunos nem de estatísticas da turma |
+| `INTEGRATION` | 403 (fora do âmbito do motor, ver `IntegrationScope`) | 403 |
+
+Uma pauta `ANULADA` não se mostra a ninguém. A turma e a disciplina de uma pauta vêm do contexto que o motor registou (`turmaId` = "turma-disciplina", `disciplinaId`), por isso um contexto sem elas só é visível ao administrador. Métodos de escrita em `/term-sheets` são recusados (403). Os PDFs das pautas não estão nesta rota.
+
 ## Leitura de folhas de resposta (`POST /api/v1/ocr/answer-sheets`)
 
 Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enunciado** (`StatementWriteAccessService`: administrador, o professor da turma e da disciplina, ou a conta `INTEGRATION`) o chama; o aluno recebe 403. A estrutura que o OCR procura (questões, tipos, letras) sai do enunciado e não do pedido. Devolve o contrato v1 do OCR (`sheets`, `warnings`, confiança por campo): o que foi lido, nunca uma nota. Tem o mesmo limite de uploads por conta que o resto do OCR.
