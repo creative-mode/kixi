@@ -15,6 +15,8 @@ class IntegrationScopeTest {
         assertThat(IntegrationScope.allows(HttpMethod.GET, "/api/v1/statements/9/full")).isTrue();
         assertThat(IntegrationScope.allows(HttpMethod.PATCH, "/api/v1/simulation-answers/7/grade")).isTrue();
         assertThat(IntegrationScope.allows(HttpMethod.POST, "/api/v1/exam-rooms/3/close")).isTrue();
+        assertThat(IntegrationScope.allows(HttpMethod.POST, "/api/v1/ocr/answer-sheets")).isTrue();
+        assertThat(IntegrationScope.allows(HttpMethod.POST, "/api/v1/ocr/extract")).isFalse();
     }
 
     @Test

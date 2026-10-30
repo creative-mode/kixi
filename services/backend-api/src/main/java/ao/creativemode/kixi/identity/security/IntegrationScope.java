@@ -43,7 +43,9 @@ public final class IntegrationScope {
             rule(HttpMethod.PUT, "/api/v1/simulations/\\d+"),
             rule(HttpMethod.POST, "/api/v1/simulations/\\d+/submit"),
             rule(HttpMethod.POST, "/api/v1/simulation-answers"),
-            rule(HttpMethod.POST, "/api/v1/exam-rooms/\\d+/close"));
+            rule(HttpMethod.POST, "/api/v1/exam-rooms/\\d+/close"),
+            // Ler as folhas de resposta de uma prova em papel (kixi#499).
+            rule(HttpMethod.POST, "/api/v1/ocr/answer-sheets"));
 
     private IntegrationScope() {
     }
