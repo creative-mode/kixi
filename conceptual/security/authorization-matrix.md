@@ -22,6 +22,10 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 | Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido |
 | Rota sem regra explícita | Negado | Negado | Negado | Negado |
 
+## Registo escolar (`/api/v1/school-register/**`)
+
+Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escreve e lê (kixi#501). Só `ADMIN` e a conta `INTEGRATION` (dentro do `IntegrationScope`); professor e aluno recebem 403, e a sua leitura é do ecrã de pautas. Todas as escritas são idempotentes por chave; uma pauta `FECHADA` ou `ANULADA` não reabre.
+
 ## Leitura de folhas de resposta (`POST /api/v1/ocr/answer-sheets`)
 
 Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enunciado** (`StatementWriteAccessService`: administrador, o professor da turma e da disciplina, ou a conta `INTEGRATION`) o chama; o aluno recebe 403. A estrutura que o OCR procura (questões, tipos, letras) sai do enunciado e não do pedido. Devolve o contrato v1 do OCR (`sheets`, `warnings`, confiança por campo): o que foi lido, nunca uma nota. Tem o mesmo limite de uploads por conta que o resto do OCR.

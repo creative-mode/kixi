@@ -44,6 +44,16 @@ public final class IntegrationScope {
             rule(HttpMethod.POST, "/api/v1/simulations/\\d+/submit"),
             rule(HttpMethod.POST, "/api/v1/simulation-answers"),
             rule(HttpMethod.POST, "/api/v1/exam-rooms/\\d+/close"),
+            // O registo escolar (kixi#501): notas por prova, reclamações e pautas.
+            rule(HttpMethod.PUT, "/api/v1/school-register/exams/\\d+/grades"),
+            rule(HttpMethod.GET, "/api/v1/school-register/exams/\\d+/grades"),
+            rule(HttpMethod.POST, "/api/v1/school-register/exams/\\d+/appeals/[\\w.-]+"),
+            rule(HttpMethod.GET, "/api/v1/school-register/exams/\\d+/appeals/pending-count"),
+            rule(HttpMethod.POST, "/api/v1/school-register/exams/\\d+/appeals/[\\w.-]+/(resolve|rectify)"),
+            rule(HttpMethod.PUT, "/api/v1/school-register/term-sheets/[\\w.-]+"),
+            rule(HttpMethod.PUT, "/api/v1/school-register/term-sheets/[\\w.-]+/components/[A-Za-z]+"),
+            rule(HttpMethod.POST, "/api/v1/school-register/term-sheets/[\\w.-]+/(close|annul)"),
+            rule(HttpMethod.GET, "/api/v1/school-register/term-sheets/[\\w.-]+"),
             // Ler as folhas de resposta de uma prova em papel (kixi#499).
             rule(HttpMethod.POST, "/api/v1/ocr/answer-sheets"));
 
