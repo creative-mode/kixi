@@ -22,6 +22,14 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 | Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido |
 | Rota sem regra explícita | Negado | Negado | Negado | Negado |
 
+## Registo escolar (`/api/v1/school-register/**`)
+
+Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escreve e lê (kixi#501). Só `ADMIN` e a conta `INTEGRATION` (dentro do `IntegrationScope`); professor e aluno recebem 403, e a sua leitura é do ecrã de pautas. Todas as escritas são idempotentes por chave; uma pauta `FECHADA` ou `ANULADA` não reabre.
+
+## Leitura de folhas de resposta (`POST /api/v1/ocr/answer-sheets`)
+
+Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enunciado** (`StatementWriteAccessService`: administrador, o professor da turma e da disciplina, ou a conta `INTEGRATION`) o chama; o aluno recebe 403. A estrutura que o OCR procura (questões, tipos, letras) sai do enunciado e não do pedido. Devolve o contrato v1 do OCR (`sheets`, `warnings`, confiança por campo): o que foi lido, nunca uma nota. Tem o mesmo limite de uploads por conta que o resto do OCR.
+
 ## Papel `INTEGRATION` (serviços)
 
 Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria.
@@ -29,7 +37,7 @@ Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `AD
 | Pode | Caminhos |
 |---|---|
 | Ler | `GET` simulações (lista, uma, resultado), respostas, enunciado completo e questões, anos letivos (por id), disciplinas, salas próprias e as suas notas, alunos de uma turma (analytics) |
-| Escrever | `PATCH` da pontuação de uma resposta; criar, atualizar e submeter simulações e respostas; fechar uma sala |
+| Escrever | `PATCH` da pontuação de uma resposta; criar, atualizar e submeter simulações e respostas; fechar uma sala; `POST /ocr/answer-sheets` (ler as folhas de uma prova em papel) |
 | Não pode | contas, instituições, apagar ou purgar, lixeiras, editar enunciados, o resto da API e `/actuator` |
 
 A autenticação continua a ser por login com palavra-passe (o JWT expira); trocar por um token de serviço próprio fica fora deste âmbito.

@@ -162,10 +162,15 @@ public class SecurityConfig {
                         // mark an answer. Nothing in the service would have
                         // stopped it: the write rule weighs the statement the
                         // caller never named.
+                        // O registo escolar do motor SchoolOps (kixi#501): só o administrador e a conta de integração.
+                        .pathMatchers("/api/v1/school-register/**")
+                        .hasAnyRole("ADMIN", "INTEGRATION")
                         .pathMatchers("/api/v1/questions/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET, "/api/v1/ocr/**")
                         .authenticated()
+                        .pathMatchers(HttpMethod.POST, "/api/v1/ocr/answer-sheets")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         .pathMatchers("/api/v1/ocr/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         // Trash views expose records the normal catalog hides.

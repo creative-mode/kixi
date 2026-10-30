@@ -756,9 +756,13 @@ class OCREngine:
         request_id: Optional[str] = None,
         source_file_index: int = 0,
         native_text_page: Optional[Dict[str, Any]] = None,
+        lean: bool = False,
     ) -> OCRResult:
         """
         Process a single image and extract text with structure.
+
+        ``lean`` reads the lines only: no layout detection and no second read with the fallback detector. It is for
+        pages that are not exam statements (the students' answer sheets), where those passes find nothing and cost minutes.
 
         Args:
             image: Image as numpy array (BGR format)
@@ -865,7 +869,7 @@ class OCREngine:
             else:
                 raw_results = self._run_ocr(processed_image)
                 text_blocks = self._parse_ocr_results(raw_results, page_index)
-                layout = self._detect_layout(processed_image, request_id)
+                layout = None if lean else self._detect_layout(processed_image, request_id)
                 analysis_image = processed_image
             text_blocks, layout = self._mark_handwriting(image, processed_image, text_blocks, layout)
 
@@ -940,7 +944,8 @@ class OCREngine:
             # A page the primary pass could not make questions of, or numbered with gaps, is read again on the
             # original photo at higher detector resolution. Layout and formula crops keep the same image frame.
             if (
-                settings.ocr_pipeline != "vl"
+                not lean
+                and settings.ocr_pipeline != "vl"
                 and settings.ocr_fallback_det_model_name
                 and (
                     len(questions) < settings.ocr_min_questions
@@ -1116,6 +1121,7 @@ class OCREngine:
         page_index: int = 0,
         request_id: Optional[str] = None,
         source_file_index: int = 0,
+        lean: bool = False,
     ) -> OCRResult:
         """
         Asynchronously process a single image.
@@ -1136,6 +1142,8 @@ class OCREngine:
             page_index,
             request_id,
             source_file_index,
+            None,
+            lean,
         )
 
     def process_images(
@@ -1728,18 +1736,18 @@ class OCRProcessWorker:
 
     def process_image(self, image: np.ndarray, page_index: int = 0,
                       request_id: Optional[str] = None, source_file_index: int = 0,
-                      native_text_page: Optional[Dict[str, Any]] = None) -> OCRResult:
+                      native_text_page: Optional[Dict[str, Any]] = None, lean: bool = False) -> OCRResult:
         return asyncio.run(self._call(
             "process_image", image=image, page_index=page_index,
             request_id=request_id, source_file_index=source_file_index,
-            native_text_page=native_text_page,
+            native_text_page=native_text_page, lean=lean,
         ))
 
     async def process_image_async(self, image: np.ndarray, page_index: int = 0,
                                   request_id: Optional[str] = None,
-                                  source_file_index: int = 0) -> OCRResult:
+                                  source_file_index: int = 0, lean: bool = False) -> OCRResult:
         return await self._call("process_image", image=image, page_index=page_index,
-                                request_id=request_id, source_file_index=source_file_index)
+                                request_id=request_id, source_file_index=source_file_index, lean=lean)
 
     def process_images(self, images: List[np.ndarray], request_id: Optional[str] = None,
                        source_file_indices: Optional[List[int]] = None) -> OCRResult:

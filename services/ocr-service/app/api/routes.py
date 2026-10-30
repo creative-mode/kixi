@@ -31,6 +31,7 @@ from app.api.pdf_handler import (
     validate_pdf,
 )
 from app.api.security import require_ocr_api_key
+from app.ocr.answer_sheet import extract_sheets
 
 import structlog
 
@@ -460,6 +461,108 @@ async def extract_text(
             status_code=500,
             detail="OCR processing failed"
         )
+
+
+@router.post("/v1/answer-sheets/extract")
+async def extract_answer_sheets(
+    request: Request,
+    images: List[UploadFile] = File(..., description="Photos or scans of the students' answer sheets"),
+    context: str = Form(..., description="JSON: the exam's structure, {statementId, questions: [{id, number, type, options}]}"),
+    _: None = Depends(require_ocr_api_key),
+    engine: OCRProcessWorker = Depends(get_ocr_engine),
+) -> JSONResponse:
+    """
+    Read what students wrote on their answer sheets (kixi#499).
+
+    One sheet per student: a page whose header carries "Nº" or "Nome" opens a new sheet, a page without it continues
+    the previous one. Answers start with the question number ("1) B"). The response only says what was read and how
+    sure the reading is (ADR-0008): grading, matching the student to an account and deciding on low confidence are
+    the caller's.
+    """
+    request_id = request.state.request_id
+    started = time.time()
+    if not images:
+        raise HTTPException(status_code=400, detail="At least one image is required")
+    if len(images) > settings.max_images_per_request:
+        raise HTTPException(status_code=400, detail=f"Maximum {settings.max_images_per_request} images allowed per request")
+    try:
+        structure = json.loads(context)
+        questions = structure["questions"]
+        if not isinstance(questions, list) or not questions:
+            raise ValueError("no questions")
+        for question in questions:
+            int(question["number"]), str(question["id"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid context: expected {questions: [{id, number, type}]}")
+
+    pages = []
+    total_bytes = 0
+    total_pixels = 0
+    try:
+        for file_index, upload in enumerate(images):
+            content = await read_bounded_upload(upload, settings.max_upload_size_bytes - total_bytes)
+            total_bytes += len(content)
+            file_type = resolve_file_type(upload.filename, content)
+            if file_type == "pdf":
+                remaining = settings.max_ocr_pixels_per_request - total_pixels
+                total_pixels += validate_pdf(content, max_pages=settings.max_pdf_pages, max_total_pixels=remaining)
+                count = int(get_pdf_info(content).get("page_count") or 0)
+                rasters = [
+                    extract_images_from_pdf(content, dpi=settings.target_dpi, first_page=n, last_page=n,
+                                            max_total_pixels=settings.max_ocr_pixels_per_request)[0]
+                    for n in range(1, count + 1)
+                ]
+            else:
+                pixels = image_pixel_count(content)
+                if pixels > settings.max_ocr_pixels_per_request - total_pixels:
+                    raise ValueError("Request exceeds the maximum total rendered pixel count")
+                total_pixels += pixels
+                rasters = [load_image_from_bytes(content, max_pixels=settings.max_ocr_pixels_per_request)]
+            for raster in rasters:
+                if len(pages) >= settings.max_ocr_pages_per_request:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Maximum {settings.max_ocr_pages_per_request} pages allowed per request")
+                pages.append((file_index, raster))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid uploaded file")
+    if not pages:
+        raise HTTPException(status_code=400, detail="No valid images could be extracted")
+
+    read_pages = []
+    try:
+        for page_index, (file_index, raster) in enumerate(pages):
+            result = await engine.process_image_async(
+                raster, page_index=page_index, request_id=request_id, source_file_index=file_index, lean=True)
+            blocks = result.page_context.text_blocks if result.page_context is not None else []
+            read_pages.append((page_index, blocks))
+    except OCRPageInputError as exc:
+        raise HTTPException(status_code=400, detail="Failed to process uploaded file") from exc
+    except Exception as exc:
+        logger.error("Answer sheet OCR failed", request_id=request_id, error_type=type(exc).__name__)
+        raise HTTPException(status_code=500, detail="OCR processing failed")
+
+    extracted = extract_sheets(read_pages, structure)
+    logger.info(
+        "Answer sheet extraction complete",
+        request_id=request_id,
+        pages=len(read_pages),
+        sheets=len(extracted["sheets"]),
+        warnings=len(extracted["warnings"]),
+    )
+    return JSONResponse(content={
+        "version": "1",
+        "status": "success" if extracted["sheets"] else "error",
+        "requestId": request_id,
+        "processingTimeMs": int((time.time() - started) * 1000),
+        "overallConfidence": extracted["overallConfidence"],
+        "document": {"pageCount": len(read_pages), "sheetCount": len(extracted["sheets"])},
+        "sheets": extracted["sheets"],
+        "warnings": extracted["warnings"],
+        "unmappedContent": [],
+    })
 
 
 @router.post("/v1/extract/simple")
