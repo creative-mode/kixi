@@ -82,6 +82,16 @@ def test_two_students_in_two_photos_come_back_as_two_sheets(client, engine_overr
     assert ("NOT_FOUND", "sheets[1].answers[2]") in codes
 
 
+def test_answer_sheets_are_read_lean_without_layout_or_the_second_read(client, engine_override):
+    # Uma folha de resposta não tem enunciado: o layout e a releitura com o detector de reserva só gastam minutos (kixi#499).
+    engine = engine_reading([line("Nº 1", 10), line("1) B", 60)])
+    engine_override(engine)
+
+    assert post(client, [png()]).status_code == 200
+
+    assert engine.process_image_async.call_args.kwargs["lean"] is True
+
+
 def test_a_page_without_header_continues_the_previous_sheet(client, engine_override):
     engine_override(engine_reading(
         [line("Nº 3", 10), line("1) A", 60)],

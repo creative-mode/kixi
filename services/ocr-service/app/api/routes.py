@@ -535,7 +535,7 @@ async def extract_answer_sheets(
     try:
         for page_index, (file_index, raster) in enumerate(pages):
             result = await engine.process_image_async(
-                raster, page_index=page_index, request_id=request_id, source_file_index=file_index)
+                raster, page_index=page_index, request_id=request_id, source_file_index=file_index, lean=True)
             blocks = result.page_context.text_blocks if result.page_context is not None else []
             read_pages.append((page_index, blocks))
     except OCRPageInputError as exc:
