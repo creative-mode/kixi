@@ -333,6 +333,40 @@ class CriticalExamFlowPostgresIntegrationTest {
     }
 
     @Test
+    void answerSheetsAreReadOnlyForWhoMayWriteTheStatement() {
+        sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
+        String engine = jwtService.generateToken(ENGINE, List.of("INTEGRATION"));
+
+        // O aluno é recusado antes de qualquer OCR. (A regra de escrita por turma é a de StatementWriteAccessService,
+        // coberta nos seus testes; este enunciado não tem escola nem turma.)
+        assertThat(postAnswerSheet(studentToken).value()).isIn(401, 403);
+        // O professor e a conta de integração passam a autorização; o OCR de teste está em baixo, por isso o que
+        // se vê é uma falha do OCR (5xx) e não uma recusa.
+        assertThat(postAnswerSheet(teacherToken).is5xxServerError()).isTrue();
+        assertThat(postAnswerSheet(engine).is5xxServerError()).isTrue();
+    }
+
+    private static byte[] tinyPng() {
+        try {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", out);
+            return out.toByteArray();
+        } catch (java.io.IOException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private HttpStatusCode postAnswerSheet(String token) {
+        org.springframework.http.client.MultipartBodyBuilder parts = new org.springframework.http.client.MultipartBodyBuilder();
+        parts.part("statementId", String.valueOf(STATEMENT));
+        parts.part("files", tinyPng()).filename("folha.png").contentType(MediaType.IMAGE_PNG);
+        return bearer(token).post().uri("/api/v1/ocr/answer-sheets")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(org.springframework.web.reactive.function.BodyInserters.fromMultipartData(parts.build()))
+                .exchange().returnResult(String.class).getStatus();
+    }
+
+    @Test
     void rejectsEventsAfterTheDeadlineEvenWhileTheSweepIsDisabled() {
         sql("UPDATE statements SET visible = true, needs_review = false WHERE id = " + STATEMENT);
         AtomicLong simulationId = new AtomicLong();
