@@ -53,7 +53,9 @@ public final class IntegrationScope {
             rule(HttpMethod.PUT, "/api/v1/school-register/term-sheets/[\\w.-]+"),
             rule(HttpMethod.PUT, "/api/v1/school-register/term-sheets/[\\w.-]+/components/[A-Za-z]+"),
             rule(HttpMethod.POST, "/api/v1/school-register/term-sheets/[\\w.-]+/(close|annul)"),
-            rule(HttpMethod.GET, "/api/v1/school-register/term-sheets/[\\w.-]+"));
+            rule(HttpMethod.GET, "/api/v1/school-register/term-sheets/[\\w.-]+"),
+            // Ler as folhas de resposta de uma prova em papel (kixi#499).
+            rule(HttpMethod.POST, "/api/v1/ocr/answer-sheets"));
 
     private IntegrationScope() {
     }

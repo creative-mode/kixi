@@ -169,6 +169,8 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.GET, "/api/v1/ocr/**")
                         .authenticated()
+                        .pathMatchers(HttpMethod.POST, "/api/v1/ocr/answer-sheets")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         .pathMatchers("/api/v1/ocr/**")
                         .hasAnyRole("ADMIN", "TEACHER")
                         // Trash views expose records the normal catalog hides.

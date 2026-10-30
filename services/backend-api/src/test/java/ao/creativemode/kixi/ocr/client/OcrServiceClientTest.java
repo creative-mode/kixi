@@ -296,6 +296,52 @@ class OcrServiceClientTest {
             .verifyComplete();
     }
 
+    @Test
+    void sendsTheSheetsAndTheStructureAndReturnsTheContractAsIs() throws Exception {
+        server.enqueue(jsonResponse("""
+            {"version": "1", "status": "success", "sheets": [{"pageIndexes": [0],
+              "student": {"number": {"value": 3, "confidence": 0.9}},
+              "answers": [{"questionId": "5", "number": 1, "type": "multiple_choice",
+                           "selected": {"value": "B", "confidence": 0.97}}]}], "warnings": []}
+            """));
+        OcrServiceClient client = client(0, "internal-key");
+        OcrUploadedFile sheet = new OcrUploadedFile("folha.png", MediaType.IMAGE_PNG, new byte[] {1, 2, 3});
+
+        StepVerifier.create(client.extractAnswerSheets(List.of(sheet), "{\"statementId\":2,\"questions\":[]}"))
+            .assertNext(body -> {
+                assertThat(body.get("sheets").get(0).get("answers").get(0).get("selected").get("value").asText()).isEqualTo("B");
+                assertThat(body.get("version").asText()).isEqualTo("1");
+            })
+            .verifyComplete();
+
+        RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
+        assertThat(request.getPath()).isEqualTo("/ocr/v1/answer-sheets/extract");
+        assertThat(request.getHeader("X-OCR-API-Key")).isEqualTo("internal-key");
+        String body = request.getBody().readUtf8();
+        assertThat(body).contains("name=\"images\"").contains("name=\"context\"").contains("\"statementId\":2");
+    }
+
+    @Test
+    void anAnswerSheetRequestWithoutFilesNeverReachesTheService() {
+        StepVerifier.create(client(0).extractAnswerSheets(List.of(), "{}"))
+            .expectError(IllegalArgumentException.class)
+            .verify();
+        assertThat(server.getRequestCount()).isZero();
+    }
+
+    @Test
+    void anAnswerSheetClientErrorKeepsItsStatus() {
+        server.enqueue(new MockResponse().setResponseCode(400).setBody("{\"detail\":\"Invalid context\"}"));
+
+        StepVerifier.create(client(0).extractAnswerSheets(
+                List.of(new OcrUploadedFile("f.png", MediaType.IMAGE_PNG, new byte[] {1})), "{}"))
+            .expectErrorSatisfies(error -> {
+                assertThat(error).isInstanceOf(OcrServiceClient.OcrClientException.class);
+                assertThat(((OcrServiceClient.OcrClientException) error).getStatusCode()).isEqualTo(400);
+            })
+            .verify();
+    }
+
     private OcrServiceClient client(int maxRetries) {
         return new OcrServiceClient(server.url("/").toString(), 5000, maxRetries);
     }
