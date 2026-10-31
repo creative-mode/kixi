@@ -117,6 +117,10 @@ public class SchoolOpsPautaOpener {
                 pedido.put("professor", ts.getT1());
                 pedido.put("alunos", ts.getT2());
                 pedido.put("provas", List.of(prova(p1, "P1"), prova(p2, "P2")));
+                // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44).
+                List<Map<String, Object>> mac = assessments.stream().filter(x -> x.kind().equals("MAC") && !x.status().equals("DISPENSED"))
+                        .map(x -> Map.<String, Object>of("titulo", x.title(), "data", x.plannedDate().toString())).toList();
+                if (!mac.isEmpty()) pedido.put("avaliacoesContinuas", mac);
                 pedido.put("callback", Map.of("url", properties.getCallbackUrl()));
                 return new Built(pedido, List.of(String.valueOf(p1.statementId()), String.valueOf(p2.statementId())));
             }));

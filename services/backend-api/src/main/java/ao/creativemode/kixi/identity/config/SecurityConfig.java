@@ -123,6 +123,11 @@ public class SecurityConfig {
                         // Plano do trimestre e coordenador por instituição (kixi#523, kixi#513). O serviço decide o que cada um vê e faz.
                         .pathMatchers("/api/v1/institutions/*/coordinators", "/api/v1/institutions/*/coordinators/*")
                         .hasRole("ADMIN")
+                        // O coordenador acompanha as salas da sua instituição, só em leitura (kixi#529); o serviço decide a instituição.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/coordination/exam-rooms", "/api/v1/coordination/exam-rooms/*/grades")
+                        .hasAnyRole("ADMIN", "COORDINATOR")
+                        .pathMatchers("/api/v1/coordination/**")
+                        .denyAll()
                         .pathMatchers("/api/v1/term-plans", "/api/v1/term-plans/**")
                         .hasAnyRole("ADMIN", "TEACHER", "COORDINATOR")
                         // Leitura das pautas (kixi#506): o professor e o administrador as da escola/turma, o aluno só a sua linha.
