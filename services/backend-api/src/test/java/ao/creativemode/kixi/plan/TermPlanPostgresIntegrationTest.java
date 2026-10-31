@@ -148,6 +148,15 @@ class TermPlanPostgresIntegrationTest {
         sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
                 + "(523001, 'P1 Matemática', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
         patch(teacher, plan.get(), p1, "{\"statementId\":523001}").jsonPath("$.assessments[0].status").isEqualTo("STATEMENT_READY");
+        // concluir o agendamento pede P1 e P2 com enunciado; só o professor da turma (ou o coordenador) conclui
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isEqualTo(409);
+        long p2Early = assessmentId(plan.get(), "P2", 1);
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE id = " + p2Early);
+        bearer(token(OTHER_TEACHER, "TEACHER")).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isForbidden();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+        sql("UPDATE term_assessments SET statement_id = NULL WHERE id = " + p2Early);
+        sql("UPDATE term_plans SET scheduling_concluded_at = NULL WHERE id = " + plan.get());
         sql("INSERT INTO exam_rooms (id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status, class_id) VALUES "
                 + "(523001, 523001, " + TEACHER + ", now(), now() + interval '1 day', 60, 'RUNNING', " + CLASS + ")");
         patch(teacher, plan.get(), p1, "{\"roomId\":523001}").jsonPath("$.assessments[0].status").isEqualTo("ROOM_OPEN");
