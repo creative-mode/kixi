@@ -87,6 +87,11 @@ public class TermPlanController {
         return service.access().flatMap(who -> service.reschedule(who, id, assessmentId, r.date(), r.reason()));
     }
 
+    @PostMapping("/{id}/conclude")
+    public Mono<Plan> conclude(@PathVariable Long id) {
+        return service.access().flatMap(who -> service.conclude(who, id));
+    }
+
     @PostMapping("/{id}/approve")
     public Mono<Plan> approve(@PathVariable Long id) {
         return service.access().flatMap(who -> service.approve(who, id));

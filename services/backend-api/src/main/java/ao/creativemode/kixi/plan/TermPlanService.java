@@ -42,8 +42,8 @@ public class TermPlanService {
                              String status, String dispensedReason, int daysLeft) { }
 
     public record Plan(Long id, Long classId, String className, Long subjectId, String subjectName, Long termId, Integer termNumber,
-                       Long institutionId, boolean approved, boolean readyForPauta, boolean pautaOpened, String pautaRef,
-                       List<Assessment> assessments) { }
+                       Long institutionId, boolean approved, boolean schedulingConcluded, boolean readyForPauta, boolean pautaOpened,
+                       String pautaRef, List<Assessment> assessments) { }
 
     public record Reminder(Long planId, Long assessmentId, String kind, String title, LocalDate plannedDate, int daysLeft,
                            String action, String level, String className, String subjectName) { }
@@ -249,6 +249,31 @@ public class TermPlanService {
                 .bind("u", who.accountId()).bind("p", planId).fetch().rowsUpdated()).then(plan(who, planId));
     }
 
+    /**
+     * O professor da turma e disciplina conclui o agendamento: a pauta abre no motor, cada componente fica à espera da sua data.
+     * Pede P1 e P2 com enunciado (o contrato do motor identifica a prova pelo enunciado).
+     */
+    @Transactional
+    public Mono<Plan> conclude(Access who, Long planId) {
+        return loadHeader(planId).flatMap(h -> {
+            boolean coordinator = h.institutionId() != null && who.coordinatorOf().contains(h.institutionId());
+            if (!(who.admin() || coordinator || who.teaches(h.classId(), h.subjectId()))) {
+                return Mono.<Header>error(ApiException.forbidden("Only the teacher or the coordinator concludes the scheduling"));
+            }
+            if (h.schedulingConcluded()) return Mono.just(h);
+            return assessments(planId).collectList().flatMap(list -> {
+                boolean missing = !hasStatement(list, "P1") || !hasStatement(list, "P2");
+                return missing ? Mono.<Header>error(ApiException.conflict("P1 and P2 need a statement before the scheduling is concluded"))
+                        : db.sql("UPDATE term_plans SET scheduling_concluded_at = CURRENT_TIMESTAMP, scheduling_concluded_by = :u, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
+                        .bind("u", who.accountId()).bind("p", planId).fetch().rowsUpdated().thenReturn(h);
+            });
+        }).then(plan(who, planId));
+    }
+
+    private static boolean hasStatement(List<Assessment> list, String kind) {
+        return list.stream().anyMatch(a -> a.kind().equals(kind) && a.statementId() != null);
+    }
+
     private static <T> DatabaseClient.GenericExecuteSpec nullable(DatabaseClient.GenericExecuteSpec spec, String name, T value, Class<T> type) {
         return value == null ? spec.bindNull(name, type) : spec.bind(name, value);
     }
@@ -294,10 +319,9 @@ public class TermPlanService {
                 });
     }
 
-    /** Os planos prontos para abrir a pauta no motor e ainda não abertos (para o gatilho da etapa B). */
+    /** Os planos com o agendamento concluído e a pauta por abrir no motor. */
     public Flux<Long> readyAndNotOpened() {
-        return db.sql("SELECT id FROM term_plans WHERE pauta_opened_at IS NULL").map((row, meta) -> row.get(0, Long.class)).all()
-                .filterWhen(id -> assessments(id).collectList().map(TermPlanService::allCleared));
+        return db.sql("SELECT id FROM term_plans WHERE pauta_opened_at IS NULL AND scheduling_concluded_at IS NOT NULL ORDER BY id").map((row, meta) -> row.get(0, Long.class)).all();
     }
 
     static boolean allCleared(List<Assessment> assessments) {
@@ -305,18 +329,18 @@ public class TermPlanService {
     }
 
     private record Header(Long id, Long classId, String className, Long subjectId, String subjectName, Long termId, Integer termNumber,
-                          Long institutionId, boolean approved, LocalDateTime pautaOpenedAt, String pautaRef) { }
+                          Long institutionId, boolean approved, boolean schedulingConcluded, LocalDateTime pautaOpenedAt, String pautaRef) { }
 
     private Mono<Header> loadHeader(Long planId) {
         return db.sql("""
                 SELECT p.id, p.class_id, c.code AS class_code, p.subject_id, s.name AS subject_name, p.term_id, t.number AS term_number,
-                       c.institution_id, p.approved_at IS NOT NULL AS approved, p.pauta_opened_at, p.pauta_ref
+                       c.institution_id, p.approved_at IS NOT NULL AS approved, p.scheduling_concluded_at IS NOT NULL AS concluded, p.pauta_opened_at, p.pauta_ref
                 FROM term_plans p JOIN classes c ON c.id = p.class_id JOIN subjects s ON s.id = p.subject_id JOIN terms t ON t.id = p.term_id
                 WHERE p.id = :p
                 """).bind("p", planId).map((row, meta) -> new Header(row.get("id", Long.class), row.get("class_id", Long.class),
                         row.get("class_code", String.class), row.get("subject_id", Long.class), row.get("subject_name", String.class),
                         row.get("term_id", Long.class), row.get("term_number", Integer.class), row.get("institution_id", Long.class),
-                        Boolean.TRUE.equals(row.get("approved", Boolean.class)), row.get("pauta_opened_at", LocalDateTime.class),
+                        Boolean.TRUE.equals(row.get("approved", Boolean.class)), Boolean.TRUE.equals(row.get("concluded", Boolean.class)), row.get("pauta_opened_at", LocalDateTime.class),
                         row.get("pauta_ref", String.class))).one()
                 .switchIfEmpty(Mono.error(ApiException.notFound("Term plan not found")));
     }
@@ -340,7 +364,7 @@ public class TermPlanService {
         return loadHeader(planId).flatMap(h -> {
             if (!canRead(who, h)) return Mono.error(ApiException.forbidden("Not allowed to read this term plan"));
             return assessments(planId).collectList().map(list -> new Plan(h.id(), h.classId(), h.className(), h.subjectId(), h.subjectName(),
-                    h.termId(), h.termNumber(), h.institutionId(), h.approved(), allCleared(list), h.pautaOpenedAt() != null, h.pautaRef(), list));
+                    h.termId(), h.termNumber(), h.institutionId(), h.approved(), h.schedulingConcluded(), allCleared(list), h.pautaOpenedAt() != null, h.pautaRef(), list));
         });
     }
 

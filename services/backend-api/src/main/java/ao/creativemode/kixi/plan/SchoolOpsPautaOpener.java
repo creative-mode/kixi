@@ -18,11 +18,10 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Mono;
 
 /**
- * Abre a pauta no motor SchoolOps quando o plano do trimestre fica pronto (todas as avaliações corrigidas ou dispensadas),
- * e encerra as provas P1 e P2 para o motor passar à correção das dissertativas e à pauta (kixi#525). Idempotente: o
- * {@code pautaRef} é o plano, o motor devolve a mesma pauta se o pedido se repetir, e o plano só se marca como aberto depois
- * de o motor aceitar. Um plano com P1 ou P2 dispensada não se abre sozinho (o contrato pede as duas provas): fica registado
- * no log para o coordenador decidir.
+ * Abre a pauta no motor SchoolOps quando o professor conclui o agendamento do plano (kixi#536): cada componente fica
+ * à espera da sua data e a correção corre no fluxo, com o controlo do professor. Depois, cada prova P1/P2 é encerrada no
+ * motor só quando a sua sala fecha (digital) ou a data passa (papel). Idempotente: o {@code pautaRef} é o plano, o motor
+ * devolve a mesma pauta se o pedido se repetir, e o plano só se marca como aberto depois de o motor aceitar.
  */
 @Component
 public class SchoolOpsPautaOpener {
@@ -67,21 +66,45 @@ public class SchoolOpsPautaOpener {
                     .bodyToMono(Map.class)
                     .flatMap(response -> {
                         String pautaId = String.valueOf(response.get("pautaId"));
-                        Mono<Void> closes = Mono.empty();
-                        for (String prova : built.provaIds()) {
-                            closes = closes.then(close(http, pautaId, prova));
-                        }
-                        return closes.then(db.sql("UPDATE term_plans SET pauta_opened_at = CURRENT_TIMESTAMP, pauta_ref = :r, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
-                                .bind("r", pautaId).bind("p", planId).fetch().rowsUpdated().then());
+                        return db.sql("UPDATE term_plans SET pauta_opened_at = CURRENT_TIMESTAMP, pauta_ref = :r, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
+                                .bind("r", pautaId).bind("p", planId).fetch().rowsUpdated().then();
                     });
         });
     }
 
-    /** O motor pode demorar um instante a tornar a pauta consultável: repete-se o 404 do encerramento. */
+    /** Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. */
+    @Scheduled(fixedDelayString = "${schoolops.poll-ms:60000}", initialDelayString = "${schoolops.poll-ms:60000}")
+    public void closeFinishedProvas() {
+        if (!properties.isEnabled()) return;
+        try {
+            db.sql("""
+                    SELECT a.id, a.statement_id, p.pauta_ref
+                    FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id LEFT JOIN exam_rooms r ON r.id = a.room_id
+                    WHERE a.kind IN ('P1', 'P2') AND a.closed_notified_at IS NULL AND a.dispensed_at IS NULL AND a.statement_id IS NOT NULL
+                      AND p.pauta_opened_at IS NOT NULL AND p.pauta_ref IS NOT NULL
+                      AND ((a.room_id IS NOT NULL AND r.status = 'CLOSED') OR (a.room_id IS NULL AND a.planned_date < CURRENT_DATE))
+                    ORDER BY a.id
+                    """).fetch().all().collectList().block(Duration.ofSeconds(30)).forEach(row -> {
+                try {
+                    WebClient http = webClients.baseUrl(properties.getBaseUrl()).defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getToken()).build();
+                    close(http, String.valueOf(row.get("pauta_ref")), String.valueOf(row.get("statement_id")))
+                            .then(db.sql("UPDATE term_assessments SET closed_notified_at = CURRENT_TIMESTAMP WHERE id = :a")
+                                    .bind("a", row.get("id")).fetch().rowsUpdated().then()).block(Duration.ofSeconds(60));
+                } catch (RuntimeException e) {
+                    log.warn("[schoolops] prova {} da pauta {}: encerramento por repetir ({})", row.get("statement_id"), row.get("pauta_ref"), e.getMessage());
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("[schoolops] verificação das provas por encerrar falhou ({})", e.getMessage());
+        }
+    }
+
+    /** O motor pode demorar um instante a tornar a pauta consultável: repete-se o 404; um 409 é encerramento já feito. */
     private Mono<Void> close(WebClient http, String pautaId, String prova) {
         return http.post().uri("/v1/pautas/{pauta}/provas/{prova}/encerramento", pautaId, prova).retrieve().toBodilessEntity()
-                .retryWhen(reactor.util.retry.Retry.backoff(5, Duration.ofSeconds(2))
+                .retryWhen(reactor.util.retry.Retry.backoff(3, Duration.ofSeconds(1))
                         .filter(e -> e instanceof WebClientResponseException.NotFound))
+                .onErrorResume(WebClientResponseException.Conflict.class, e -> Mono.empty())
                 .then();
     }
 

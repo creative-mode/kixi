@@ -152,18 +152,17 @@ class SchoolOpsGatewayPostgresIntegrationTest {
     }
 
     @Test
-    void aPlanWithAPendingMacDoesNotOpenAndAReadyOneOpensOnceWithTheContractRequest() {
-        // a MAC 1 ainda está por concluir: o plano não está pronto
-        assertThat(opener.getClass()).isNotNull();
-        var notReady = database.sql("SELECT id FROM term_plans WHERE id = 525001 AND pauta_opened_at IS NULL").fetch().all().collectList().block(Duration.ofSeconds(10));
-        assertThat(notReady).hasSize(1);
+    void theAssessmentsAreScheduledAndTheProvasOnlyCloseWhenTheirRoomClosesOrTheDatePasses() {
+        // sem o agendamento concluído (nem corrigido) o motor não é chamado
         opener.openReadyPlans();
-        assertThat(CALLS).as("sem plano pronto não se chama o motor").isEmpty();
+        assertThat(CALLS).as("sem agendamento concluído não se abre a pauta").isEmpty();
 
-        sql("UPDATE term_assessments SET manual_done_at = now() WHERE plan_id = 525001 AND kind = 'MAC'");
+        // P2 ainda com a sala aberta; P1 já fechou. O professor conclui o agendamento: a pauta abre já, sem corrigir nada.
+        sql("UPDATE exam_rooms SET status = 'OPEN' WHERE id = 525002");
+        sql("UPDATE term_plans SET scheduling_concluded_at = now() WHERE id = 525001");
         opener.openReadyPlans();
 
-        assertThat(CALLS).hasSize(3);
+        assertThat(CALLS).as("abrir a pauta não encerra provas").hasSize(1);
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas auth=Bearer token-de-teste")
                 .contains("\"pautaRef\":\"kixi-plano-525001\"")
                 .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2193/2194\"")
@@ -174,14 +173,41 @@ class SchoolOpsGatewayPostgresIntegrationTest {
                 .contains("https://kixi.example/api/v1/integrations/schoolops/events");
         // os alunos vão por ordem alfabética, com número de ordem
         assertThat(CALLS.get(0).indexOf("Ana Domingos")).isLessThan(CALLS.get(0).indexOf("Bruno Neto"));
-        assertThat(CALLS.get(1)).startsWith("POST /v1/pautas/PT-TESTE/provas/525001/encerramento");
-        assertThat(CALLS.get(2)).startsWith("POST /v1/pautas/PT-TESTE/provas/525002/encerramento");
         assertThat(database.sql("SELECT pauta_ref FROM term_plans WHERE id = 525001").map((r, m) -> r.get(0, String.class)).one().block(Duration.ofSeconds(10)))
                 .isEqualTo("PT-TESTE");
 
         CALLS.clear();
         opener.openReadyPlans();
         assertThat(CALLS).as("uma pauta já aberta não se abre outra vez").isEmpty();
+
+        // só a sala fechada da P1 encerra a P1
+        opener.closeFinishedProvas();
+        assertThat(CALLS).hasSize(1);
+        assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525001/encerramento");
+
+        CALLS.clear();
+        opener.closeFinishedProvas();
+        assertThat(CALLS).as("a P1 já encerrada não se encerra outra vez; a P2 ainda tem a sala aberta").isEmpty();
+
+        sql("UPDATE exam_rooms SET status = 'CLOSED' WHERE id = 525002");
+        opener.closeFinishedProvas();
+        assertThat(CALLS).hasSize(1);
+        assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525002/encerramento");
+    }
+
+    @Test
+    void aPaperProvaClosesWhenItsDatePasses() {
+        sql("UPDATE term_assessments SET room_id = NULL, planned_date = current_date WHERE plan_id = 525001 AND kind = 'P2'");
+        sql("UPDATE term_plans SET scheduling_concluded_at = now(), pauta_opened_at = now(), pauta_ref = 'PT-TESTE' WHERE id = 525001");
+        sql("UPDATE term_assessments SET closed_notified_at = now() WHERE plan_id = 525001 AND kind = 'P1'");
+
+        opener.closeFinishedProvas();
+        assertThat(CALLS).as("no próprio dia da prova em papel ainda não se encerra").isEmpty();
+
+        sql("UPDATE term_assessments SET planned_date = current_date - 1 WHERE plan_id = 525001 AND kind = 'P2'");
+        opener.closeFinishedProvas();
+        assertThat(CALLS).hasSize(1);
+        assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525002/encerramento");
     }
 
     @Test
