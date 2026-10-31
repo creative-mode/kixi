@@ -40,6 +40,10 @@ public class ExamRoomCorrectionService {
     private final QuestionRepository questions;
     private final SimulationSubmissionService submission;
 
+    /** Opcional: sem ele (testes unitários) não há provas de plano a proteger. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ao.creativemode.kixi.shared.service.PlanRoomLookup planRooms;
+
     public ExamRoomCorrectionService(ExamRoomMonitoringService monitoring, SimulationAnswerRepository answers,
             QuestionRepository questions, SimulationSubmissionService submission) {
         this.monitoring = monitoring;
@@ -52,36 +56,47 @@ public class ExamRoomCorrectionService {
     public Mono<ExamRoomReviewResponse> review(Long roomId, Long caller, boolean admin) {
         return monitoring.authorize(roomId, caller, admin).flatMap(room -> Mono.zip(
                 monitoring.grades(roomId, caller, admin),
-                questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).collectList())
+                questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).collectList(),
+                isPlanRoom(roomId))
             .flatMap(tuple -> {
+                boolean planLinked = tuple.getT3();
                 Map<Long, ExamRoomGradeResponse> bySimulation = tuple.getT1().stream()
                         .filter(grade -> grade.simulationId() != null && "FINISHED".equals(grade.status()))
                         .collect(Collectors.toMap(ExamRoomGradeResponse::simulationId, Function.identity(), (a, b) -> a));
                 if (bySimulation.isEmpty()) {
-                    return Mono.just(new ExamRoomReviewResponse(List.of(), 0, 0));
+                    return Mono.just(new ExamRoomReviewResponse(List.of(), 0, 0, 0, planLinked));
                 }
                 Map<Long, Question> byQuestion = tuple.getT2().stream()
                         .collect(Collectors.toMap(Question::getId, Function.identity()));
                 return answers.findAllBySimulationIdInAndDeletedAtIsNull(bySimulation.keySet()).collectList()
-                        .map(rows -> build(rows, bySimulation, byQuestion));
+                        .map(rows -> build(rows, bySimulation, byQuestion, planLinked));
             }));
     }
 
+    private Mono<Boolean> isPlanRoom(Long roomId) {
+        return planRooms == null ? Mono.just(false) : planRooms.isPlanRoom(roomId);
+    }
+
     private ExamRoomReviewResponse build(List<SimulationAnswer> rows, Map<Long, ExamRoomGradeResponse> bySimulation,
-            Map<Long, Question> byQuestion) {
+            Map<Long, Question> byQuestion, boolean planLinked) {
         Map<Long, List<ExamRoomReviewResponse.Answer>> perQuestion = new LinkedHashMap<>();
         int pending = 0;
         int graded = 0;
+        int aiGraded = 0;
         for (SimulationAnswer row : rows) {
             SimulationAnswerStatus status = row.getReviewStatus();
-            if (status != SimulationAnswerStatus.PENDING_REVIEW && status != SimulationAnswerStatus.GRADED) continue;
+            if (status != SimulationAnswerStatus.PENDING_REVIEW && status != SimulationAnswerStatus.GRADED
+                    && status != SimulationAnswerStatus.AI_GRADED) continue;
             if (!byQuestion.containsKey(row.getQuestionId())) continue;
             ExamRoomGradeResponse who = bySimulation.get(row.getSimulationId());
             if (who == null) continue;
-            if (status == SimulationAnswerStatus.PENDING_REVIEW) pending++; else graded++;
+            if (status == SimulationAnswerStatus.PENDING_REVIEW) pending++;
+            else if (status == SimulationAnswerStatus.AI_GRADED) aiGraded++;
+            else graded++;
             perQuestion.computeIfAbsent(row.getQuestionId(), id -> new ArrayList<>())
                     .add(new ExamRoomReviewResponse.Answer(row.getId(), who.accountId(), who.displayName(),
-                            row.getAnswerText(), status.name(), row.getScoreObtained()));
+                            row.getAnswerText(), status.name(), row.getScoreObtained(),
+                            row.getAiFeedback(), row.getAiLevel(), row.getAiConfidence()));
         }
         List<ExamRoomReviewResponse.Question> out = perQuestion.entrySet().stream()
                 .map(entry -> {
@@ -95,13 +110,19 @@ public class ExamRoomCorrectionService {
                 })
                 .sorted(Comparator.comparing(q -> q.number() == null ? Integer.MAX_VALUE : q.number()))
                 .toList();
-        return new ExamRoomReviewResponse(out, pending, graded);
+        return new ExamRoomReviewResponse(out, pending, graded, aiGraded, planLinked);
     }
 
     /** Grava as notas dadas e, com `byKey`, a cotação inteira às respostas que coincidem com a chave. */
     public Mono<ExamRoomBulkGradeResponse> grade(Long roomId, Long caller, boolean admin, ExamRoomBulkGradeRequest request) {
         List<ExamRoomBulkGradeRequest.Grade> given = request.grades() == null ? List.of() : request.grades();
-        return monitoring.authorize(roomId, caller, admin).flatMap(room -> Mono.zip(
+        // As provas de um plano do trimestre são corrigidas pela IA no fluxo do motor (kixi#542): ninguém as corrige à mão na sala.
+        return monitoring.authorize(roomId, caller, admin)
+            .flatMap(room -> isPlanRoom(roomId).flatMap(planned -> planned
+                ? Mono.<ao.creativemode.kixi.examrooms.model.ExamRoom>error(ApiException.conflict(
+                    "As respostas das provas do plano do trimestre são corrigidas pela IA no fluxo; a nota só muda por reclamação"))
+                : Mono.just(room)))
+            .flatMap(room -> Mono.zip(
                 monitoring.grades(roomId, caller, admin),
                 questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).collectList())
             .flatMap(tuple -> {

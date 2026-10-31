@@ -4,7 +4,10 @@ import static org.springframework.http.HttpStatus.NO_CONTENT;
 
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerRequest;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerResponse;
+import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerAiGradeRequest;
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerGradeRequest;
+import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.PlanRoomLookup;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -23,6 +26,10 @@ public class SimulationAnswerController {
     private final SimulationAnswerService service;
     private final CurrentAccountService currentAccountService;
     private final SimulationSubmissionService submissionService;
+
+    /** Opcional: sem ele (testes unitários) não há provas de plano a proteger. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PlanRoomLookup planRooms;
 
     public SimulationAnswerController(
         SimulationAnswerService service,
@@ -127,7 +134,35 @@ public class SimulationAnswerController {
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN"))
-            .flatMap(tuple -> submissionService.grade(id, request.scoreObtained(), tuple.getT1(), tuple.getT2(), rectify))
+            .zipWith(currentAccountService.hasAnyRole("INTEGRATION"))
+            .flatMap(tuple -> requireNotCorrectedByTheFlow(id, rectify, tuple.getT2())
+                .then(Mono.defer(() -> submissionService.grade(id, request.scoreObtained(),
+                    tuple.getT1().getT1(), tuple.getT1().getT2(), rectify))))
+            .map(ResponseEntity::ok);
+    }
+
+    /**
+     * As respostas das provas de um plano do trimestre são corrigidas pela IA no fluxo do motor (kixi#542): o professor não as
+     * corrige à mão. A rectificação de uma reclamação deferida e o motor (conta INTEGRATION) continuam a poder gravar.
+     */
+    private Mono<Void> requireNotCorrectedByTheFlow(Long answerId, boolean rectify, boolean integration) {
+        if (rectify || integration || planRooms == null) return Mono.empty();
+        return planRooms.isPlanRoomAnswer(answerId).flatMap(planned -> planned
+            ? Mono.<Void>error(ApiException.conflict(
+                "As respostas das provas do plano do trimestre são corrigidas pela IA no fluxo; a nota só muda por reclamação"))
+            : Mono.<Void>empty());
+    }
+
+    /**
+     * A correção que a IA fez no fluxo do motor SchoolOps (kixi#542). Só o administrador e a conta do motor (INTEGRATION),
+     * por regra de segurança; repetir o mesmo corpo não altera nada.
+     */
+    @PutMapping("/{id}/ai-grade")
+    public Mono<ResponseEntity<SimulationAnswerResponse>> aiGrade(
+        @PathVariable Long id,
+        @Valid @RequestBody SimulationAnswerAiGradeRequest request
+    ) {
+        return submissionService.aiGrade(id, request.scoreObtained(), request.feedback(), request.level(), request.confidence())
             .map(ResponseEntity::ok);
     }
 

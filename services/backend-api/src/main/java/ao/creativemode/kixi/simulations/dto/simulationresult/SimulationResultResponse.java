@@ -61,8 +61,19 @@ public record SimulationResultResponse(
             /** The item's label inside its group (a, b, c...). Show "{parent number}{label}", never {@code number}. */
             String label,
             /** The common statement of the group, shown above the item. */
-            String parentText
-    ) { }
+            String parentText,
+            /** What the AI said about an open answer it corrected in the SchoolOps flow (kixi#542); null otherwise. */
+            String aiFeedback,
+            String aiLevel
+    ) {
+        public QuestionResult(Long questionId, Integer number, String text, String questionType, Double maxScore,
+                String modelAnswer, Long correctOptionId, Long selectedOptionId, String answerText, Float scoreObtained,
+                Boolean isCorrect, ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
+                List<OptionResult> options, Long parentId, String label, String parentText) {
+            this(questionId, number, text, questionType, maxScore, modelAnswer, correctOptionId, selectedOptionId, answerText,
+                    scoreObtained, isCorrect, reviewStatus, options, parentId, label, parentText, null, null);
+        }
+    }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record OptionResult(
