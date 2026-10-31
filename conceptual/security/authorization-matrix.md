@@ -47,7 +47,15 @@ Um enunciado ligado a uma sala **não é visível ao aluno** até todas as salas
 
 ## Re-correção de uma resposta (`PATCH /api/v1/simulation-answers/{id}/grade?rectify=true`)
 
-Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509).
+Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (por uma pessoa ou pela IA; 409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509). Uma resposta corrigida pela IA e depois rectificada passa a `GRADED`.
+
+## Correção pela IA das provas de um plano (kixi#542)
+
+As respostas abertas das salas ligadas a um plano do trimestre (`term_assessments.room_id`) são corrigidas pela IA no fluxo do motor SchoolOps, não pelo professor:
+
+- `PUT /api/v1/simulation-answers/{id}/ai-grade` (`{scoreObtained, feedback, level?, confidence?}`): **só `ADMIN` e `INTEGRATION`** (regra explícita antes da genérica, que deixaria passar o professor). Grava a nota, a observação, o nível e a confiança e põe a resposta em `AI_GRADED`; repetir o mesmo corpo não altera nada; 409 se a resposta já foi corrigida por uma pessoa (`GRADED`) ou é objetiva; nunca acima da cotação.
+- `PATCH …/grade` (sem `rectify`) e `POST /exam-rooms/{id}/grade` (correção em massa) **recusam com 409** nas respostas e salas de um plano, para professor e administrador. A conta de integração e a rectificação (`?rectify=true`) não são afetadas. Salas livres e simulações dos alunos mantêm o comportamento anterior.
+- `GET /exam-rooms/{id}/review` devolve também as respostas `AI_GRADED` com a observação, o nível e a confiança, e `planLinked`: o ecrã do professor mostra-as só para leitura. O aluno vê a observação da IA depois de a prova estar corrigida (mesma regra de visibilidade da nota).
 
 ## Leitura das pautas (`GET /api/v1/term-sheets`, `GET /api/v1/term-sheets/{sheetId}`, `GET /api/v1/me/term-sheets`)
 
