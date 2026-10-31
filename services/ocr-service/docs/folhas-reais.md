@@ -52,6 +52,7 @@ O relatório separa o que importa:
 | Métrica | Significado |
 |---|---|
 | Certas | respostas objetivas lidas corretamente |
+| Em branco (certo) | o aluno deixou em branco e o OCR não leu nada: fica de fora das percentagens, para não inflacionar a exatidão |
 | Não lidas | o OCR não leu (`NOT_FOUND`); a professora transcreve na validação, não é erro silencioso |
 | Erradas e duvidosas | lidas mal com confiança baixa; a validação humana apanha |
 | **Erradas e confiantes** | **lidas mal com confiança alta (>= 0,8): o erro silencioso, o que decide** |

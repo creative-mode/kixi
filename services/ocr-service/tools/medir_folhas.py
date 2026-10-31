@@ -91,7 +91,7 @@ def avaliar_folha(folha, esperado, confianca_alta=0.8):
         valor, confianca = _letra(lida.get("value")), float(lida.get("confidence") or 0.0)
         esperada = certa or None  # em branco = não há resposta para ler
         if valor is None:
-            estado = "nao_lida" if esperada else "certa"  # deixar em branco e não ler nada é o certo
+            estado = "nao_lida" if esperada else "em_branco"  # deixar em branco e não ler nada é o certo, mas não conta como leitura
         elif valor == esperada:
             estado = "certa"
         else:
@@ -104,10 +104,13 @@ def resumir(resultados, avisos, segundos):
     obj = [o for r in resultados for o in r["objectivas"]]
     total = len(obj)
     contagem = {e: sum(1 for o in obj if o["estado"] == e) for e in ("certa", "nao_lida", "errada_duvidosa", "errada_confiante")}
+    em_branco = sum(1 for o in obj if o["estado"] == "em_branco")
+    total -= em_branco  # branco esperado e nada lido não é leitura: não sobe a exatidão nem o denominador
     lidas = total - contagem["nao_lida"]
     return {
         "folhas": len(resultados),
         "objectivas": total,
+        "em_branco": em_branco,
         **contagem,
         "exatidao_objectivas": contagem["certa"] / total if total else None,
         "erros_silenciosos": contagem["errada_confiante"] / total if total else None,
@@ -166,9 +169,10 @@ def pedir_ocr(url, api_key, ficheiro, estrutura, tempo_limite=300, tentativas=2)
 def _pedir_uma_vez(url, api_key, ficheiro, estrutura, tempo_limite):
     limite = uuid.uuid4().hex
     tipo = mimetypes.guess_type(ficheiro.name)[0] or "application/octet-stream"
+    nome = ficheiro.name.replace("\\", "_").replace('"', "%22").replace("\r", "").replace("\n", "")  # não parte o cabeçalho multipart
     corpo = (
         f'--{limite}\r\nContent-Disposition: form-data; name="context"\r\n\r\n{json.dumps(estrutura)}\r\n'
-        f'--{limite}\r\nContent-Disposition: form-data; name="images"; filename="{ficheiro.name}"\r\nContent-Type: {tipo}\r\n\r\n'
+        f'--{limite}\r\nContent-Disposition: form-data; name="images"; filename="{nome}"\r\nContent-Type: {tipo}\r\n\r\n'
     ).encode() + ficheiro.read_bytes() + f"\r\n--{limite}--\r\n".encode()
     cabecalhos = {"Content-Type": f"multipart/form-data; boundary={limite}"}
     if api_key:
@@ -227,7 +231,7 @@ def main(argv=None):
             avisos["VARIAS_FOLHAS_NO_FICHEIRO"] = avisos.get("VARIAS_FOLHAS_NO_FICHEIRO", 0) + 1  # só a 1.ª é medida
         if not folhas:
             resultados.append({"ficheiro": f.name, "numero_certo": False, "nome_certo": False,
-                               "objectivas": [{"questao": n, "esperada": c or None, "lida": None, "confianca": 0.0, "estado": "nao_lida" if c else "certa"}
+                               "objectivas": [{"questao": n, "esperada": c or None, "lida": None, "confianca": 0.0, "estado": "nao_lida" if c else "em_branco"}
                                               for n, c in sorted(esperados[f.name]["objectivas"].items())]})
             continue
         r = avaliar_folha(folhas[0], esperados[f.name], a.confianca_alta)
@@ -238,6 +242,8 @@ def main(argv=None):
     resumo = resumir(resultados, avisos, time.time() - inicio)
     pct = lambda x: "n/d" if x is None else f"{100 * x:.1f}%"
     print(f"Folhas medidas: {resumo['folhas']}  ({resumo['objectivas']} respostas objetivas)")
+    if resumo["em_branco"]:
+        print(f"  Em branco (certo):    {resumo['em_branco']}  (deixadas em branco e não lidas; fora das percentagens)")
     print(f"  Certas:               {resumo['certa']}  ({pct(resumo['exatidao_objectivas'])})")
     print(f"  Não lidas:            {resumo['nao_lida']}  (a professora transcreve; não é erro silencioso)")
     print(f"  Erradas e duvidosas:  {resumo['errada_duvidosa']}  (a validação humana apanha)")

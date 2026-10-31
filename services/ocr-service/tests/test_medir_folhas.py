@@ -42,7 +42,41 @@ def test_each_objective_answer_is_right_unread_or_wrong_and_the_confident_wrong_
 def test_leaving_it_blank_and_reading_nothing_is_right():
     lida = folha(1, "Rui", {1: (None, 0.0)})
     r = medir.avaliar_folha(lida, {"numero": 1, "nome": "Rui", "objectivas": {1: ""}})
-    assert r["objectivas"][0]["estado"] == "certa"
+    assert r["objectivas"][0]["estado"] == "em_branco"
+
+
+def test_blanks_left_blank_do_not_inflate_the_accuracy():
+    certa = {"numero_certo": True, "nome_certo": True, "objectivas": [{"estado": "certa"}, {"estado": "em_branco"}, {"estado": "em_branco"}, {"estado": "errada_duvidosa"}]}
+
+    s = medir.resumir([certa], {}, 1.0)
+
+    assert s["em_branco"] == 2 and s["objectivas"] == 2 and s["exatidao_objectivas"] == 0.5
+
+
+def test_a_blank_filename_quote_cannot_break_the_multipart_header(monkeypatch, tmp_path):
+    visto = {}
+
+    class Resposta:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, *a):
+            return b"{}"
+
+    def abrir(pedido, timeout):
+        visto["corpo"] = pedido.data
+        return Resposta()
+
+    monkeypatch.setattr(medir.urllib.request, "urlopen", abrir)
+    foto = tmp_path / 'a"b\r\nX.jpg'
+    foto.write_bytes(b"x")
+
+    medir._pedir_uma_vez("http://x", "", foto, {}, 1)
+
+    assert b'filename="a%22bX.jpg"' in visto["corpo"]
 
 
 def test_a_sheet_that_was_not_read_counts_every_answer_as_unread():

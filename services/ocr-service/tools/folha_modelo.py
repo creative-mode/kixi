@@ -48,14 +48,19 @@ def gerar(objectivas, abertas, linhas_por_aberta, titulo, caminho_fonte=None):
         d.text((80, 215 + i * 34), linha, font=f_pequena, fill=(90, 90, 90))
     y = 310
     colunas = 4
+    fundo = A - 80  # margem inferior; o que passar daqui seria cortado em silêncio
     for i in range(objectivas):
         x = 80 + (i % colunas) * 280
         if i % colunas == 0 and i:
             y += 110
+        if y + 60 > fundo:
+            raise ValueError(f"{objectivas} objetivas não cabem numa página A4; use menos (máx. {i})")
         d.text((x, y), f"{i + 1})", font=f_rotulo, fill="black")
         d.line((x + 70, y + 55, x + 230, y + 55), fill="black", width=3)
     y += 150
     for j in range(abertas):
+        if y + 55 + (linhas_por_aberta - 1) * 70 > fundo:
+            raise ValueError(f"{abertas} abertas com {linhas_por_aberta} linhas não cabem numa página A4; use menos (máx. {j})")
         d.text((80, y), f"{objectivas + j + 1})", font=f_rotulo, fill="black")
         for k in range(linhas_por_aberta):
             d.line((150, y + 55 + k * 70, L - 80, y + 55 + k * 70), fill=(150, 150, 150), width=2)
@@ -72,7 +77,11 @@ def main():
     p.add_argument("--fonte", help="ficheiro .ttf com acentos (omissão: DejaVu Sans, Arial)")
     p.add_argument("-o", "--saida", default="folha-modelo.pdf")
     a = p.parse_args()
-    gerar(a.objectivas, a.abertas, a.linhas, a.titulo, a.fonte).save(a.saida, "PDF", resolution=150.0)
+    try:
+        folha = gerar(a.objectivas, a.abertas, a.linhas, a.titulo, a.fonte)
+    except ValueError as e:
+        raise SystemExit(f"Erro: {e}")
+    folha.save(a.saida, "PDF", resolution=150.0)
     print(f"gravada {a.saida}")
 
 
