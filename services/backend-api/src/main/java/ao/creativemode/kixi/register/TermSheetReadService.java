@@ -35,9 +35,15 @@ public class TermSheetReadService {
     }
 
     /** Quem lê: {@code scope} nulo é um administrador (vê tudo); um professor vê o que as suas atribuições cobrem. */
-    public record Reader(StatementReadScope scope) {
+    public record Reader(StatementReadScope scope, java.util.Set<Long> coordinatorOf) {
+        public Reader(StatementReadScope scope) {
+            this(scope, java.util.Set.of());
+        }
+
         boolean sees(Summary sheet) {
             if (scope == null) return true;
+            // o coordenador vê as pautas da sua instituição (kixi#523)
+            if (sheet.institutionId() != null && coordinatorOf.contains(sheet.institutionId())) return true;
             return sheet.classId() != null && sheet.subjectId() != null && scope.assignments().stream()
                     .anyMatch(pair -> sheet.classId().equals(pair.classId()) && sheet.subjectId().equals(pair.subjectId()));
         }
@@ -47,7 +53,7 @@ public class TermSheetReadService {
                              Object negativas, Object notaMaxima, Object notaMinima) { }
 
     public record Summary(String sheetId, String status, Integer termNumber, String schoolYear, Long classId, String className,
-                          Object grade, String course, Long subjectId, String subjectName, String subjectCode,
+                          Long institutionId, Object grade, String course, Long subjectId, String subjectName, String subjectCode,
                           Statistics statistics, LocalDateTime updatedAt) { }
 
     public record Row(Long accountId, Object number, String name, Object mac, Object p1, Object p2, Object mt, String status,
@@ -59,6 +65,11 @@ public class TermSheetReadService {
                        String className, OwnRow row) { }
 
     public record OwnRow(Object mac, Object p1, Object p2, Object mt, String status) { }
+
+    public Mono<java.util.Set<Long>> coordinatorInstitutions(Long accountId) {
+        return db.sql("SELECT institution_id FROM institution_coordinators WHERE account_id = :a").bind("a", accountId)
+                .map((row, meta) -> row.get(0, Long.class)).all().collect(java.util.stream.Collectors.toSet());
+    }
 
     public Flux<Summary> list(Reader reader, Long classId, Integer termNumber, Long subjectId) {
         return db.sql("SELECT sheet_id, status, CAST(context AS text) AS c, CAST(statistics AS text) AS s, updated_at"
@@ -130,7 +141,7 @@ public class TermSheetReadService {
         Map<String, Object> s = parse(statsJson);
         String course = text(c.get("cursoNome")) != null ? text(c.get("cursoNome")) : text(c.get("curso"));
         return new Summary(sheetId, status, integer(c.get("trimestre")), text(c.get("anoLectivo")), classIdOf(c.get("turmaId")),
-                text(c.get("turma")), c.get("classe"), course, longOf(c.get("disciplinaId")), text(c.get("disciplina")),
+                text(c.get("turma")), longOf(c.get("escolaId")), c.get("classe"), course, longOf(c.get("disciplinaId")), text(c.get("disciplina")),
                 text(c.get("disciplinaSigla")),
                 new Statistics(s.get("media"), s.get("avaliados"), s.get("inscritos"), s.get("ausentes"), s.get("positivas"),
                         s.get("negativas"), s.get("notaMaxima"), s.get("notaMinima")), updatedAt);
