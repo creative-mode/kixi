@@ -102,6 +102,8 @@ class SimulationAnswerPostgresConcurrencyTest {
         sql("INSERT INTO statements(id, title, source, visible, created_by) VALUES (" + STATEMENT + ", 'integration', 'manual', TRUE, " + ACCOUNT + ")").block(Duration.ofSeconds(10));
         sql("INSERT INTO questions(id, statement_id, number, text, question_type, order_index) VALUES (" + QUESTION + ", " + STATEMENT + ", 1, '1 + 1', 'open', 1)").block(Duration.ofSeconds(10));
         sql("INSERT INTO exam_rooms(id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES (" + ROOM + ", " + STATEMENT + ", " + ACCOUNT + ", '" + START + "', '" + END + "', 60, 'RUNNING')").block(Duration.ofSeconds(10));
+        // Uma sala retém o enunciado (kixi#519); este teste corre simulações livres sobre o mesmo enunciado, que tem de continuar visível.
+        sql("UPDATE statements SET visible = TRUE WHERE id = " + STATEMENT).block(Duration.ofSeconds(10));
         sql("INSERT INTO simulations(id, account_id, statement_id, exam_room_id, exam_room_duration_minutes, started_at, status) VALUES (" + SIMULATION + ", " + ACCOUNT + ", " + STATEMENT + ", " + ROOM + ", 60, CURRENT_TIMESTAMP, 'IN_PROGRESS')").block(Duration.ofSeconds(10));
         sql("INSERT INTO exam_room_participants(exam_room_id, account_id, simulation_id, joined_at) VALUES (" + ROOM + ", " + ACCOUNT + ", " + SIMULATION + ", CURRENT_TIMESTAMP)").block(Duration.ofSeconds(10));
         sql("INSERT INTO simulation_answers(id, simulation_id, question_id, answer_text) VALUES (" + ANSWER + ", " + SIMULATION + ", " + QUESTION + ", 'old')").block(Duration.ofSeconds(10));
