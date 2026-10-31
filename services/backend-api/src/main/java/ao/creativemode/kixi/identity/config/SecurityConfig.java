@@ -67,8 +67,10 @@ public class SecurityConfig {
                                 "/swagger-ui/**", "/webjars/**").permitAll()
                         // #176: a teacher reads their own record; every other
                         // /teachers route stays ADMIN-only below.
+                        // kixi#515: a conta do motor (INTEGRATION) também a pergunta ao montar o contexto da prova; sem registo de professor
+                        // recebe 404, que o motor lê como "sem professor".
                         .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         // #253: where the signed-in teacher teaches; the overview of any
                         // other teacher stays ADMIN-only with the rest of /teachers.
                         .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me/overview")
