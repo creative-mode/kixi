@@ -151,6 +151,8 @@ class TermPlanPostgresIntegrationTest {
         sql("INSERT INTO exam_rooms (id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status, class_id) VALUES "
                 + "(523001, 523001, " + TEACHER + ", now(), now() + interval '1 day', 60, 'RUNNING', " + CLASS + ")");
         patch(teacher, plan.get(), p1, "{\"roomId\":523001}").jsonPath("$.assessments[0].status").isEqualTo("ROOM_OPEN");
+        // ligar a sala traz o enunciado dela (o motor precisa dele para abrir a pauta)
+        assertThat(count("SELECT statement_id FROM term_assessments WHERE id = " + p1)).isEqualTo(523001L);
 
         sql("INSERT INTO simulations (id, account_id, statement_id, status, exam_room_id) VALUES (523001, " + STUDENT + ", 523001, 'FINISHED', 523001)");
         sql("INSERT INTO questions (id, statement_id, number, text, question_type, max_score, order_index) VALUES (523001, 523001, 1, 'q', 'open', 5, 1)");
