@@ -171,7 +171,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas auth=Bearer token-de-teste")
                 .contains("\"pautaRef\":\"kixi-plano-525001\"")
                 .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2193/2194\"")
-                .contains("\"sourcedId\":\"525001-525001\"")
+                .contains("\"sourcedId\":\"525001-525001-525001\"")
                 .contains("\"componente\":\"P1\"").contains("\"componente\":\"P2\"").contains("\"modalidade\":\"DIGITAL\"")
                 .contains("\"nome\":\"Abner Lourenço\"")
                 .contains("\"avaliacoesContinuas\":[{").contains("\"titulo\":\"MAC 1\"")

@@ -134,8 +134,8 @@ public class SimulationAnswerController {
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN"))
-            .zipWith(currentAccountService.hasAnyRole("INTEGRATION"))
-            .flatMap(tuple -> requireNotCorrectedByTheFlow(id, rectify, tuple.getT2())
+            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
+            .flatMap(tuple -> requireNotCorrectedByTheFlow(id, rectify, tuple.getT2() && !tuple.getT1().getT2())
                 .then(Mono.defer(() -> submissionService.grade(id, request.scoreObtained(),
                     tuple.getT1().getT1(), tuple.getT1().getT2(), rectify))))
             .map(ResponseEntity::ok);
@@ -143,10 +143,11 @@ public class SimulationAnswerController {
 
     /**
      * As respostas das provas de um plano do trimestre são corrigidas pela IA no fluxo do motor (kixi#542): o professor não as
-     * corrige à mão. A rectificação de uma reclamação deferida e o motor (conta INTEGRATION) continuam a poder gravar.
+     * corrige à mão. O administrador, que é também quem opera o motor (o do servidor ainda usa uma conta ADMIN), a conta de
+     * integração e a rectificação de uma reclamação deferida continuam a poder gravar.
      */
-    private Mono<Void> requireNotCorrectedByTheFlow(Long answerId, boolean rectify, boolean integration) {
-        if (rectify || integration || planRooms == null) return Mono.empty();
+    private Mono<Void> requireNotCorrectedByTheFlow(Long answerId, boolean rectify, boolean teacherOnly) {
+        if (rectify || !teacherOnly || planRooms == null) return Mono.empty();
         return planRooms.isPlanRoomAnswer(answerId).flatMap(planned -> planned
             ? Mono.<Void>error(ApiException.conflict(
                 "As respostas das provas do plano do trimestre são corrigidas pela IA no fluxo; a nota só muda por reclamação"))
