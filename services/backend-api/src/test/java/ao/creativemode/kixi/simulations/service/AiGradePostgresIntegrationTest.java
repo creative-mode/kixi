@@ -194,13 +194,16 @@ class AiGradePostgresIntegrationTest {
                 + "(543001, 'P1', 1, 'P1', current_date, 543001, 543001)");
         bearer(teacher).patch().uri(grade).contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":3.0}")
                 .exchange().expectStatus().isEqualTo(409);
-        bearer(token(ADMIN, "ADMIN")).patch().uri(grade).contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":3.0}")
-                .exchange().expectStatus().isEqualTo(409);
         // a correção em massa da sala também
         bearer(teacher).post().uri("/api/v1/exam-rooms/543001/grade").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"grades\":[{\"answerId\":" + answer + ",\"score\":3.0}],\"byKey\":false}")
                 .exchange().expectStatus().isEqualTo(409);
         assertThat(text("SELECT review_status FROM simulation_answers WHERE id = " + answer)).isEqualTo("PENDING_REVIEW");
+        // o administrador (que também opera o motor do servidor, ainda com uma conta ADMIN) não é travado: sem isto, publicar o
+        // Kixi antes do motor novo deixava a correção das pautas em curso em incidente
+        bearer(token(ADMIN, "ADMIN")).patch().uri(grade).contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":2.0}")
+                .exchange().expectStatus().isOk();
+        sql("UPDATE simulation_answers SET review_status = 'PENDING_REVIEW', score_obtained = NULL WHERE id = " + answer);
 
         // a IA corrige e o professor vê o que ela disse, só para leitura
         aiGrade(token(ENGINE, "INTEGRATION"), BODY).expectStatus().isOk();
