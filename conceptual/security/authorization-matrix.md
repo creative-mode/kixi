@@ -37,6 +37,10 @@ Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escrev
 
 O estado de cada avaliação é derivado do enunciado, da sala e das respostas; o plano fica pronto para a pauta quando todas estão corrigidas ou dispensadas. O vigilante não tem papel: é um professor. Um plano que não se pode ler dá 403 (não revela planos de outras turmas).
 
+## Salas da instituição para o coordenador (`GET /api/v1/coordination/exam-rooms`, `/{id}/grades`) (kixi#529)
+
+Só leitura. `COORDINATOR`: as salas das turmas da(s) instituição(ões) que coordena (estado, professor, entradas, concluídas, respostas por rever) e as notas por aluno; `ADMIN`: todas; os outros papéis e a conta de integração: 403. Uma sala que não existe e uma de outra instituição dão ambas 403. O coordenador não fecha salas nem corrige: isso continua a ser do professor dono da sala.
+
 ## Visibilidade dos enunciados de provas de sala (kixi#519)
 
 Um enunciado ligado a uma sala **não é visível ao aluno** até todas as salas dele estarem `CLOSED` e não restar nenhuma resposta `PENDING_REVIEW` nas simulações dessas salas; só então volta a `visible` (a intenção de publicar fica em `statements.release_after_exam`). O professor pode mostrá-lo mais cedo (`visible = true` acaba a retenção). Garantido por triggers na base de dados, por isso vale para qualquer via de escrita. As salas não dependem de `visible`: o aluno da sala continua a fazer a prova. Enunciados sem sala (treino, donativos) não mudam.
