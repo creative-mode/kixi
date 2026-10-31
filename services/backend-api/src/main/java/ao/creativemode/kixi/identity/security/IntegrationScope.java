@@ -34,6 +34,11 @@ public final class IntegrationScope {
             rule(HttpMethod.GET, "/api/v1/statements/\\d+/questions"),
             rule(HttpMethod.GET, "/api/v1/school-years/\\d+"),
             rule(HttpMethod.GET, "/api/v1/subjects"),
+            // O contexto da prova (instituição, trimestre, turma, professor da conta de serviço) que o motor monta (kixi#515).
+            rule(HttpMethod.GET, "/api/v1/institutions/\\d+"),
+            rule(HttpMethod.GET, "/api/v1/terms/\\d+"),
+            rule(HttpMethod.GET, "/api/v1/classes/\\d+"),
+            rule(HttpMethod.GET, "/api/v1/teachers/me"),
             rule(HttpMethod.GET, "/api/v1/exam-rooms/owned"),
             rule(HttpMethod.GET, "/api/v1/exam-rooms/\\d+/grades"),
             rule(HttpMethod.GET, "/api/v1/analytics/classes/\\d+/students"),
