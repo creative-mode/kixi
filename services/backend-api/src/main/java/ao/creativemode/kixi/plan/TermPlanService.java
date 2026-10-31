@@ -319,6 +319,10 @@ public class TermPlanService {
         });
     }
 
+    public Flux<Assessment> assessmentsOf(Long planId) {
+        return assessments(planId);
+    }
+
     private Flux<Assessment> assessments(Long planId) {
         LocalDate today = LocalDate.now();
         return db.sql("SELECT a.id, a.kind, a.seq, a.title, a.planned_date, a.statement_id, a.room_id, a.dispensed_reason, " + STATUS
