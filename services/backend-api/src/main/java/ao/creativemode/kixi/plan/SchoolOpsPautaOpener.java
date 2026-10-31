@@ -154,7 +154,7 @@ public class SchoolOpsPautaOpener {
                 pedido.put("academicSession", Map.of("sourcedId", String.valueOf(h.get("term_id")),
                         "anoLectivo", h.get("start_year") + "/" + h.get("end_year"), "trimestre", h.get("term_number")));
                 String subjectCode = String.valueOf(h.get("subject_code"));
-                pedido.put("class", Map.of("sourcedId", h.get("class_id") + "-" + h.get("subject_id"), "nome", String.valueOf(h.get("class_code")),
+                pedido.put("class", Map.of("sourcedId", h.get("class_id") + "-" + h.get("subject_id") + "-" + planId, "nome", String.valueOf(h.get("class_code")),
                         "classe", h.get("grade"),
                         "curso", Map.of("sourcedId", String.valueOf(h.get("course_id")), "sigla", String.valueOf(h.get("course_code")), "nome", String.valueOf(h.get("course_name"))),
                         "disciplina", Map.of("sourcedId", String.valueOf(h.get("subject_id")), "sigla", subjectCode, "nome", String.valueOf(h.get("subject_name")))));
