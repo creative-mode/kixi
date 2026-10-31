@@ -26,6 +26,17 @@ Esta matriz descreve as regras de `SecurityConfig`. As verificações de proprie
 
 Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escreve e lê (kixi#501). Só `ADMIN` e a conta `INTEGRATION` (dentro do `IntegrationScope`); professor e aluno recebem 403, e a sua leitura é do ecrã de pautas. Todas as escritas são idempotentes por chave; uma pauta `FECHADA` ou `ANULADA` não reabre.
 
+## Plano do trimestre e coordenador (`/api/v1/term-plans/**`, `/api/v1/institutions/{id}/coordinators/**`) (kixi#523, kixi#513)
+
+| Papel | Plano do trimestre | Coordenadores de uma instituição |
+|---|---|---|
+| `ADMIN` | tudo | atribui e retira |
+| `TEACHER` | cria, lê e edita **só** os planos da turma e disciplina que leciona (par exato); marca uma MAC sem sala como concluída; não aprova nem dispensa | 403 |
+| `COORDINATOR` | lê os planos da **sua instituição** (tabela `institution_coordinators`), aprova e dispensa uma componente com motivo; não edita datas nem liga salas; lê também as pautas da instituição (`/term-sheets`) | 403 |
+| `STUDENT`, `INTEGRATION` | 403 | 403 |
+
+O estado de cada avaliação é derivado do enunciado, da sala e das respostas; o plano fica pronto para a pauta quando todas estão corrigidas ou dispensadas. O vigilante não tem papel: é um professor. Um plano que não se pode ler dá 403 (não revela planos de outras turmas).
+
 ## Visibilidade dos enunciados de provas de sala (kixi#519)
 
 Um enunciado ligado a uma sala **não é visível ao aluno** até todas as salas dele estarem `CLOSED` e não restar nenhuma resposta `PENDING_REVIEW` nas simulações dessas salas; só então volta a `visible` (a intenção de publicar fica em `statements.release_after_exam`). O professor pode mostrá-lo mais cedo (`visible = true` acaba a retenção). Garantido por triggers na base de dados, por isso vale para qualquer via de escrita. As salas não dependem de `visible`: o aluno da sala continua a fazer a prova. Enunciados sem sala (treino, donativos) não mudam.
