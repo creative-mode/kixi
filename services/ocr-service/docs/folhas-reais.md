@@ -56,6 +56,12 @@ O relatório separa o que importa:
 | Erradas e duvidosas | lidas mal com confiança baixa; a validação humana apanha |
 | **Erradas e confiantes** | **lidas mal com confiança alta (>= 0,8): o erro silencioso, o que decide** |
 | Nº de aluno / nome certos | a identificação do aluno |
+| Limite superior do erro silencioso | limite a 95 % (Wilson): com poucas respostas, 0 erros não prova <= 1 %. Com `--rigoroso` é ele que decide |
+
+O código de saída é 0 só se cumprir a definição de pronto: exatidão >= 95 % (`--min-objectivas`), erros silenciosos <= 1 %
+(`--max-erros-silenciosos`), >= 30 folhas (`--min-folhas`), nº de aluno >= 95 % (`--min-numero`), nenhuma linha do gabarito sem
+foto e nenhuma falha do OCR. Gabarito ilegível ou inconsistente com a estrutura sai com código 2. O CSV pode ter BOM e usar `;`.
+Passe a chave por `OCR_API_KEY` (ambiente) em vez de `--api-key`, para não ficar no histórico da shell.
 
 ## 5. Quando é que a #499 se dá por fechada
 
@@ -72,7 +78,7 @@ Cada ronda de medição deve ser comentada na #499 com o resumo (sem fotos).
 ## 6. O que já se mediu com letra simulada (não substitui folhas reais)
 
 Teste de esforço com a própria `medir_folhas.py`: 7 fontes manuscritas muito diferentes (Patrick Hand, Kalam, Indie Flower, Reenie Beanie, Shadows Into Light,
-Gloria Hallelujah, Covered By Your Grace) × 4 alunos × 4 condições (digitalização, foto, foto escura, foto com sombra e perspetiva), 28 folhas, 224 respostas objetivas:
+Gloria Hallelujah, Covered By Your Grace) × 4 condições (digitalização, foto, foto escura, foto com sombra e perspetiva) = 28 folhas, 224 respostas objetivas (8 por folha). A exatidão (84,8 %) fica abaixo do limiar de 95 %, por isso o `medir_folhas.py` diria "NÃO cumpre"; é o resultado esperado de letra simulada:
 
 | | |
 |---|---|
