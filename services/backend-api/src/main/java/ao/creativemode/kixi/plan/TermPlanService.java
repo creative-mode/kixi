@@ -209,12 +209,37 @@ public class TermPlanService {
         if (reason == null || reason.isBlank()) {
             return Mono.error(ApiException.badRequest("A reason is required to dispense an assessment"));
         }
-        return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql("""
+        return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql(
+                        "SELECT kind FROM term_assessments WHERE id = :id AND plan_id = :p").bind("id", assessmentId).bind("p", planId)
+                        .map((row, meta) -> row.get(0, String.class)).one()
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Assessment not found")))
+                        // A P1 e a P2 não se dispensam: repetem-se (reagendar), porque a pauta precisa das duas e a MT é (MAC + P1 + P2) / 3.
+                        .filter(kind -> kind.equals("MAC"))
+                        .switchIfEmpty(Mono.error(ApiException.conflict("P1 and P2 cannot be dispensed: reschedule them")))).then(db.sql("""
                 UPDATE term_assessments SET dispensed_by = :u, dispensed_at = CURRENT_TIMESTAMP, dispensed_reason = :r
                 WHERE id = :id AND plan_id = :p AND dispensed_at IS NULL
                 """).bind("u", who.accountId()).bind("r", reason.trim()).bind("id", assessmentId).bind("p", planId).fetch().rowsUpdated())
                 .flatMap(n -> n == 0 ? Mono.error(ApiException.conflict("Assessment not found or already dispensed"))
                         : touch(planId).then(plan(who, planId)));
+    }
+
+    /**
+     * A P1 ou a P2 repete-se (kixi#534): o coordenador (ou o administrador) marca uma data nova e o motivo; a avaliação volta a «planeada»,
+     * sem enunciado nem sala (a sala antiga fica como histórico). Só antes de a pauta abrir: depois disso os dados já seguiram para o motor.
+     */
+    @Transactional
+    public Mono<Plan> reschedule(Access who, Long planId, Long assessmentId, LocalDate date, String reason) {
+        if (date == null) return Mono.error(ApiException.badRequest("A new date is required"));
+        if (reason == null || reason.isBlank()) return Mono.error(ApiException.badRequest("A reason is required to reschedule an assessment"));
+        return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> {
+            if (h.pautaOpenedAt() != null) return Mono.<Long>error(ApiException.conflict("The pauta is already open: its assessments cannot be rescheduled"));
+            return db.sql("""
+                    UPDATE term_assessments SET planned_date = :d, statement_id = NULL, room_id = NULL, manual_done_at = NULL,
+                        dispensed_by = NULL, dispensed_at = NULL, dispensed_reason = NULL
+                    WHERE id = :id AND plan_id = :p AND kind IN ('P1', 'P2')
+                    """).bind("d", date).bind("id", assessmentId).bind("p", planId).fetch().rowsUpdated();
+        }).flatMap(n -> n == 0 ? Mono.error(ApiException.badRequest("Only P1 and P2 can be rescheduled"))
+                : touch(planId).then(plan(who, planId)));
     }
 
     @Transactional
