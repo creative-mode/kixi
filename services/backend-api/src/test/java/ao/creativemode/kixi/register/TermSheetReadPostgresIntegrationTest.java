@@ -6,6 +6,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 import ao.creativemode.kixi.identity.service.JwtService;
 import java.time.Duration;
 import java.util.List;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,10 +73,9 @@ class TermSheetReadPostgresIntegrationTest {
         registry.add("spring.flyway.password", () -> password);
     }
 
-    @BeforeEach
-    void fixture() {
-        client = WebTestClient.bindToApplicationContext(applicationContext).apply(springSecurity())
-                .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
+    /** Também depois de cada teste: os anos lectivos (2093/2094) são únicos e outros testes de Postgres usam os mesmos. */
+    @AfterEach
+    void limpar() {
         String accounts = String.join(", ", ACCOUNTS);
         sql("DELETE FROM register_term_entries WHERE sheet_id LIKE 'PT-506-%'");
         sql("DELETE FROM register_term_sheets WHERE sheet_id LIKE 'PT-506-%'");
@@ -88,6 +88,13 @@ class TermSheetReadPostgresIntegrationTest {
         sql("DELETE FROM institutions WHERE id = 506001");
         sql("DELETE FROM account_roles WHERE account_id IN (" + accounts + ")");
         sql("DELETE FROM accounts WHERE id IN (" + accounts + ")");
+    }
+
+    @BeforeEach
+    void fixture() {
+        client = WebTestClient.bindToApplicationContext(applicationContext).apply(springSecurity())
+                .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
+        limpar();
 
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) "
                 + "SELECT i, 'it-506-' || i, 'it-506-' || i || '@example.com', 'x', true FROM generate_series(506001, 506006) i");
