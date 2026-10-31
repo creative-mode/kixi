@@ -118,6 +118,8 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers("/api/v1/teaching-assignments", "/api/v1/teaching-assignments/**")
                         .hasRole("ADMIN")
+                        // Os eventos do motor SchoolOps entram sem sessão: a assinatura HMAC é a autenticação (kixi#525).
+                        .pathMatchers(HttpMethod.POST, "/api/v1/integrations/schoolops/events").permitAll()
                         // Plano do trimestre e coordenador por instituição (kixi#523, kixi#513). O serviço decide o que cada um vê e faz.
                         .pathMatchers("/api/v1/institutions/*/coordinators", "/api/v1/institutions/*/coordinators/*")
                         .hasRole("ADMIN")

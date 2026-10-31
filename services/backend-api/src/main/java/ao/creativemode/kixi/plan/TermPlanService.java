@@ -181,7 +181,7 @@ public class TermPlanService {
                         .switchIfEmpty(Mono.error(ApiException.badRequest("The room does not belong to this class and subject"))).then());
             }
             DatabaseClient.GenericExecuteSpec update = db.sql("""
-                    UPDATE term_assessments SET statement_id = COALESCE(:s, statement_id), room_id = COALESCE(:r, room_id),
+                    UPDATE term_assessments SET statement_id = COALESCE(:s, (SELECT r2.statement_id FROM exam_rooms r2 WHERE r2.id = :r), statement_id), room_id = COALESCE(:r, room_id),
                         title = COALESCE(:t, title), planned_date = COALESCE(:d, planned_date)
                     WHERE id = :id AND plan_id = :p
                     """).bind("id", assessmentId).bind("p", planId);
@@ -317,6 +317,10 @@ public class TermPlanService {
             return assessments(planId).collectList().map(list -> new Plan(h.id(), h.classId(), h.className(), h.subjectId(), h.subjectName(),
                     h.termId(), h.termNumber(), h.institutionId(), h.approved(), allCleared(list), h.pautaOpenedAt() != null, h.pautaRef(), list));
         });
+    }
+
+    public Flux<Assessment> assessmentsOf(Long planId) {
+        return assessments(planId);
     }
 
     private Flux<Assessment> assessments(Long planId) {
