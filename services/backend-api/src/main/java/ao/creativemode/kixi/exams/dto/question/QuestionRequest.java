@@ -2,9 +2,9 @@ package ao.creativemode.kixi.exams.dto.question;
 
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 
 /**
  * A question as accepted when creating or editing one.
@@ -19,14 +19,9 @@ import jakarta.validation.constraints.Size;
  * exam builder writes {@code open}. Only {@code multiple_choice} has a meaning
  * to the approval gate, which is why it is the one value that matters here.
  *
- * <p>{@code maxScore} is required, and this is the one field that could
- * otherwise be left out without breaking the request. The approval gate adds up
- * the scores of the active questions and compares the result with the declared
- * total, and a question with no score at all is skipped by that sum rather than
- * counted as zero. So a PUT that simply left the score out would store NULL,
- * quietly shrink the sum, and make the statement impossible to approve for good
- * — with the edit that did it returning 200. Required here means the caller has
- * to say what it is.
+ * <p>{@code maxScore} may be null for a question that is intentionally not
+ * scored yet. The approval gate reports that state; an edit must preserve it
+ * instead of silently turning it into zero.
  *
  * <p>{@code questionType} and {@code pageIndex} are optional and, when absent,
  * are left as they are: neither takes part in the approval gate, so a partial
@@ -39,7 +34,6 @@ public record QuestionRequest(
     @Size(max = 50, message = "The question type must not exceed 50 characters")
     String questionType,
 
-    @NotNull(message = "The question score is required")
     @PositiveOrZero(message = "The score cannot be negative")
     @Digits(integer = 8, fraction = 2,
         message = "The score must be at most 99999999.99")
@@ -52,9 +46,20 @@ public record QuestionRequest(
     String modelAnswer,
 
     /** Explicit human acknowledgement of OCR text/formula evidence. */
-    Boolean ocrReviewed
+    Boolean ocrReviewed,
+    /** Parent group for a new alínea; immutable when updating an existing question. */
+    Long parentId,
+    @Size(max = 10, message = "The item label must not exceed 10 characters")
+    String label,
+    @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
+    String groupLayout
 ) {
     public QuestionRequest(String text, String questionType, Double maxScore, Integer pageIndex, String modelAnswer) {
-        this(text, questionType, maxScore, pageIndex, modelAnswer, null);
+        this(text, questionType, maxScore, pageIndex, modelAnswer, null, null, null, null);
+    }
+
+    public QuestionRequest(String text, String questionType, Double maxScore, Integer pageIndex, String modelAnswer,
+            Boolean ocrReviewed) {
+        this(text, questionType, maxScore, pageIndex, modelAnswer, ocrReviewed, null, null, null);
     }
 }

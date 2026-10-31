@@ -69,6 +69,65 @@ class QuestionServiceTest {
     }
 
     @Test
+    void createAddsAnItemToAnActiveGroupAndKeepsItsLabelAndParent() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        Question oldChild = question(21L, 301);
+        oldChild.setParentId(20L);
+        when(questions.findAllChildren(20L)).thenReturn(Flux.just(oldChild));
+        when(questions.findNextQuestionNumber(STATEMENT_ID)).thenReturn(Mono.just(8));
+        when(questions.findNextOrderIndex(STATEMENT_ID)).thenReturn(Mono.just(7));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> {
+            Question saved = invocation.getArgument(0);
+            saved.setId(22L);
+            return Mono.just(saved);
+        });
+
+        var request = new QuestionRequest("Nova alínea", "open", 2.0, 0, null, null, 20L, "b", null);
+        StepVerifier.create(service.create(STATEMENT_ID, request, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.id()).isEqualTo(22L);
+                    assertThat(response.number()).isEqualTo(302);
+                    assertThat(response.parentId()).isEqualTo(20L);
+                    assertThat(response.label()).isEqualTo("b");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void createCannotAttachAnItemToANonGroupQuestion() {
+        givenTheStatementIsWritable();
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(question(20L, 3)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, "a", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).findNextQuestionNumber(STATEMENT_ID);
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void updateCanChangeOnlyTheLayoutOfAGroupQuestionWithoutDroppingItsScore() {
+        givenTheStatementIsWritable();
+        Question group = question(QUESTION_ID, 1);
+        group.setQuestionType("group");
+        group.setGroupLayout("lettered");
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(group));
+        when(questions.save(group)).thenReturn(Mono.just(group));
+
+        StepVerifier.create(service.update(STATEMENT_ID, QUESTION_ID,
+                        new QuestionRequest("Enunciado", "group", 0.0, null, null, null, null, null, "brace"),
+                        ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.groupLayout()).isEqualTo("brace"))
+                .verifyComplete();
+    }
+
+    @Test
     void createKeepsTheModelAnswerAndDefaultsTheTypeToOpen() {
         givenTheStatementIsWritable();
         when(questions.findNextQuestionNumber(STATEMENT_ID)).thenReturn(Mono.just(1));

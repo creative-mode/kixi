@@ -320,6 +320,24 @@ class QuestionOptionServiceTest {
         verify(options).setCorrectOption(QUESTION_ID, OPTION_ID);
     }
 
+    @Test
+    void updateCanClearTheCurrentAnswerKey() {
+        givenTheStatementIsWritable();
+        QuestionOption existing = activeOption(OPTION_ID, "A");
+        existing.setIsCorrect(true);
+        when(options.findByIdAndDeletedAtIsNull(OPTION_ID)).thenReturn(Mono.just(existing));
+        when(options.save(existing)).thenReturn(Mono.just(existing));
+        when(options.findCorrectOptionByQuestionId(QUESTION_ID)).thenReturn(Mono.just(existing));
+        when(options.markAllAsIncorrect(QUESTION_ID)).thenReturn(Mono.just(2));
+
+        StepVerifier.create(service.update(
+                        STATEMENT_ID, QUESTION_ID, OPTION_ID, request("A", "texto", false), ACCOUNT_ID, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(options).markAllAsIncorrect(QUESTION_ID);
+    }
+
     // ── Reordering ──────────────────────────────────────────────────────────
 
     @Test
