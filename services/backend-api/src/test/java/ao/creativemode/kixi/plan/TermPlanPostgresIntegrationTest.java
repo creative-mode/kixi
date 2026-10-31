@@ -148,6 +148,15 @@ class TermPlanPostgresIntegrationTest {
         sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
                 + "(523001, 'P1 Matemática', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
         patch(teacher, plan.get(), p1, "{\"statementId\":523001}").jsonPath("$.assessments[0].status").isEqualTo("STATEMENT_READY");
+        // concluir o agendamento pede P1 e P2 com enunciado; só o professor da turma (ou o coordenador) conclui
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isEqualTo(409);
+        long p2Early = assessmentId(plan.get(), "P2", 1);
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE id = " + p2Early);
+        bearer(token(OTHER_TEACHER, "TEACHER")).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isForbidden();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+        sql("UPDATE term_assessments SET statement_id = NULL WHERE id = " + p2Early);
+        sql("UPDATE term_plans SET scheduling_concluded_at = NULL WHERE id = " + plan.get());
         sql("INSERT INTO exam_rooms (id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status, class_id) VALUES "
                 + "(523001, 523001, " + TEACHER + ", now(), now() + interval '1 day', 60, 'RUNNING', " + CLASS + ")");
         patch(teacher, plan.get(), p1, "{\"roomId\":523001}").jsonPath("$.assessments[0].status").isEqualTo("ROOM_OPEN");
@@ -170,18 +179,27 @@ class TermPlanPostgresIntegrationTest {
         long p2 = assessmentId(plan.get(), "P2", 1);
         bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac1 + "/done").exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.assessments[2].status").isEqualTo("GRADED");
-        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isForbidden();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isForbidden();
         String coordinator = token(COORDINATOR, "COORDINATOR");
         bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        // a P1 e a P2 não se dispensam: repetem-se
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\" \"}").exchange().expectStatus().isBadRequest();
-        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isOk()
-                .expectBody().jsonPath("$.assessments[1].status").isEqualTo("DISPENSED").jsonPath("$.readyForPauta").isEqualTo(false);
+                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isEqualTo(409);
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\" \"}").exchange().expectStatus().isBadRequest();
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac1 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"x\"}").exchange().expectStatus().isBadRequest();   // a MAC não se reagenda
+        // reagendar a P1 (já corrigida) volta a planeá-la, sem enunciado nem sala, e o plano deixa de estar pronto
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p1 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.assessments[0].status").isEqualTo("PLANNED").jsonPath("$.assessments[0].plannedDate").isEqualTo("2030-01-10")
+                .jsonPath("$.assessments[0].roomId").isEqualTo(null).jsonPath("$.readyForPauta").isEqualTo(false);
+        // a prova repetida volta a ligar-se e a corrigir-se: o plano espera por ela e só então fica pronto
+        sql("UPDATE term_assessments SET manual_done_at = now() WHERE id IN (" + p1 + ", " + p2 + ")");
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"reason\":\"MAC cancelada\"}").exchange().expectStatus().isOk()
-                .expectBody().jsonPath("$.readyForPauta").isEqualTo(true);   // P1 corrigida, P2 e MAC 2 dispensadas, MAC 1 concluída
+                .expectBody().jsonPath("$.readyForPauta").isEqualTo(true);   // P1 e P2 repetidas e corrigidas, MAC 1 concluída, MAC 2 dispensada
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/approve").exchange().expectStatus().isOk().expectBody().jsonPath("$.approved").isEqualTo(true);
         // o professor não aprova
         bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/approve").exchange().expectStatus().isForbidden();

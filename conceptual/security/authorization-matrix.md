@@ -31,11 +31,11 @@ Notas por prova, reclamações e pautas trimestrais que o motor SchoolOps escrev
 | Papel | Plano do trimestre | Coordenadores de uma instituição |
 |---|---|---|
 | `ADMIN` | tudo | atribui e retira |
-| `TEACHER` | cria, lê e edita **só** os planos da turma e disciplina que leciona (par exato); marca uma MAC sem sala como concluída; não aprova nem dispensa | 403 |
-| `COORDINATOR` | lê os planos da **sua instituição** (tabela `institution_coordinators`), aprova e dispensa uma componente com motivo; não edita datas nem liga salas; lê também as pautas da instituição (`/term-sheets`) | 403 |
+| `TEACHER` | cria, lê e edita **só** os planos da turma e disciplina que leciona (par exato); marca uma MAC sem sala como concluída; **conclui o agendamento** (`POST …/conclude`, pede P1 e P2 com enunciado) e com isso a pauta abre no motor; não aprova nem dispensa | 403 |
+| `COORDINATOR` | lê os planos da **sua instituição** (tabela `institution_coordinators`), aprova, dispensa uma avaliação de MAC com motivo e **reagenda** a P1 ou a P2 e também conclui o agendamento (a P1 e a P2 não se dispensam: repetem-se, kixi#534; só antes de a pauta abrir); não edita datas nem liga salas; lê também as pautas da instituição (`/term-sheets`) | 403 |
 | `STUDENT`, `INTEGRATION` | 403 | 403 |
 
-O estado de cada avaliação é derivado do enunciado, da sala e das respostas; o plano fica pronto para a pauta quando todas estão corrigidas ou dispensadas. O vigilante não tem papel: é um professor. Um plano que não se pode ler dá 403 (não revela planos de outras turmas).
+O estado de cada avaliação é derivado do enunciado, da sala e das respostas; a pauta abre quando o professor (ou o coordenador) conclui o agendamento, cada prova P1/P2 é encerrada no motor quando a sua sala fecha ou a data passa, e `readyForPauta` só indica que tudo está corrigido. O vigilante não tem papel: é um professor. Um plano que não se pode ler dá 403 (não revela planos de outras turmas).
 
 ## Salas da instituição para o coordenador (`GET /api/v1/coordination/exam-rooms`, `/{id}/grades`) (kixi#529)
 
