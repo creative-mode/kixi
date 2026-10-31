@@ -73,7 +73,7 @@ class TermSheetReadPostgresIntegrationTest {
         registry.add("spring.flyway.password", () -> password);
     }
 
-    /** Também depois de cada teste: os anos lectivos (2093/2094) são únicos e outros testes de Postgres usam os mesmos. */
+    /** Também depois de cada teste: os anos lectivos (2189/2190) são únicos e outros testes de Postgres usam os mesmos. */
     @AfterEach
     void limpar() {
         String accounts = String.join(", ", ACCOUNTS);
@@ -105,7 +105,7 @@ class TermSheetReadPostgresIntegrationTest {
         role(BRUNO, "STUDENT");
         role(ENGINE, "INTEGRATION");
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (506001, 'IT506', 'Escola 506', now(), now())");
-        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (506001, 2093, 2094, now(), now())");
+        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (506001, 2189, 2190, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (506001, 'C506', 'Informática', 506001, now(), now())");
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES "
                 + "(506001, '12B', 12, 506001, 506001, 506001, now(), now()), (506002, '11A', 11, 506001, 506001, 506001, now(), now())");
@@ -217,6 +217,20 @@ class TermSheetReadPostgresIntegrationTest {
         bearer(token(TEACHER_A, "TEACHER")).delete().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isForbidden();
     }
 
+    @Test
+    void theEngineAccountReadsTheStructureItNeedsToBuildTheExamContext() {
+        // kixi#515: instituição, turma e trimestre (o motor monta o contexto da prova) e /teachers/me, que para uma conta sem
+        // registo de professor dá 404, nunca 403.
+        String engine = token(ENGINE, "INTEGRATION");
+        bearer(engine).get().uri("/api/v1/institutions/506001").exchange().expectStatus().isOk();
+        bearer(engine).get().uri("/api/v1/classes/506001").exchange().expectStatus().isOk();
+        bearer(engine).get().uri("/api/v1/terms/1").exchange().expectStatus().value(code -> assertThat(code).isIn(200, 404));
+        bearer(engine).get().uri("/api/v1/teachers/me").exchange().expectStatus().isNotFound();
+        // e continua sem poder ler o que não é do motor
+        bearer(engine).get().uri("/api/v1/institutions").exchange().expectStatus().isForbidden();
+        bearer(engine).get().uri("/api/v1/teachers").exchange().expectStatus().isForbidden();
+    }
+
     private List<String> ids(String token, String uri) {
         return bearer(token).get().uri(uri).exchange().expectStatus().isOk()
                 .expectBodyList(java.util.Map.class).returnResult().getResponseBody().stream()
@@ -226,7 +240,7 @@ class TermSheetReadPostgresIntegrationTest {
     private void sheet(String id, String status, String turmaId, long subjectId, int term) {
         sql("INSERT INTO register_term_sheets (sheet_id, context, statistics, status) VALUES ('" + id + "', CAST('{"
                 + "\"turmaId\":\"" + turmaId + "\",\"disciplinaId\":\"" + subjectId + "\",\"trimestre\":" + term
-                + ",\"anoLectivo\":\"2093/2094\",\"turma\":\"12B\",\"classe\":12,\"curso\":\"C506\",\"cursoNome\":\"Informática\","
+                + ",\"anoLectivo\":\"2189/2190\",\"turma\":\"12B\",\"classe\":12,\"curso\":\"C506\",\"cursoNome\":\"Informática\","
                 + "\"disciplina\":\"Redes\",\"disciplinaSigla\":\"R" + (subjectId == 506001 ? "506" : "x") + "\"}' AS jsonb), "
                 + "CAST('{\"media\":13,\"avaliados\":2,\"inscritos\":2,\"ausentes\":0,\"positivas\":1,\"negativas\":1,\"notaMaxima\":18,\"notaMinima\":8}' AS jsonb), '"
                 + status + "')");
