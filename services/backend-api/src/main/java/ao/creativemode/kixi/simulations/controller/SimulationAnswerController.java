@@ -122,11 +122,12 @@ public class SimulationAnswerController {
     @PatchMapping("/{id}/grade")
     public Mono<ResponseEntity<SimulationAnswerResponse>> grade(
         @PathVariable Long id,
-        @Valid @RequestBody SimulationAnswerGradeRequest request
+        @Valid @RequestBody SimulationAnswerGradeRequest request,
+        @RequestParam(defaultValue = "false") boolean rectify
     ) {
         return currentAccountService.requiredAccountId()
             .zipWith(currentAccountService.hasAnyRole("ADMIN"))
-            .flatMap(tuple -> submissionService.grade(id, request.scoreObtained(), tuple.getT1(), tuple.getT2()))
+            .flatMap(tuple -> submissionService.grade(id, request.scoreObtained(), tuple.getT1(), tuple.getT2(), rectify))
             .map(ResponseEntity::ok);
     }
 

@@ -211,6 +211,17 @@ public class SimulationSubmissionService {
     @Transactional
     public Mono<SimulationAnswerResponse> grade(Long answerId, Double score,
             Long accountId, boolean admin) {
+        return grade(answerId, score, accountId, admin, false);
+    }
+
+    /**
+     * Corrige uma resposta pendente de revisão ou, com {@code rectify}, rectifica uma já corrigida (uma reclamação deferida,
+     * kixi#509): só uma ou só a outra, para uma rectificação nunca passar por primeira correção nem o contrário. A nota final da
+     * simulação é recalculada nos dois casos.
+     */
+    @Transactional
+    public Mono<SimulationAnswerResponse> grade(Long answerId, Double score,
+            Long accountId, boolean admin, boolean rectify) {
         // Keep the pre-lock lookup so a missing answer returns its specific 404;
         // the second lookup below is the authoritative snapshot after the lock.
         return answers.findByIdAndDeletedAtIsNull(answerId)
@@ -222,16 +233,20 @@ public class SimulationSubmissionService {
                     .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
                     .then(answers.findByIdAndDeletedAtIsNull(answerId)
                         .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found"))))
-                    .flatMap(lockedAnswer -> gradeLockedAnswer(lockedAnswer, score, accountId, admin));
+                    .flatMap(lockedAnswer -> gradeLockedAnswer(lockedAnswer, score, accountId, admin, rectify));
             });
     }
 
     private Mono<SimulationAnswerResponse> gradeLockedAnswer(SimulationAnswer answer, Double score,
-            Long accountId, boolean admin) {
+            Long accountId, boolean admin, boolean rectify) {
         return questions.findByIdAndDeletedAtIsNull(answer.getQuestionId())
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
                 .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
-                    if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
+                    if (rectify) {
+                        if (answer.getReviewStatus() != SimulationAnswerStatus.GRADED) {
+                            return Mono.error(ApiException.conflict("Only graded answers can be rectified"));
+                        }
+                    } else if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
                         return Mono.error(ApiException.conflict("Only answers pending review can be graded"));
                     }
                     if (question.getMaxScore() != null && score > question.getMaxScore()) {
