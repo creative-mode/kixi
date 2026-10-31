@@ -85,6 +85,9 @@ class SchoolOpsGatewayPostgresIntegrationTest {
     @Autowired
     private SchoolOpsPautaOpener opener;
 
+    @Autowired
+    private ao.creativemode.kixi.identity.service.JwtService jwtService;
+
     private WebTestClient client;
 
     @DynamicPropertySource
@@ -111,6 +114,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         CALLS.clear();
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) SELECT i, 'it-525-' || i, 'it-525-' || i || '@example.com', 'x', true "
                 + "FROM generate_series(525001, 525003) i");
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT 525001, id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (525001, 'IT525', 'Escola 525', now(), now())");
         sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (525001, 2193, 2194, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (525001, 'C525', 'Informática', 525001, now(), now())");
@@ -148,6 +152,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         sql("DELETE FROM subjects WHERE id = 525001");
         sql("DELETE FROM school_years WHERE id = 525001");
         sql("DELETE FROM institutions WHERE id = 525001");
+        sql("DELETE FROM account_roles WHERE account_id IN (525001, 525002, 525003)");
         sql("DELETE FROM accounts WHERE id IN (525001, 525002, 525003)");
     }
 
@@ -208,6 +213,48 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         opener.closeFinishedProvas();
         assertThat(CALLS).hasSize(1);
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525002/encerramento");
+    }
+
+    /** Com a verificação periódica desligada (poll-ms muito alto), só o fecho da sala pode encerrar a prova a tempo (kixi#542). */
+    @Test
+    void closingTheRoomStartsTheFlowAtOnceWithoutWaitingForThePoll() {
+        sql("UPDATE term_plans SET scheduling_concluded_at = now(), pauta_opened_at = now(), pauta_ref = 'PT-TESTE' WHERE id = 525001");
+        sql("UPDATE term_assessments SET closed_notified_at = now() WHERE plan_id = 525001 AND kind = 'P1'");
+        sql("UPDATE exam_rooms SET status = 'RUNNING' WHERE id = 525002");
+        assertThat(CALLS).isEmpty();
+
+        // o professor fecha a sala (dono = conta 525001): a prova vai ao motor em segundos, sem chamar o polling
+        client.post().uri("/api/v1/exam-rooms/525002/close")
+                .headers(h -> h.setBearerAuth(jwtService.generateToken(525001L, List.of("TEACHER")))).exchange().expectStatus().isOk();
+
+        assertThat(awaitCall("POST /v1/pautas/PT-TESTE/provas/525002/encerramento")).as("o fecho da sala arranca o fluxo").isTrue();
+        assertThat(CALLS).hasSize(1);
+    }
+
+    /** Uma prova cuja sala fechou antes de a pauta abrir fica em fila e encerra-se assim que a pauta abre. */
+    @Test
+    void aProvaClosedBeforeThePautaOpensIsClosedRightAfterItOpens() {
+        sql("UPDATE exam_rooms SET status = 'OPEN' WHERE id = 525002");
+        sql("UPDATE term_plans SET scheduling_concluded_at = now() WHERE id = 525001");
+
+        opener.openReadyPlans();
+
+        assertThat(awaitCall("POST /v1/pautas/PT-TESTE/provas/525001/encerramento")).as("a P1, de sala já fechada, encerra-se ao abrir a pauta").isTrue();
+        assertThat(CALLS.stream().filter(c -> c.contains("/provas/525002/")).count()).as("a P2 ainda tem a sala aberta").isZero();
+    }
+
+    private static boolean awaitCall(String prefix) {
+        long limit = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < limit) {
+            if (CALLS.stream().anyMatch(c -> c.startsWith(prefix))) return true;
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     @Test

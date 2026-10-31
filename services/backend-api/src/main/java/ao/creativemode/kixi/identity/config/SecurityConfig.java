@@ -253,6 +253,11 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.DELETE,
                                 "/api/v1/simulations/*/share")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        // A correção que a IA fez no fluxo do motor (kixi#542): nunca o professor, que não corrige estas
+                        // respostas; sem esta regra o PUT cairia na regra genérica de /simulation-answers/** (ADMIN, TEACHER).
+                        .pathMatchers(HttpMethod.PUT,
+                                "/api/v1/simulation-answers/*/ai-grade")
+                        .hasAnyRole("ADMIN", "INTEGRATION")
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")

@@ -34,6 +34,10 @@ public class ExamRoomController {
     private final ExamRoomIntegrityService integrity;
     private final ao.creativemode.kixi.examrooms.service.ExamRoomCorrectionService correction;
 
+    /** Opcional (testes unitários não o têm): avisa, depois de gravado, que uma sala fechou (kixi#542). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher events;
+
     public ExamRoomController(ExamRoomService service, CurrentAccountService current,
             ExamRoomMonitoringService monitoring) {
         this(service, current, monitoring, null, null);
@@ -207,6 +211,12 @@ public class ExamRoomController {
                         ? service.transition(id, tuple.getT1().getT1(), tuple.getT1().getT2(), status)
                         : Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden(
                                 "Only teachers or ADMIN can manage exam rooms")))
+                // Já gravado e confirmado: quem trata de planos pode agir logo, sem esperar pela verificação periódica.
+                .doOnSuccess(room -> {
+                    if (status == ExamRoomStatus.CLOSED && room != null && events != null) {
+                        events.publishEvent(new ao.creativemode.kixi.shared.event.ExamRoomClosed(id));
+                    }
+                })
                 .map(ResponseEntity::ok);
     }
 }

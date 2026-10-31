@@ -16,5 +16,17 @@ public record SimulationAnswerResponse(
     LocalDateTime answeredAt,
     LocalDateTime createdAt,
     LocalDateTime updatedAt,
-    LocalDateTime deletedAt
-) {}
+    LocalDateTime deletedAt,
+    String aiFeedback,
+    String aiLevel,
+    Double aiConfidence,
+    LocalDateTime aiGradedAt
+) {
+    /** A resposta sem a correção da IA (as que não passam pelo fluxo do motor). */
+    public SimulationAnswerResponse(Long id, Long simulationId, Long questionId, Long selectedOptionId, String answerText,
+            Float scoreObtained, Boolean isCorrect, ao.creativemode.kixi.simulations.model.SimulationAnswerStatus reviewStatus,
+            LocalDateTime answeredAt, LocalDateTime createdAt, LocalDateTime updatedAt, LocalDateTime deletedAt) {
+        this(id, simulationId, questionId, selectedOptionId, answerText, scoreObtained, isCorrect, reviewStatus, answeredAt,
+                createdAt, updatedAt, deletedAt, null, null, null, null);
+    }
+}

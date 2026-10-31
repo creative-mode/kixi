@@ -1,7 +1,11 @@
 package ao.creativemode.kixi.plan;
 
 import ao.creativemode.kixi.plan.TermPlanService.Assessment;
+import ao.creativemode.kixi.shared.event.ExamRoomClosed;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import org.springframework.context.event.EventListener;
+import reactor.core.scheduler.Schedulers;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -68,8 +72,25 @@ public class SchoolOpsPautaOpener {
                         String pautaId = String.valueOf(response.get("pautaId"));
                         return db.sql("UPDATE term_plans SET pauta_opened_at = CURRENT_TIMESTAMP, pauta_ref = :r, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
                                 .bind("r", pautaId).bind("p", planId).fetch().rowsUpdated().then();
-                    });
+                    })
+                    // As provas cujas salas já fecharam esperavam a pauta: encerram-se agora, sem esperar pela verificação periódica.
+                    .doOnSuccess(done -> closeSoon());
         });
+    }
+
+    /** O professor fechou uma sala: se é de um plano com a pauta aberta, o fluxo arranca logo e não só na próxima verificação. */
+    @EventListener
+    public void onRoomClosed(ExamRoomClosed event) {
+        closeSoon();
+    }
+
+    /**
+     * Daqui a um instante (a sala fechada já está gravada) e fora do fio reativo, porque {@link #closeFinishedProvas} bloqueia.
+     * A verificação periódica fica como rede de segurança, e o encerramento é idempotente ({@code closed_notified_at}).
+     */
+    private void closeSoon() {
+        if (!properties.isEnabled()) return;
+        Schedulers.boundedElastic().schedule(this::closeFinishedProvas, 1, TimeUnit.SECONDS);
     }
 
     /** Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. */
