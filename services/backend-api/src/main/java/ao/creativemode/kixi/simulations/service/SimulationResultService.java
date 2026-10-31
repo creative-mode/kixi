@@ -222,7 +222,9 @@ public class SimulationResultService {
             optionResults,
             question.getParentId(),
             question.getLabel(),
-            parentText
+            parentText,
+            answerKeyVisible && answer != null ? answer.getAiFeedback() : null,
+            answerKeyVisible && answer != null ? answer.getAiLevel() : null
         );
     }
 

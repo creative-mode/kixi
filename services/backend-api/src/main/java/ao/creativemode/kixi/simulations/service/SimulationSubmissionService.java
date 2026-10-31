@@ -243,7 +243,9 @@ public class SimulationSubmissionService {
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
                 .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
                     if (rectify) {
-                        if (answer.getReviewStatus() != SimulationAnswerStatus.GRADED) {
+                        // Uma reclamação deferida rectifica tanto uma nota dada por uma pessoa como a da IA (kixi#542).
+                        if (answer.getReviewStatus() != SimulationAnswerStatus.GRADED
+                                && answer.getReviewStatus() != SimulationAnswerStatus.AI_GRADED) {
                             return Mono.error(ApiException.conflict("Only graded answers can be rectified"));
                         }
                     } else if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
@@ -259,6 +261,60 @@ public class SimulationSubmissionService {
                     return answers.save(answer).flatMap(saved -> refreshFinalScore(saved.getSimulationId())
                             .then(toResponse(saved)));
                 })));
+    }
+
+    /**
+     * Guarda a correção que a IA fez no fluxo do motor a uma resposta aberta (kixi#542): a nota, a observação e a confiança.
+     * Só se aplica a respostas por corrigir ou já corrigidas pela IA (repetir o mesmo corpo não altera nada); uma resposta
+     * corrigida por uma pessoa ou por rectificação nunca é substituída pela IA, e as objetivas não passam por aqui.
+     */
+    @Transactional
+    public Mono<SimulationAnswerResponse> aiGrade(Long answerId, Double score, String feedback, String level, Double confidence) {
+        return answers.findByIdAndDeletedAtIsNull(answerId)
+            .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found")))
+            .flatMap(first -> {
+                Mono<Simulation> answerLock = simulations.lockForAnswerWriteByAnswerId(answerId);
+                Mono<Simulation> acquiredLock = answerLock == null ? Mono.empty() : answerLock;
+                return acquiredLock
+                    .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                    .then(answers.findByIdAndDeletedAtIsNull(answerId)
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Simulation answer not found"))))
+                    .flatMap(answer -> questions.findByIdAndDeletedAtIsNull(answer.getQuestionId())
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
+                        .flatMap(question -> aiGradeLocked(answer, question, score, feedback, level, confidence)));
+            });
+    }
+
+    private Mono<SimulationAnswerResponse> aiGradeLocked(SimulationAnswer answer, Question question, Double score,
+            String feedback, String level, Double confidence) {
+        SimulationAnswerStatus status = answer.getReviewStatus();
+        if (status != SimulationAnswerStatus.PENDING_REVIEW && status != SimulationAnswerStatus.AI_GRADED) {
+            return Mono.error(ApiException.conflict(status == SimulationAnswerStatus.GRADED
+                    ? "The answer was already corrected by a person: the AI grade does not replace it"
+                    : "Only open answers pending review can be graded by the AI"));
+        }
+        if (question.getMaxScore() != null && score > question.getMaxScore()) {
+            return Mono.error(ApiException.badRequest("Score cannot exceed the question maximum"));
+        }
+        if (status == SimulationAnswerStatus.AI_GRADED && sameAiGrade(answer, score, feedback, level, confidence)) {
+            return toResponse(answer);
+        }
+        answer.setScoreObtained(score.floatValue());
+        answer.setIsCorrect(question.getMaxScore() != null && score >= question.getMaxScore());
+        answer.setReviewStatus(SimulationAnswerStatus.AI_GRADED);
+        answer.setAiFeedback(feedback);
+        answer.setAiLevel(level);
+        answer.setAiConfidence(confidence);
+        answer.setAiGradedAt(LocalDateTime.now(clock));
+        answer.setUpdatedAt(LocalDateTime.now());
+        return answers.save(answer).flatMap(saved -> refreshFinalScore(saved.getSimulationId()).then(toResponse(saved)));
+    }
+
+    private static boolean sameAiGrade(SimulationAnswer answer, Double score, String feedback, String level, Double confidence) {
+        return answer.getScoreObtained() != null && answer.getScoreObtained() == score.floatValue()
+                && java.util.Objects.equals(answer.getAiFeedback(), feedback)
+                && java.util.Objects.equals(answer.getAiLevel(), level)
+                && java.util.Objects.equals(answer.getAiConfidence(), confidence);
     }
 
     private Mono<Void> authorizeGrading(Question question, Long accountId, boolean admin) {
@@ -323,7 +379,9 @@ public class SimulationSubmissionService {
                     answerKeyVisible ? answer.getScoreObtained() : null,
                     answerKeyVisible ? answer.getIsCorrect() : null,
                     answerKeyVisible ? answer.getReviewStatus() : null, answer.getAnsweredAt(), answer.getCreatedAt(),
-                    answer.getUpdatedAt(), answer.getDeletedAt()));
+                    answer.getUpdatedAt(), answer.getDeletedAt(),
+                    answerKeyVisible ? answer.getAiFeedback() : null, answerKeyVisible ? answer.getAiLevel() : null,
+                    answerKeyVisible ? answer.getAiConfidence() : null, answerKeyVisible ? answer.getAiGradedAt() : null));
         });
     }
 }
