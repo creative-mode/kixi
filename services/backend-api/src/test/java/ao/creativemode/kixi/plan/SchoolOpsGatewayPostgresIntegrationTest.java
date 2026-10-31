@@ -170,6 +170,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
                 .contains("\"sourcedId\":\"525001-525001\"")
                 .contains("\"componente\":\"P1\"").contains("\"componente\":\"P2\"").contains("\"modalidade\":\"DIGITAL\"")
                 .contains("\"nome\":\"Abner Lourenço\"")
+                .contains("\"avaliacoesContinuas\":[{").contains("\"titulo\":\"MAC 1\"")
                 .contains("https://kixi.example/api/v1/integrations/schoolops/events");
         // os alunos vão por ordem alfabética, com número de ordem
         assertThat(CALLS.get(0).indexOf("Ana Domingos")).isLessThan(CALLS.get(0).indexOf("Bruno Neto"));

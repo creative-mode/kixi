@@ -238,6 +238,36 @@ class TermPlanPostgresIntegrationTest {
         assertThat(count("SELECT count(*) FROM account_roles ar JOIN roles r ON r.id = ar.role_id WHERE ar.account_id = " + COORDINATOR + " AND r.name = 'COORDINATOR'")).isZero();
     }
 
+    @Test
+    void theCoordinatorFollowsTheRoomsOfTheirInstitutionReadOnly() {
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
+                + "(523001, 'P1 Matemática', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
+        sql("INSERT INTO exam_rooms (id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status, class_id) VALUES "
+                + "(523001, 523001, " + TEACHER + ", now(), now() + interval '1 day', 60, 'RUNNING', " + CLASS + ")");
+        sql("INSERT INTO simulations (id, account_id, statement_id, status, exam_room_id, final_score) VALUES (523001, " + STUDENT + ", 523001, 'FINISHED', 523001, 4.5)");
+        sql("INSERT INTO exam_room_participants (exam_room_id, account_id, simulation_id, joined_at) VALUES (523001, " + STUDENT + ", 523001, CURRENT_TIMESTAMP)");
+        String coordinator = token(COORDINATOR, "COORDINATOR");
+        // sem instituição atribuída: nada
+        bearer(coordinator).get().uri("/api/v1/coordination/exam-rooms").exchange().expectStatus().isForbidden();
+        bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        bearer(coordinator).get().uri("/api/v1/coordination/exam-rooms").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[?(@.id==523001)].className").isEqualTo("A1")
+                .jsonPath("$[?(@.id==523001)].participants").isEqualTo(1)
+                .jsonPath("$[?(@.id==523001)].finished").isEqualTo(1)
+                .jsonPath("$[?(@.id==523001)].status").isEqualTo("RUNNING");
+        bearer(coordinator).get().uri("/api/v1/coordination/exam-rooms/523001/grades").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].finalScore").isEqualTo(4.5).jsonPath("$[0].status").isEqualTo("FINISHED");
+        // uma sala que não existe dá o mesmo que a de outra instituição: 403
+        bearer(coordinator).get().uri("/api/v1/coordination/exam-rooms/999999999/grades").exchange().expectStatus().isForbidden();
+        // só leitura: nada de escrita, e o professor e o aluno não acompanham a coordenação
+        bearer(coordinator).post().uri("/api/v1/coordination/exam-rooms").exchange().expectStatus().isForbidden();
+        bearer(token(TEACHER, "TEACHER")).get().uri("/api/v1/coordination/exam-rooms").exchange().expectStatus().isForbidden();
+        bearer(token(STUDENT, "STUDENT")).get().uri("/api/v1/coordination/exam-rooms/523001/grades").exchange().expectStatus().isForbidden();
+        bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/coordination/exam-rooms").exchange().expectStatus().isOk();
+        sql("DELETE FROM exam_room_participants WHERE exam_room_id = 523001");
+        sql("DELETE FROM simulations WHERE id = 523001");
+    }
+
     private long assessmentId(long plan, String kind, int seq) {
         return count("SELECT id FROM term_assessments WHERE plan_id = " + plan + " AND kind = '" + kind + "' AND seq = " + seq);
     }
