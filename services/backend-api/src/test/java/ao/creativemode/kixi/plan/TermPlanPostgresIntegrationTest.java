@@ -170,18 +170,27 @@ class TermPlanPostgresIntegrationTest {
         long p2 = assessmentId(plan.get(), "P2", 1);
         bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac1 + "/done").exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.assessments[2].status").isEqualTo("GRADED");
-        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isForbidden();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isForbidden();
         String coordinator = token(COORDINATOR, "COORDINATOR");
         bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        // a P1 e a P2 não se dispensam: repetem-se
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\" \"}").exchange().expectStatus().isBadRequest();
-        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isOk()
-                .expectBody().jsonPath("$.assessments[1].status").isEqualTo("DISPENSED").jsonPath("$.readyForPauta").isEqualTo(false);
+                .bodyValue("{\"reason\":\"prova anulada\"}").exchange().expectStatus().isEqualTo(409);
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\" \"}").exchange().expectStatus().isBadRequest();
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac1 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"x\"}").exchange().expectStatus().isBadRequest();   // a MAC não se reagenda
+        // reagendar a P1 (já corrigida) volta a planeá-la, sem enunciado nem sala, e o plano deixa de estar pronto
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p1 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.assessments[0].status").isEqualTo("PLANNED").jsonPath("$.assessments[0].plannedDate").isEqualTo("2030-01-10")
+                .jsonPath("$.assessments[0].roomId").isEqualTo(null).jsonPath("$.readyForPauta").isEqualTo(false);
+        // a prova repetida volta a ligar-se e a corrigir-se: o plano espera por ela e só então fica pronto
+        sql("UPDATE term_assessments SET manual_done_at = now() WHERE id IN (" + p1 + ", " + p2 + ")");
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac2 + "/dispense").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"reason\":\"MAC cancelada\"}").exchange().expectStatus().isOk()
-                .expectBody().jsonPath("$.readyForPauta").isEqualTo(true);   // P1 corrigida, P2 e MAC 2 dispensadas, MAC 1 concluída
+                .expectBody().jsonPath("$.readyForPauta").isEqualTo(true);   // P1 e P2 repetidas e corrigidas, MAC 1 concluída, MAC 2 dispensada
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/approve").exchange().expectStatus().isOk().expectBody().jsonPath("$.approved").isEqualTo(true);
         // o professor não aprova
         bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/approve").exchange().expectStatus().isForbidden();
