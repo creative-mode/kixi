@@ -370,7 +370,11 @@ public class SimulationAnswerService {
             entity.getAnsweredAt(),
             entity.getCreatedAt(),
             entity.getUpdatedAt(),
-            entity.getDeletedAt()
+            entity.getDeletedAt(),
+            answerKeyVisible ? entity.getAiFeedback() : null,
+            answerKeyVisible ? entity.getAiLevel() : null,
+            answerKeyVisible ? entity.getAiConfidence() : null,
+            answerKeyVisible ? entity.getAiGradedAt() : null
         );
     }
 
