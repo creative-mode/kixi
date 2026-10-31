@@ -44,6 +44,8 @@ public final class IntegrationScope {
             rule(HttpMethod.GET, "/api/v1/analytics/classes/\\d+/students"),
             // Escrever: a pontuação das abertas e o que os fluxos de pauta precisam de criar ou fechar.
             rule(HttpMethod.PATCH, "/api/v1/simulation-answers/\\d+/grade"),
+            // A correção que a IA fez no fluxo (kixi#542): nota, observação e confiança de uma resposta aberta.
+            rule(HttpMethod.PUT, "/api/v1/simulation-answers/\\d+/ai-grade"),
             rule(HttpMethod.POST, "/api/v1/simulations"),
             rule(HttpMethod.PUT, "/api/v1/simulations/\\d+"),
             rule(HttpMethod.POST, "/api/v1/simulations/\\d+/submit"),

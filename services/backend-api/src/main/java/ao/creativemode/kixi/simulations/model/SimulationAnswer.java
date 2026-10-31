@@ -36,6 +36,18 @@ public class SimulationAnswer {
     @Column("review_status")
     private SimulationAnswerStatus reviewStatus;
 
+    @Column("ai_feedback")
+    private String aiFeedback;
+
+    @Column("ai_level")
+    private String aiLevel;
+
+    @Column("ai_confidence")
+    private Double aiConfidence;
+
+    @Column("ai_graded_at")
+    private LocalDateTime aiGradedAt;
+
     @Column("answered_at")
     private LocalDateTime answeredAt;
 
