@@ -49,14 +49,17 @@ public class TermSheetController {
         return currentAccount.requiredAccountId().flatMapMany(service::mine);
     }
 
-    /** Administrador: tudo; professor: o que as suas atribuições cobrem; mais ninguém. */
+    /** Administrador: tudo; coordenador: a sua instituição; professor: o que as suas atribuições cobrem; mais ninguém. */
     private Mono<Reader> reader() {
         return currentAccount.hasAnyRole("ADMIN").flatMap(admin -> {
             if (admin) return Mono.just(new Reader(null));
-            return currentAccount.hasAnyRole("TEACHER").flatMap(teacher -> {
-                if (!teacher) return Mono.error(ApiException.forbidden("Term sheets are only available to staff"));
-                return currentAccount.requiredAccountId().flatMap(readAccess::teacherScope).map(Reader::new);
-            });
+            return currentAccount.requiredAccountId().flatMap(account -> Mono.zip(currentAccount.hasAnyRole("TEACHER"), service.coordinatorInstitutions(account))
+                    .flatMap(roles -> {
+                        if (!roles.getT1() && roles.getT2().isEmpty()) return Mono.error(ApiException.forbidden("Term sheets are only available to staff"));
+                        Mono<ao.creativemode.kixi.exams.service.StatementReadScope> scope = roles.getT1()
+                                ? readAccess.teacherScope(account) : Mono.just(ao.creativemode.kixi.exams.service.StatementReadScope.NO_ASSIGNMENTS);
+                        return scope.map(s -> new Reader(s, roles.getT2()));
+                    }));
         });
     }
 }
