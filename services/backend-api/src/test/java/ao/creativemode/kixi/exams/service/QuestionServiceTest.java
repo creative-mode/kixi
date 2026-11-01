@@ -97,6 +97,45 @@ class QuestionServiceTest {
     }
 
     @Test
+    void theTwentySeventhItemUsesAaInsteadOfReusingA() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        when(questions.findAllChildren(20L)).thenReturn(Flux.just(question(21L, 326)));
+        when(questions.findNextQuestionNumber(STATEMENT_ID)).thenReturn(Mono.just(8));
+        when(questions.findNextOrderIndex(STATEMENT_ID)).thenReturn(Mono.just(7));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.number()).isEqualTo(327);
+                    assertThat(response.label()).isEqualTo("aa");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void anItemPastTheNumberingRangeIsRejected() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        when(questions.findAllChildren(20L)).thenReturn(Flux.just(question(21L, 399)));
+        when(questions.findNextQuestionNumber(STATEMENT_ID)).thenReturn(Mono.just(8));
+        when(questions.findNextOrderIndex(STATEMENT_ID)).thenReturn(Mono.just(7));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
     void createCannotAttachAnItemToANonGroupQuestion() {
         givenTheStatementIsWritable();
         when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(question(20L, 3)));
