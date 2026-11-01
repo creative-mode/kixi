@@ -120,14 +120,39 @@ public class QuestionService {
         boolean admin
     ) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
-            .then(Mono.zip(
-                Mono.defer(() -> questions.findNextQuestionNumber(statementId)),
-                Mono.defer(() -> questions.findNextOrderIndex(statementId))
-            ))
-            .flatMap(numbering -> {
+            .then(Mono.defer(() -> data.parentId() == null
+                ? createWithNumbering(statementId, data, null, List.of())
+                : findActiveQuestion(statementId, data.parentId())
+                    .filter(Question::isGroup)
+                    .switchIfEmpty(Mono.error(ApiException.badRequest("An item must belong to an active group question")))
+                    .flatMap(parent -> questions.findAllChildren(parent.getId()).collectList()
+                        .flatMap(children -> createWithNumbering(statementId, data, parent, children)))))
+            .map(question -> toResponse(question, true));
+    }
+
+    private Mono<Question> createWithNumbering(Long statementId, QuestionRequest data, Question parent, List<Question> children) {
+        return Mono.zip(
+            Mono.defer(() -> questions.findNextQuestionNumber(statementId)),
+            Mono.defer(() -> questions.findNextOrderIndex(statementId))
+        ).flatMap(numbering -> {
+                int number = numbering.getT1();
+                String label = null;
+                if (parent != null) {
+                    int base = parent.getNumber() * 100;
+                    int next = children.stream().map(Question::getNumber)
+                        .filter(value -> value > base && value < base + 100)
+                        .mapToInt(value -> value - base).max().orElse(0) + 1;
+                    if (next > 99) {
+                        return Mono.error(ApiException.badRequest("A group cannot have more than 99 items"));
+                    }
+                    number = base + next;
+                    label = data.label() == null || data.label().isBlank()
+                        ? itemLabel(next)
+                        : data.label().trim().toLowerCase(java.util.Locale.ROOT);
+                }
                 Question question = new Question(
                     statementId,
-                    numbering.getT1(),
+                    number,
                     data.text().trim(),
                     blankToDefault(data.questionType(), DEFAULT_TYPE));
                 question.setMaxScore(data.maxScore());
@@ -135,9 +160,24 @@ public class QuestionService {
                 question.setPageIndex(data.pageIndex() == null ? 0 : data.pageIndex());
                 question.setModelAnswer(blankToNull(data.modelAnswer()));
                 question.setNeedsReview(false);
+                question.setParentId(parent == null ? null : parent.getId());
+                question.setLabel(label);
+                if (data.groupLayout() != null && question.isGroup()) {
+                    question.setGroupLayout(data.groupLayout());
+                }
                 return Mono.defer(() -> questions.save(question));
-            })
-            .map(question -> toResponse(question, true));
+            });
+    }
+
+    private static String itemLabel(int ordinal) {
+        StringBuilder label = new StringBuilder();
+        int value = ordinal;
+        while (value > 0) {
+            value--;
+            label.insert(0, (char) ('a' + value % 26));
+            value /= 26;
+        }
+        return label.toString();
     }
 
     public Mono<QuestionResponse> update(
@@ -164,6 +204,12 @@ public class QuestionService {
                     question.setNeedsReview(QuestionOcrEvidence.needsReview(
                         question.getOcrConfidence(), QuestionOcrEvidence.decode(question.getOcrFormulas()),
                         data.ocrReviewed()));
+                }
+                if (data.groupLayout() != null) {
+                    if (!question.isGroup()) {
+                        return Mono.error(ApiException.badRequest("Only a group question can define a layout"));
+                    }
+                    question.setGroupLayout(data.groupLayout());
                 }
                 return Mono.defer(() -> questions.save(question));
             })
