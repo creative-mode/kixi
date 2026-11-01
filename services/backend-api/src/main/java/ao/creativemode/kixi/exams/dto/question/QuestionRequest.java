@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.dto.question;
 
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Pattern;
@@ -19,9 +20,9 @@ import jakarta.validation.constraints.Pattern;
  * exam builder writes {@code open}. Only {@code multiple_choice} has a meaning
  * to the approval gate, which is why it is the one value that matters here.
  *
- * <p>{@code maxScore} may be null for a question that is intentionally not
- * scored yet. The approval gate reports that state; an edit must preserve it
- * instead of silently turning it into zero.
+ * <p>{@code maxScore} is required until the score and approval rule is settled.
+ * The approval gate skips null scores when summing active questions, so accepting
+ * one here could allow an unscored question to pass approval.
  *
  * <p>{@code questionType} and {@code pageIndex} are optional and, when absent,
  * are left as they are: neither takes part in the approval gate, so a partial
@@ -34,6 +35,7 @@ public record QuestionRequest(
     @Size(max = 50, message = "The question type must not exceed 50 characters")
     String questionType,
 
+    @NotNull(message = "The question score is required")
     @PositiveOrZero(message = "The score cannot be negative")
     @Digits(integer = 8, fraction = 2,
         message = "The score must be at most 99999999.99")

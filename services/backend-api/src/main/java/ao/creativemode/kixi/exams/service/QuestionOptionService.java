@@ -140,7 +140,10 @@ public class QuestionOptionService {
             return Mono.defer(() -> options.findCorrectOptionByQuestionId(option.getQuestionId()))
                 .filter(correct -> correct.getId().equals(option.getId()))
                 .flatMap(correct -> options.markAllAsIncorrect(option.getQuestionId())
-                    .then(Mono.defer(() -> options.findByIdAndDeletedAtIsNull(option.getId()))))
+                    .then(Mono.fromSupplier(() -> {
+                        option.setIsCorrect(false);
+                        return option;
+                    })))
                 .switchIfEmpty(Mono.just(option));
         }
         return markCorrectIfAsked(option, data);

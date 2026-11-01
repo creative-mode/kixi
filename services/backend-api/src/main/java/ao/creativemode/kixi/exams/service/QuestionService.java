@@ -142,9 +142,12 @@ public class QuestionService {
                     int next = children.stream().map(Question::getNumber)
                         .filter(value -> value > base && value < base + 100)
                         .mapToInt(value -> value - base).max().orElse(0) + 1;
+                    if (next > 99) {
+                        return Mono.error(ApiException.badRequest("A group cannot have more than 99 items"));
+                    }
                     number = base + next;
                     label = data.label() == null || data.label().isBlank()
-                        ? String.valueOf((char) ('a' + (next - 1) % 26))
+                        ? itemLabel(next)
                         : data.label().trim().toLowerCase(java.util.Locale.ROOT);
                 }
                 Question question = new Question(
@@ -164,6 +167,17 @@ public class QuestionService {
                 }
                 return Mono.defer(() -> questions.save(question));
             });
+    }
+
+    private static String itemLabel(int ordinal) {
+        StringBuilder label = new StringBuilder();
+        int value = ordinal;
+        while (value > 0) {
+            value--;
+            label.insert(0, (char) ('a' + value % 26));
+            value /= 26;
+        }
+        return label.toString();
     }
 
     public Mono<QuestionResponse> update(
