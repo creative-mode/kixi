@@ -164,6 +164,15 @@ class ArchitectureTest {
     }
 
     @Test
+    void nothingDependsOnTheDashboardCounts() {
+        // The counts of the manager's dashboard (#416) read the lists of several modules: it is the leaf that
+        // composes them, and nothing may lean on it.
+        noClasses().that().resideOutsideOfPackage("..dashboard..")
+                .should().dependOnClassesThat().resideInAPackage("..dashboard..")
+                .check(classes);
+    }
+
+    @Test
     void domainModulesAreFreeOfCycles() {
         SlicesRuleDefinition.slices()
                 .matching("ao.creativemode.kixi.(*)..")
