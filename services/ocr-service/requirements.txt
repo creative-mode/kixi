@@ -22,7 +22,7 @@ pdf2image==1.17.0
 PyMuPDF==2.0
 
 # Configuration and validation
-pydantic==2.14.1
+pydantic==2.14.2
 pydantic-settings==2.16.1
 python-dotenv==1.2.4
 
