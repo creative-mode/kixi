@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import ao.creativemode.kixi.identity.service.JwtService;
+import ao.creativemode.kixi.shared.service.SimulationCardUpdater;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -51,6 +52,8 @@ class FeedPostgresIntegrationTest {
     private DatabaseClient database;
     @Autowired
     private JwtService jwtService;
+    @Autowired
+    private SimulationCardUpdater cardUpdater;
 
     private WebTestClient client;
     private String studentToken;
@@ -226,6 +229,43 @@ class FeedPostgresIntegrationTest {
         bearer(otherStudentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
                 .exchange().expectStatus().isNotFound();
     }
+
+    /**
+     * kixi#464: the card is a snapshot, but the score is not frozen. Correcting an
+     * open answer rewrites the live card and leaves a deleted one alone, which is
+     * what {@code deleted_at IS NULL} is there for.
+     */
+    @Test
+    void aCorrectedScoreIsWrittenBackToThePublishedCard() {
+        insertSimulationCard(464001L, null);
+        insertSimulationCard(464002L, "now()");
+
+        cardUpdater.refresh(464001L, 13.0, 0).block(Duration.ofSeconds(10));
+        cardUpdater.refresh(464002L, 13.0, 0).block(Duration.ofSeconds(10));
+
+        assertThat(cardOf(464001L)).isEqualTo(new Card(13.0, 0, false));
+        assertThat(cardOf(464002L)).isEqualTo(new Card(4.0, 2, true));
+    }
+
+    private void insertSimulationCard(long simulationId, String deletedAt) {
+        sql("INSERT INTO posts (author_account_id, institution_id, school_year_id, course_id, class_id, type,"
+                + " content, simulation_id, final_score, pending_review_count, is_auto_generated, is_hidden,"
+                + " created_at, updated_at, deleted_at) VALUES (" + STUDENT + ", " + INSTITUTION + ", " + YEAR
+                + ", " + COURSE + ", " + CLASS + ", 'SIMULATION', 'Resultado', " + simulationId
+                + ", 4.0, 2, false, false, now(), now(), " + (deletedAt == null ? "NULL" : deletedAt) + ")");
+    }
+
+    private Card cardOf(long simulationId) {
+        return database.sql("SELECT final_score, pending_review_count, deleted_at IS NOT NULL AS deleted"
+                        + " FROM posts WHERE simulation_id = " + simulationId)
+                .map((row, meta) -> new Card(
+                        row.get("final_score", Double.class),
+                        row.get("pending_review_count", Integer.class),
+                        row.get("deleted", Boolean.class)))
+                .one().block(Duration.ofSeconds(10));
+    }
+
+    private record Card(Double finalScore, Integer pendingReviewCount, Boolean deleted) { }
 
     private long createPost(String token, String content) {
         AtomicLong postId = new AtomicLong();

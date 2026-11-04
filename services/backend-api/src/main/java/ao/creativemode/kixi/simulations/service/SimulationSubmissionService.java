@@ -17,6 +17,7 @@ import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository;
 import ao.creativemode.kixi.simulations.repository.SimulationRepository;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
+import ao.creativemode.kixi.shared.service.SimulationCardUpdater;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.Clock;
@@ -40,13 +41,22 @@ public class SimulationSubmissionService {
     private final Clock clock;
     private final ExamRoomAccess examRooms;
     private final GamificationService gamification;
+    private final SimulationCardUpdater cardUpdater;
 
     public SimulationSubmissionService(SimulationRepository simulations,
             SimulationAnswerRepository answers, QuestionRepository questions,
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, null,
-                Clock.systemDefaultZone(), null, null);
+                Clock.systemDefaultZone(), null, null, null);
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer, SimulationCardUpdater cardUpdater) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, null,
+                Clock.systemDefaultZone(), null, null, cardUpdater);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -55,7 +65,7 @@ public class SimulationSubmissionService {
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService,
-                Clock.systemDefaultZone(), null, null);
+                Clock.systemDefaultZone(), null, null, null);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -63,7 +73,8 @@ public class SimulationSubmissionService {
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService, Clock clock) {
-        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock, null, null);
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock,
+                null, null, null);
     }
 
     public SimulationSubmissionService(SimulationRepository simulations,
@@ -73,7 +84,17 @@ public class SimulationSubmissionService {
             SimulationDeadlineService deadlineService, Clock clock,
             ExamRoomAccess examRooms) {
         this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock,
-                examRooms, null);
+                examRooms, null, null);
+    }
+
+    public SimulationSubmissionService(SimulationRepository simulations,
+            SimulationAnswerRepository answers, QuestionRepository questions,
+            QuestionOptionRepository options, StatementRepository statements,
+            TeachingAssignmentAuthorizer teachingAuthorizer,
+            SimulationDeadlineService deadlineService, Clock clock,
+            ExamRoomAccess examRooms, GamificationService gamification) {
+        this(simulations, answers, questions, options, statements, teachingAuthorizer, deadlineService, clock,
+                examRooms, gamification, null);
     }
 
     @Autowired
@@ -82,7 +103,8 @@ public class SimulationSubmissionService {
             QuestionOptionRepository options, StatementRepository statements,
             TeachingAssignmentAuthorizer teachingAuthorizer,
             SimulationDeadlineService deadlineService, Clock clock,
-            ExamRoomAccess examRooms, GamificationService gamification) {
+            ExamRoomAccess examRooms, GamificationService gamification,
+            SimulationCardUpdater cardUpdater) {
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
@@ -93,6 +115,7 @@ public class SimulationSubmissionService {
         this.clock = clock;
         this.examRooms = examRooms;
         this.gamification = gamification;
+        this.cardUpdater = cardUpdater;
     }
 
     @Transactional
@@ -345,10 +368,17 @@ public class SimulationSubmissionService {
                 if (simulation.getStatus() != SimulationStatus.FINISHED) {
                     return Mono.empty();
                 }
-                double score = tuple.getT2().stream().filter(answer -> answer.getScoreObtained() != null)
+                List<SimulationAnswer> answers = tuple.getT2();
+                double score = answers.stream().filter(answer -> answer.getScoreObtained() != null)
                         .mapToDouble(SimulationAnswer::getScoreObtained).sum();
+                int pendingReviewCount = (int) answers.stream()
+                        .filter(answer -> answer.getReviewStatus() == SimulationAnswerStatus.PENDING_REVIEW)
+                        .count();
                 simulation.setFinalScore(score);
-                if (gamification == null) return simulations.save(simulation).then();
+                if (gamification == null) {
+                    return simulations.save(simulation)
+                            .then(refreshPublishedCard(simulationId, score, pendingReviewCount));
+                }
                 return Mono.zip(
                         questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList(),
                         statementOrDefault(simulation.getStatementId()))
@@ -357,9 +387,23 @@ public class SimulationSubmissionService {
                                 .mapToDouble(Question::getMaxScore).sum();
                         return gamification.simulationFinished(saved.getId(), saved.getAccountId(),
                                 context.getT2().getSubjectId(), score, maximumScore, saved.getTimeSpentSeconds(),
-                                saved.getFinishedAt(), false);
+                                saved.getFinishedAt(), false)
+                                .then(refreshPublishedCard(simulationId, score, pendingReviewCount));
                     }));
             });
+    }
+
+    /**
+     * A published card froze its score when the student posted it (kixi#464).
+     * Correcting an open answer moves the attempt's score and the number of
+     * answers still pending, so both are written back to the card here. There
+     * may be no card at all - the attempt may never have been published - and
+     * that is not an error.
+     */
+    private Mono<Void> refreshPublishedCard(Long simulationId, double finalScore, int pendingReviewCount) {
+        return cardUpdater == null
+                ? Mono.empty()
+                : cardUpdater.refresh(simulationId, finalScore, pendingReviewCount);
     }
 
     private Mono<SimulationAnswerResponse> toResponse(SimulationAnswer answer) {

@@ -27,5 +27,21 @@ public interface SimulationShowcaseReader {
             Double maxScore,
             Integer correctAnswers,
             Integer totalQuestions,
-            Integer timeSpentSeconds) { }
+            Integer timeSpentSeconds,
+            /** Open answers still awaiting correction when the card is published (kixi#464). */
+            Integer pendingReviewCount) {
+
+        /** The showcase as it was before the pending count existed. */
+        public Showcase(
+                Long simulationId,
+                String statementTitle,
+                Double finalScore,
+                Double maxScore,
+                Integer correctAnswers,
+                Integer totalQuestions,
+                Integer timeSpentSeconds) {
+            this(simulationId, statementTitle, finalScore, maxScore, correctAnswers,
+                    totalQuestions, timeSpentSeconds, null);
+        }
+    }
 }

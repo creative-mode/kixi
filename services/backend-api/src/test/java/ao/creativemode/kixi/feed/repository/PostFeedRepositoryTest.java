@@ -97,4 +97,29 @@ class PostFeedRepositoryTest {
 
         assertThat(PostFeedRepository.rowToPost(row).getBlocks()).contains("\"type\":\"text\"");
     }
+
+    @Test
+    void theFeedRowKeepsThePendingReviewCountOfASimulationCard() {
+        io.r2dbc.spi.Row row = org.mockito.Mockito.mock(io.r2dbc.spi.Row.class);
+        org.mockito.Mockito.when(row.get(org.mockito.ArgumentMatchers.eq("pending_review_count"),
+                        org.mockito.ArgumentMatchers.eq(Integer.class)))
+                .thenReturn(2);
+
+        assertThat(PostFeedRepository.rowToPost(row).getPendingReviewCount()).isEqualTo(2);
+    }
+
+    @Test
+    void refreshingAPublishedCardTouchesOnlyItsLiveRowAndOnlyTheMutableFigures() {
+        Sql sql = PostFeedRepository.updateShowcaseSql(77L, 13.0, 1);
+
+        assertThat(sql.statement())
+                .contains("SET final_score = :finalScore")
+                .contains("pending_review_count = :pendingReviewCount")
+                .contains("WHERE simulation_id = :simulationId")
+                .contains("deleted_at IS NULL");
+        assertThat(sql.binds())
+                .containsEntry("simulationId", 77L)
+                .containsEntry("finalScore", 13.0)
+                .containsEntry("pendingReviewCount", 1);
+    }
 }
