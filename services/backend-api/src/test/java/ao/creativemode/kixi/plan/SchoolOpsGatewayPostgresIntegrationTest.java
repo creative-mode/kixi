@@ -116,7 +116,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
                 + "FROM generate_series(525001, 525003) i");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT 525001, id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (525001, 'IT525', 'Escola 525', now(), now())");
-        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (525001, 2193, 2194, now(), now())");
+        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (525001, 2197, 2198, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (525001, 'C525', 'Informática', 525001, now(), now())");
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES (525001, 'A1', 12, 525001, 525001, 525001, now(), now())");
         sql("INSERT INTO subjects (id, code, name, created_at, updated_at) VALUES (525001, 'M525', 'Matemática', now(), now())");
@@ -177,7 +177,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         assertThat(CALLS).as("abrir a pauta não encerra provas").hasSize(1);
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas auth=Bearer token-de-teste")
                 .contains("\"pautaRef\":\"kixi-plano-525001\"")
-                .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2193/2194\"")
+                .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2197/2198\"")
                 .contains("\"sourcedId\":\"525001-525001-525001\"")
                 .contains("\"componente\":\"P1\"").contains("\"componente\":\"P2\"").contains("\"modalidade\":\"DIGITAL\"")
                 .contains("\"nome\":\"Abner Lourenço\"")
