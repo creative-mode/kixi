@@ -185,19 +185,30 @@ public class SchoolOpsPautaOpener {
     }
 
     private Mono<List<Map<String, Object>>> students(Map<String, Object> h) {
+        // O número de processo é do aluno NA ESCOLA da turma (kixi#512): LEFT JOIN, quem não tem segue sem ele.
         return db.sql("""
-                SELECT a.id, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name, a.username
+                SELECT a.id, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name, a.username, ist.process_number
                 FROM enrollments e JOIN accounts a ON a.id = e.account_id LEFT JOIN users u ON u.account_id = a.id AND u.deleted_at IS NULL
+                  LEFT JOIN institution_students ist ON ist.user_id = u.id AND ist.institution_id = :i AND ist.deleted_at IS NULL
                 WHERE e.class_id = :c AND e.status = 'ACTIVE' AND e.deleted_at IS NULL AND a.deleted_at IS NULL
                 ORDER BY LOWER(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, ''))), a.id
-                """).bind("c", h.get("class_id")).fetch().all().collectList().map(rows -> {
-            List<Map<String, Object>> out = new ArrayList<>();
-            int n = 1;
-            for (Map<String, Object> r : rows) {
-                String name = String.valueOf(r.get("name")).isBlank() ? String.valueOf(r.get("username")) : String.valueOf(r.get("name"));
-                out.add(Map.of("sourcedId", String.valueOf(r.get("id")), "numero", n++, "nome", name));
-            }
-            return out;
-        });
+                """).bind("c", h.get("class_id")).bind("i", h.get("inst_id")).fetch().all().collectList().map(SchoolOpsPautaOpener::studentsOf);
+    }
+
+    /** As linhas do pedido ao motor: {@code processo} só vai quando existe (opcional, até 30 caracteres no contrato v1). */
+    static List<Map<String, Object>> studentsOf(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        int n = 1;
+        for (Map<String, Object> r : rows) {
+            String name = String.valueOf(r.get("name")).isBlank() ? String.valueOf(r.get("username")) : String.valueOf(r.get("name"));
+            Map<String, Object> student = new LinkedHashMap<>();
+            student.put("sourcedId", String.valueOf(r.get("id")));
+            student.put("numero", n++);
+            student.put("nome", name);
+            Object process = r.get("process_number");
+            if (process != null && !String.valueOf(process).isBlank()) student.put("processo", String.valueOf(process).strip());
+            out.add(student);
+        }
+        return out;
     }
 }
