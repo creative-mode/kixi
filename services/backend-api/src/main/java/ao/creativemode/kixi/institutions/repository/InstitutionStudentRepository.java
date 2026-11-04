@@ -16,6 +16,10 @@ public interface InstitutionStudentRepository extends ReactiveCrudRepository<Ins
 
     Mono<Boolean> existsByInstitutionIdAndUserIdAndDeletedAtIsNull(Long institutionId, Long userId);
 
+    /** O número de processo já está em uso por OUTRO aluno ativo desta escola (kixi#512). */
+    Mono<Boolean> existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(
+            Long institutionId, String processNumber, Long userId);
+
     /** Hard delete every link of an institution, active or trashed (needed before purging it). */
     Mono<Void> deleteAllByInstitutionId(Long institutionId);
 }

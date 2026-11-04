@@ -26,6 +26,10 @@ public class InstitutionStudent {
     @Column("user_id")
     private Long userId;
 
+    /** Número de processo do aluno nesta escola (kixi#512): opcional, até 30 caracteres, único por escola. */
+    @Column("process_number")
+    private String processNumber;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;

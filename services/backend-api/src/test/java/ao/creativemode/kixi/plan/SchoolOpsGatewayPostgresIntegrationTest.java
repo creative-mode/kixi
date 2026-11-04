@@ -116,13 +116,19 @@ class SchoolOpsGatewayPostgresIntegrationTest {
                 + "FROM generate_series(525001, 525003) i");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT 525001, id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (525001, 'IT525', 'Escola 525', now(), now())");
-        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (525001, 2193, 2194, now(), now())");
+        sql("INSERT INTO school_years (id, start_year, end_year, created_at, updated_at) VALUES (525001, 2197, 2198, now(), now())");
         sql("INSERT INTO courses (id, code, name, institution_id, created_at, updated_at) VALUES (525001, 'C525', 'Informática', 525001, now(), now())");
         sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id, created_at, updated_at) VALUES (525001, 'A1', 12, 525001, 525001, 525001, now(), now())");
         sql("INSERT INTO subjects (id, code, name, created_at, updated_at) VALUES (525001, 'M525', 'Matemática', now(), now())");
         sql("INSERT INTO teachers (id, account_id, first_name, last_name, created_at, updated_at) VALUES (525001, 525001, 'Abner', 'Lourenço', now(), now())");
         sql("INSERT INTO teaching_assignments (teacher_id, class_id, subject_id, school_year_id, created_at) VALUES (525001, 525001, 525001, 525001, now())");
         sql("INSERT INTO users (account_id, first_name, last_name) VALUES (525002, 'Bruno', 'Neto'), (525003, 'Ana', 'Domingos')");
+        // kixi#512: a Ana tem número de processo na escola da turma, e outro, diferente, noutra escola (que não pode vazar);
+        // o Bruno não tem número e segue sem a chave `processo`.
+        sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (525002, 'IT525B', 'Outra escola 525', now(), now())");
+        sql("INSERT INTO institution_students (institution_id, user_id, process_number) "
+                + "SELECT 525001, id, 'P-2026/0042' FROM users WHERE account_id = 525003 "
+                + "UNION ALL SELECT 525002, id, 'OUTRA-ESCOLA-999' FROM users WHERE account_id = 525003");
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id, status, created_at, updated_at) VALUES "
                 + "(525002, 525001, 525001, 'ACTIVE', now(), now()), (525003, 525001, 525001, 'ACTIVE', now(), now())");
         for (int i = 1; i <= 2; i++) {
@@ -144,6 +150,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         sql("DELETE FROM exam_rooms WHERE id IN (525001, 525002)");
         sql("DELETE FROM statements WHERE id IN (525001, 525002)");
         sql("DELETE FROM enrollments WHERE class_id = 525001");
+        sql("DELETE FROM institution_students WHERE institution_id IN (525001, 525002)");
         sql("DELETE FROM users WHERE account_id IN (525002, 525003)");
         sql("DELETE FROM teaching_assignments WHERE teacher_id = 525001");
         sql("DELETE FROM teachers WHERE id = 525001");
@@ -151,7 +158,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         sql("DELETE FROM courses WHERE id = 525001");
         sql("DELETE FROM subjects WHERE id = 525001");
         sql("DELETE FROM school_years WHERE id = 525001");
-        sql("DELETE FROM institutions WHERE id = 525001");
+        sql("DELETE FROM institutions WHERE id IN (525001, 525002)");
         sql("DELETE FROM account_roles WHERE account_id IN (525001, 525002, 525003)");
         sql("DELETE FROM accounts WHERE id IN (525001, 525002, 525003)");
     }
@@ -170,7 +177,7 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         assertThat(CALLS).as("abrir a pauta não encerra provas").hasSize(1);
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas auth=Bearer token-de-teste")
                 .contains("\"pautaRef\":\"kixi-plano-525001\"")
-                .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2193/2194\"")
+                .contains("\"trimestre\":1").contains("\"anoLectivo\":\"2197/2198\"")
                 .contains("\"sourcedId\":\"525001-525001-525001\"")
                 .contains("\"componente\":\"P1\"").contains("\"componente\":\"P2\"").contains("\"modalidade\":\"DIGITAL\"")
                 .contains("\"nome\":\"Abner Lourenço\"")
@@ -178,6 +185,9 @@ class SchoolOpsGatewayPostgresIntegrationTest {
                 .contains("https://kixi.example/api/v1/integrations/schoolops/events");
         // os alunos vão por ordem alfabética, com número de ordem
         assertThat(CALLS.get(0).indexOf("Ana Domingos")).isLessThan(CALLS.get(0).indexOf("Bruno Neto"));
+        // kixi#512: `processo` vai para a aluna que o tem na escola da turma, só para ela, e o de outra escola não vaza
+        assertThat(CALLS.get(0)).contains("\"processo\":\"P-2026/0042\"").doesNotContain("OUTRA-ESCOLA-999");
+        assertThat(CALLS.get(0).split("\"processo\"", -1).length - 1).as("o Bruno segue sem a chave").isEqualTo(1);
         assertThat(database.sql("SELECT pauta_ref FROM term_plans WHERE id = 525001").map((r, m) -> r.get(0, String.class)).one().block(Duration.ofSeconds(10)))
                 .isEqualTo("PT-TESTE");
 
