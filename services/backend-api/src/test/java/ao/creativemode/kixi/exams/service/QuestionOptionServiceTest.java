@@ -299,6 +299,9 @@ class QuestionOptionServiceTest {
                     assertThat(response.optionText()).isEqualTo("outro");
                 })
                 .verifyComplete();
+
+        verify(options, never()).setCorrectOption(anyLong(), anyLong());
+        verify(options, never()).markAllAsIncorrect(anyLong());
     }
 
     @Test
@@ -318,6 +321,44 @@ class QuestionOptionServiceTest {
                 .verifyComplete();
 
         verify(options).setCorrectOption(QUESTION_ID, OPTION_ID);
+    }
+
+    @Test
+    void updateCanClearTheCurrentAnswerKey() {
+        givenTheStatementIsWritable();
+        QuestionOption existing = activeOption(OPTION_ID, "A");
+        existing.setIsCorrect(true);
+        when(options.findByIdAndDeletedAtIsNull(OPTION_ID)).thenReturn(Mono.just(existing));
+        when(options.save(existing)).thenReturn(Mono.just(existing));
+        when(options.findCorrectOptionByQuestionId(QUESTION_ID)).thenReturn(Mono.just(existing));
+        when(options.markAllAsIncorrect(QUESTION_ID)).thenReturn(Mono.just(2));
+
+        StepVerifier.create(service.update(
+                        STATEMENT_ID, QUESTION_ID, OPTION_ID, request("A", "texto", false), ACCOUNT_ID, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        verify(options).markAllAsIncorrect(QUESTION_ID);
+    }
+
+    @Test
+    void clearingAnOptionThatIsNotTheAnswerLeavesTheKeyAlone() {
+        givenTheStatementIsWritable();
+        QuestionOption existing = activeOption(OPTION_ID, "A");
+        QuestionOption other = activeOption(99L, "B");
+        other.markAsCorrect();
+        when(options.findByIdAndDeletedAtIsNull(OPTION_ID)).thenReturn(Mono.just(existing));
+        when(options.save(existing)).thenReturn(Mono.just(existing));
+        when(options.findCorrectOptionByQuestionId(QUESTION_ID)).thenReturn(Mono.just(other));
+
+        StepVerifier.create(service.update(
+                        STATEMENT_ID, QUESTION_ID, OPTION_ID, request("A", "texto", false), ACCOUNT_ID, false))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        // Clearing B by editing A would silently punish the teacher who only
+        // meant to say that A is still wrong.
+        verify(options, never()).markAllAsIncorrect(anyLong());
     }
 
     // ── Reordering ──────────────────────────────────────────────────────────

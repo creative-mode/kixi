@@ -28,6 +28,9 @@ import reactor.core.publisher.Mono;
 public class QuestionService {
 
     private static final String DEFAULT_TYPE = "open";
+    private static final java.util.Set<String> GROUP_LAYOUTS = java.util.Set.of("brace", "lettered");
+    /** At most 99 items per group, like the manual creation path: numbers are parent*100 + k. */
+    private static final int MAX_ITEM_OFFSET = 99;
 
     private final QuestionRepository questions;
     private final QuestionOptionRepository options;
@@ -113,6 +116,14 @@ public class QuestionService {
 
     // ── Writes ──────────────────────────────────────────────────────────────
 
+    /**
+     * Adds a top-level question, or an alínea of an existing group.
+     *
+     * <p>Transactional because creating an alínea writes more than once: the
+     * display positions make room, then the item is saved. A failure between
+     * the two would otherwise leave a gap in the paper order.
+     */
+    @Transactional
     public Mono<QuestionResponse> create(
         Long statementId,
         QuestionRequest data,
@@ -120,10 +131,18 @@ public class QuestionService {
         boolean admin
     ) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
-            .then(Mono.zip(
+            .then(Mono.defer(() -> data.parentId() == null
+                ? createTopLevel(statementId, data)
+                : createItem(statementId, data)));
+    }
+
+    private Mono<QuestionResponse> createTopLevel(Long statementId, QuestionRequest data) {
+        if (data.label() != null) {
+            return Mono.error(ApiException.badRequest("Only an item of a group has a label"));
+        }
+        return Mono.zip(
                 Mono.defer(() -> questions.findNextQuestionNumber(statementId)),
-                Mono.defer(() -> questions.findNextOrderIndex(statementId))
-            ))
+                Mono.defer(() -> questions.findNextOrderIndex(statementId)))
             .flatMap(numbering -> {
                 Question question = new Question(
                     statementId,
@@ -135,9 +154,117 @@ public class QuestionService {
                 question.setPageIndex(data.pageIndex() == null ? 0 : data.pageIndex());
                 question.setModelAnswer(blankToNull(data.modelAnswer()));
                 question.setNeedsReview(false);
+                return withGroupLayout(question, data.groupLayout());
+            })
+            .flatMap(question -> Mono.defer(() -> questions.save(question)))
+            .map(question -> toResponse(question, true));
+    }
+
+    /**
+     * An alínea of an existing, active group: numbered {@code parent * 100 + k}
+     * and labelled a, b, c... like the manual creation path, inserted right
+     * after the group's last item so the paper order stays group, items, next
+     * question.
+     *
+     * <p>The number is taken from every row in the group's block, deleted ones
+     * included: a removed item keeps its number for good, so counting only the
+     * active rows would hand out one that is already taken.
+     */
+    private Mono<QuestionResponse> createItem(Long statementId, QuestionRequest data) {
+        String type = normalized(data.questionType());
+        if (type == null) {
+            type = DEFAULT_TYPE;
+        }
+        if (Question.GROUP.equals(type)) {
+            return Mono.error(ApiException.badRequest("An item cannot be a group"));
+        }
+        if (data.label() != null && data.label().isBlank()) {
+            return Mono.error(ApiException.badRequest("The item label must not be blank"));
+        }
+        if (data.groupLayout() != null) {
+            return Mono.error(ApiException.badRequest("Only a group question has a layout"));
+        }
+        final String itemType = type;
+        final String wantedLabel = data.label() == null ? null : data.label().trim().toLowerCase(java.util.Locale.ROOT);
+        if (wantedLabel != null && wantedLabel.length() > 10) {
+            return Mono.error(ApiException.badRequest("The item label must not exceed 10 characters"));
+        }
+        return Mono.defer(() -> findActiveQuestion(statementId, data.parentId()))
+            .filter(Question::isGroup)
+            .switchIfEmpty(Mono.error(ApiException.badRequest(
+                "An item must belong to an active group question: " + data.parentId())))
+            .flatMap(parent -> Mono.defer(() -> questions.findActiveChildren(parent.getId()).collectList())
+                .map(children -> new GroupSlot(parent, children)))
+            .flatMap(slot -> {
+                String label = wantedLabel;
+                if (label == null) {
+                    java.util.Set<String> taken = new java.util.HashSet<>();
+                    for (Question child : slot.children()) {
+                        if (child.getLabel() != null) {
+                            taken.add(child.getLabel().trim().toLowerCase(java.util.Locale.ROOT));
+                        }
+                    }
+                    int k = 1;
+                    do {
+                        label = itemLabel(k++);
+                    } while (taken.contains(label));
+                } else {
+                    final String given = label;
+                    boolean clash = slot.children().stream()
+                        .filter(child -> child.getLabel() != null)
+                        .anyMatch(child -> given.equals(
+                            child.getLabel().trim().toLowerCase(java.util.Locale.ROOT)));
+                    if (clash) {
+                        return Mono.<PlacedItem>error(ApiException.badRequest(
+                            "This group already has an item labelled '" + given + "'"));
+                    }
+                }
+                final String itemLabel = label;
+                int base = slot.group().getNumber() * 100;
+                return Mono.defer(() -> questions.maxNumberInItemRange(statementId, base, base + 100))
+                    .flatMap(max -> {
+                        int number = max + 1;
+                        if (number > base + MAX_ITEM_OFFSET) {
+                            return Mono.<PlacedItem>error(ApiException.badRequest("This group is already full"));
+                        }
+                        int lastOrder = slot.group().getOrderIndex() == null ? 0 : slot.group().getOrderIndex();
+                        for (Question child : slot.children()) {
+                            if (child.getOrderIndex() != null && child.getOrderIndex() > lastOrder) {
+                                lastOrder = child.getOrderIndex();
+                            }
+                        }
+                        final int after = lastOrder;
+                        return Mono.defer(() -> questions.shiftOrderIndexesAfter(statementId, after))
+                            // Zero rows moved is the normal case for the last item
+                            // on the paper; the count must not decide whether the
+                            // item is saved.
+                            .defaultIfEmpty(0)
+                            .map(shifted -> new PlacedItem(number, itemLabel, after + 1));
+                    });
+            })
+            .flatMap(placed -> {
+                Question question = new Question(statementId, placed.number(), data.text().trim(), itemType);
+                question.setMaxScore(data.maxScore());
+                question.setOrderIndex(placed.orderIndex());
+                question.setPageIndex(data.pageIndex() == null ? 0 : data.pageIndex());
+                question.setModelAnswer(blankToNull(data.modelAnswer()));
+                question.setNeedsReview(false);
+                question.setParentId(data.parentId());
+                question.setLabel(placed.label());
                 return Mono.defer(() -> questions.save(question));
             })
             .map(question -> toResponse(question, true));
+    }
+
+    private static String itemLabel(int ordinal) {
+        StringBuilder label = new StringBuilder();
+        int value = ordinal;
+        while (value > 0) {
+            value--;
+            label.insert(0, (char) ('a' + value % 26));
+            value /= 26;
+        }
+        return label.toString();
     }
 
     public Mono<QuestionResponse> update(
@@ -148,7 +275,10 @@ public class QuestionService {
         boolean admin
     ) {
         return writeAccess.requireCanWrite(statementId, accountId, admin)
-            .then(Mono.defer(() -> findActiveQuestion(statementId, questionId)))
+            .then(Mono.defer(() -> data.parentId() == null
+                ? findActiveQuestion(statementId, questionId)
+                : Mono.<Question>error(ApiException.badRequest(
+                    "A question's group is set on creation and cannot be moved"))))
             .flatMap(question -> {
                 question.setText(data.text().trim());
                 if (data.questionType() != null && !data.questionType().isBlank()) {
@@ -165,8 +295,9 @@ public class QuestionService {
                         question.getOcrConfidence(), QuestionOcrEvidence.decode(question.getOcrFormulas()),
                         data.ocrReviewed()));
                 }
-                return Mono.defer(() -> questions.save(question));
+                return withGroupLayout(question, data.groupLayout());
             })
+            .flatMap(question -> Mono.defer(() -> questions.save(question)))
             .map(question -> toResponse(question, true));
     }
 
@@ -306,6 +437,37 @@ public class QuestionService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static String normalized(String value) {
+        return value == null || value.isBlank() ? null : value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** The group and its active items, needed together to place a new alínea. */
+    private record GroupSlot(Question group, List<Question> children) { }
+
+    /** A numbered, labelled alínea and where it goes in the paper order. */
+    private record PlacedItem(int number, String label, int orderIndex) { }
+
+    /**
+     * Applies a group layout, or leaves the stored one alone when none was
+     * sent. Only a group has one: anything else is rejected rather than
+     * silently dropped.
+     */
+    private Mono<Question> withGroupLayout(Question question, String raw) {
+        if (raw == null) {
+            return Mono.just(question);
+        }
+        String value = normalized(raw);
+        if (value == null || !GROUP_LAYOUTS.contains(value)) {
+            return Mono.error(ApiException.badRequest(
+                "Unknown group layout '" + raw + "': use one of brace, lettered"));
+        }
+        if (!question.isGroup()) {
+            return Mono.error(ApiException.badRequest("Only a group question has a layout"));
+        }
+        question.setGroupLayout(value);
+        return Mono.just(question);
     }
 
     /**
