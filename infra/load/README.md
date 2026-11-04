@@ -53,3 +53,50 @@ Sem instalar o k6: usa-se a imagem oficial `grafana/k6`.
 - **Gerador e API na mesma máquina** competem pela CPU: para medir a capacidade
   real, correr o k6 noutra máquina que não a do backend.
 - **OCR fica de fora** deste cenário: ver `RELATORIO.md`.
+
+## Medir a entrada: primeiro byte e login (#566)
+
+O k6 acima mede carga. Para a pergunta «porque é que a entrada é lenta em produção?» há uma ferramenta mais pequena,
+`medir-entrada.mjs`, sem dependências (Node 18+), que mede **de fora** e **em separado**:
+
+```bash
+# o primeiro byte das páginas de entrada, decomposto em ligação TCP, handshake TLS e espera do servidor
+node infra/load/medir-entrada.mjs --pages https://kixi.creativemode.ao --samples 20
+
+# o POST /auth/login, certo e errado, com uma turma a entrar (contas diferentes, o mesmo endereço)
+node infra/load/medir-entrada.mjs --api http://localhost:8080 \
+  --login-user-prefix perf- --login-user-count 60 --login-pass '…' --samples 160 --concurrency 8 --wrong-pass
+```
+
+- **Só com contas de teste.** Cada tentativa de login conta para o limite da conta e do endereço (10 por minuto e 60 por
+  minuto): numa conta real isso pode bloqueá-la. Em local, sobe os limites com
+  `APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` e `APP_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS_PER_ADDRESS`.
+- **Como ler a decomposição.** Se a variação está na *ligação TCP* ou no *handshake TLS*, é a rede (perda de pacotes: um SYN
+  que se repete demora ~1 s, 3 s…). Se está na *espera do servidor*, é o servidor. Mede de mais do que uma origem: uma só
+  não distingue o caminho do servidor.
+- **No servidor.** Quando um login passa de 750 ms numa fase, o backend regista
+  `Slow login phase: phase=bcrypt durationMs=…` (inclui a espera por uma thread livre, que é o que uma turma a entrar
+  em conjunto numa máquina pequena paga). Procura essa linha nos registos antes de mexer em mais nada.
+
+### O que se mediu (04/11/2026)
+
+**Produção, a partir de uma só máquina (indicativo):** a *espera do servidor* é estável (180 a 640 ms, mesmo nas páginas
+servidas da cache do Next); o que varia é a *ligação TCP* (0,2 a 2,5 s) e o *handshake TLS* (0,2 a 9,9 s), com `ping`
+a perder 60% dos pacotes. Os tempos de ligação perto de 1 s e 2,5 s são retransmissões de SYN. O «primeiro byte de 0,8 a
+4,9 s» da issue é, daqui, sobretudo rede, não aplicação.
+
+**Login, local (8 núcleos, Postgres na mesma máquina, 60 contas, um só endereço):**
+
+| | antes | depois |
+| --- | --- | --- |
+| idas à base de dados por login | 8 a 9 | 6 a 7 |
+| p75 com 8 em paralelo | 624 ms | 475 ms (−24%) |
+| p75 com 16 em paralelo | 903 ms | 648 ms (−28%) |
+| 1.º login após o arranque (mediana de 5, 5 s depois) | 2,5 s | 1,2 s |
+| bcrypt (custo 10), uma verificação | ≈ 83 ms de CPU | igual |
+
+O bcrypt (≈ 83 ms de CPU por login) domina, e não se baixa sem enfraquecer as palavras-passe. Numa máquina pequena
+e partilhada com o OCR, uma turma de 30 a entrar em conjunto soma 30 × 83 ms de CPU a dividir pelos núcleos disponíveis:
+é esse o limite, e só se mede em produção, no servidor, com a linha `Slow login phase` acima.
+Experimentado e **descartado**: o nível de log `DEBUG` da aplicação (que o `docker-compose.yml` define por omissão) não
+mexeu no login (39 linhas de log numa corrida de 120 pedidos).

@@ -58,8 +58,7 @@ class AuthServiceTest {
 
     @Test
     void loginRejectsUnknownUsernameOrEmail() {
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("ghost")).thenReturn(Mono.empty());
-        when(accountRepository.findByEmailAndDeletedAtIsNull("ghost")).thenReturn(Mono.empty());
+        when(accountRepository.findForLogin("ghost", "ghost")).thenReturn(Mono.empty());
 
         StepVerifier.create(service.login("ghost", "whatever"))
                 .expectErrorSatisfies(error -> {
@@ -74,8 +73,7 @@ class AuthServiceTest {
     void loginRejectsInactiveAccount() {
         Account inactive = account(1L, "admin", "hashed");
         inactive.setActive(false);
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin")).thenReturn(Mono.just(inactive));
-        stubUnusedEmailFallback("admin");
+        when(accountRepository.findForLogin("admin", "admin")).thenReturn(Mono.just(inactive));
 
         StepVerifier.create(service.login("admin", "whatever"))
                 .expectErrorSatisfies(error -> {
@@ -91,9 +89,8 @@ class AuthServiceTest {
     @Test
     void loginRejectsWrongPassword() {
         Account existing = account(1L, "admin", "hashed");
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin")).thenReturn(Mono.just(existing));
+        when(accountRepository.findForLogin("admin", "admin")).thenReturn(Mono.just(existing));
         when(passwordEncoder.matches("wrong", "hashed")).thenReturn(false);
-        stubUnusedEmailFallback("admin");
 
         StepVerifier.create(service.login("admin", "wrong"))
                 .expectErrorSatisfies(error -> {
@@ -107,13 +104,10 @@ class AuthServiceTest {
     @Test
     void loginReturnsTokenAndRolesOnSuccess() {
         Account existing = account(1L, "admin", "hashed");
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin")).thenReturn(Mono.just(existing));
+        when(accountRepository.findForLogin("admin", "admin")).thenReturn(Mono.just(existing));
         when(passwordEncoder.matches("correct", "hashed")).thenReturn(true);
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L))
-                .thenReturn(Flux.just(new AccountRole(1L, 2L)));
-        when(roleRepository.findById(2L)).thenReturn(Mono.just(role(2L, "ADMIN")));
-        stubUnusedEmailFallback("admin");
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.just("ADMIN"));
 
         StepVerifier.create(service.login("admin", "correct"))
                 .assertNext(response -> {
@@ -129,7 +123,7 @@ class AuthServiceTest {
     @Test
     void loginChecksThePasswordOffTheThreadThatDeliveredTheAccount() {
         Account existing = account(1L, "admin", "hashed");
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin")).thenReturn(Mono.just(existing));
+        when(accountRepository.findForLogin("admin", "admin")).thenReturn(Mono.just(existing));
         java.util.concurrent.atomic.AtomicReference<String> bcryptThread =
                 new java.util.concurrent.atomic.AtomicReference<>();
         when(passwordEncoder.matches("correct", "hashed")).thenAnswer(invocation -> {
@@ -137,10 +131,7 @@ class AuthServiceTest {
             return true;
         });
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L))
-                .thenReturn(Flux.just(new AccountRole(1L, 2L)));
-        when(roleRepository.findById(2L)).thenReturn(Mono.just(role(2L, "ADMIN")));
-        stubUnusedEmailFallback("admin");
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.just("ADMIN"));
 
         StepVerifier.create(service.login("admin", "correct")).expectNextCount(1).verifyComplete();
 
@@ -177,29 +168,29 @@ class AuthServiceTest {
     }
 
     @Test
-    void loginFallsBackToEmailLookupWhenUsernameNotFound() {
+    void loginFindsTheAccountByEmailInASingleLookup() {
         Account existing = account(1L, "admin", "hashed");
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("admin@kixi.ao")).thenReturn(Mono.empty());
-        when(accountRepository.findByEmailAndDeletedAtIsNull("admin@kixi.ao")).thenReturn(Mono.just(existing));
+        when(accountRepository.findForLogin("admin@kixi.ao", "admin@kixi.ao")).thenReturn(Mono.just(existing));
         when(passwordEncoder.matches("correct", "hashed")).thenReturn(true);
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.login("admin@kixi.ao", "correct"))
                 .assertNext(response -> assertThat(response.roles()).isEmpty())
                 .verifyComplete();
+
+        // kixi#566: a student who logs in with their e-mail no longer pays a username lookup first.
+        verify(accountRepository, never()).findByUsernameAndDeletedAtIsNull(any());
+        verify(accountRepository, never()).findByEmailAndDeletedAtIsNull(any());
     }
 
     @Test
     void loginNormalizesEmailBeforeLookup() {
         Account existing = account(1L, "student", "hashed");
-        when(accountRepository.findByUsernameAndDeletedAtIsNull("Student@Kixi.AO"))
-                .thenReturn(Mono.empty());
-        when(accountRepository.findByEmailAndDeletedAtIsNull("student@kixi.ao"))
-                .thenReturn(Mono.just(existing));
+        when(accountRepository.findForLogin("Student@Kixi.AO", "student@kixi.ao")).thenReturn(Mono.just(existing));
         when(passwordEncoder.matches("correct", "hashed")).thenReturn(true);
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.login("Student@Kixi.AO", "correct"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
@@ -217,7 +208,7 @@ class AuthServiceTest {
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.findByEmailAndDeletedAtIsNull("existing@kixi.ao")).thenReturn(Mono.just(existing));
         when(accountRepository.save(existing)).thenReturn(Mono.just(existing));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
@@ -286,7 +277,7 @@ class AuthServiceTest {
         when(accountRoleRepository.save(any(AccountRole.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(9L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(9L))
@@ -341,7 +332,7 @@ class AuthServiceTest {
                         "Existing User", null)));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.just(linked));
         when(accountRepository.save(linked)).thenReturn(Mono.just(linked));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(1L))
@@ -399,7 +390,7 @@ class AuthServiceTest {
                         "Existing User", null)));
         when(accountRepository.findByGoogleSubAndDeletedAtIsNull("google-sub")).thenReturn(Mono.empty());
         when(accountRepository.save(local)).thenReturn(Mono.just(local));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(1L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(1L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.verifyPasswordForGoogleLink(1L, "correct"))
                 .verifyComplete();
@@ -455,7 +446,7 @@ class AuthServiceTest {
         when(accountRoleRepository.save(any(AccountRole.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-        when(accountRoleRepository.findByAccountIdAndDeletedAtIsNull(9L)).thenReturn(Flux.empty());
+        when(roleRepository.findActiveNamesByAccountId(9L)).thenReturn(Flux.empty());
 
         StepVerifier.create(service.loginWithGoogle("code"))
                 .assertNext(response -> assertThat(response.accountId()).isEqualTo(9L))
@@ -610,11 +601,6 @@ class AuthServiceTest {
                 .verify();
 
         verify(accountRepository, never()).save(any(Account.class));
-    }
-
-    /** The email fallback is lazy, so it is only queried after a username miss. */
-    private void stubUnusedEmailFallback(String usernameOrEmail) {
-        when(accountRepository.findByEmailAndDeletedAtIsNull(usernameOrEmail)).thenReturn(Mono.empty());
     }
 
     private Account account(Long id, String username, String passwordHash) {
