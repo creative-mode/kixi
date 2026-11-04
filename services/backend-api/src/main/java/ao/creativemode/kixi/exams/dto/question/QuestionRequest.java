@@ -3,6 +3,7 @@ package ao.creativemode.kixi.exams.dto.question;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
@@ -19,14 +20,9 @@ import jakarta.validation.constraints.Size;
  * exam builder writes {@code open}. Only {@code multiple_choice} has a meaning
  * to the approval gate, which is why it is the one value that matters here.
  *
- * <p>{@code maxScore} is required, and this is the one field that could
- * otherwise be left out without breaking the request. The approval gate adds up
- * the scores of the active questions and compares the result with the declared
- * total, and a question with no score at all is skipped by that sum rather than
- * counted as zero. So a PUT that simply left the score out would store NULL,
- * quietly shrink the sum, and make the statement impossible to approve for good
- * — with the edit that did it returning 200. Required here means the caller has
- * to say what it is.
+ * <p>{@code maxScore} is required until the score and approval rule is settled.
+ * The approval gate skips null scores when summing active questions, so accepting
+ * one here could allow an unscored question to pass approval.
  *
  * <p>{@code questionType} and {@code pageIndex} are optional and, when absent,
  * are left as they are: neither takes part in the approval gate, so a partial
@@ -52,9 +48,35 @@ public record QuestionRequest(
     String modelAnswer,
 
     /** Explicit human acknowledgement of OCR text/formula evidence. */
-    Boolean ocrReviewed
+    Boolean ocrReviewed,
+
+    /**
+     * On create only: the id of the active group this question is an alínea of.
+     * On update it is rejected — moving a question between groups is not
+     * supported.
+     */
+    Long parentId,
+
+    /**
+     * An alínea's own label (a, b, c...). Without {@code parentId} on create it
+     * is rejected, so a top-level question never gains one by accident.
+     */
+    @Size(max = 10, message = "The item label must not exceed 10 characters")
+    String label,
+
+    /**
+     * How a group renders its items. Only on a group; null leaves the stored
+     * layout untouched.
+     */
+    @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
+    String groupLayout
 ) {
     public QuestionRequest(String text, String questionType, Double maxScore, Integer pageIndex, String modelAnswer) {
-        this(text, questionType, maxScore, pageIndex, modelAnswer, null);
+        this(text, questionType, maxScore, pageIndex, modelAnswer, null, null, null, null);
+    }
+
+    public QuestionRequest(String text, String questionType, Double maxScore, Integer pageIndex, String modelAnswer,
+            Boolean ocrReviewed) {
+        this(text, questionType, maxScore, pageIndex, modelAnswer, ocrReviewed, null, null, null);
     }
 }

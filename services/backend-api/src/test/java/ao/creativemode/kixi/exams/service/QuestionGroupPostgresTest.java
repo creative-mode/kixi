@@ -123,6 +123,30 @@ class QuestionGroupPostgresTest {
     }
 
     @Test
+    void theNextItemNumberLooksAtTheWholeBlockAndMakesRoomInThePaperOrder() {
+        Question group = save(3, 2, "group", "Enunciado", null, null);
+        save(301, 3, "open", "Alínea a", group.getId(), "a");
+        save(302, 4, "open", "Alínea b", group.getId(), "b");
+        save(4, 5, "open", "Questão seguinte", null, null);
+        Question removed = save(305, 6, "open", "Alínea apagada", group.getId(), "c");
+        Question row = questions.findById(removed.getId()).block(WAIT);
+        row.setDeletedAt(LocalDateTime.of(2026, 10, 15, 9, 0, 0));
+        questions.save(row).block(WAIT);
+
+        assertThat(questions.maxNumberInItemRange(STATEMENT, 300, 400).block(WAIT))
+                .as("a removed item still owns its number").isEqualTo(305);
+        assertThat(questions.maxNumberInItemRange(STATEMENT, 700, 800).block(WAIT))
+                .as("an empty block starts at its base").isEqualTo(700);
+
+        questions.shiftOrderIndexesAfter(STATEMENT, 4).block(WAIT);
+
+        assertThat(questions.findAllByStatementIdAndDeletedAtIsNull(STATEMENT).collectList().block(WAIT))
+                .extracting(Question::getOrderIndex)
+                .as("the following active question moved; the removed row did not")
+                .containsExactly(2, 3, 4, 6);
+    }
+
+    @Test
     void anItemCannotOutliveTheGroupRowItPointsTo() {
         Question group = save(3, 1, "group", "Enunciado", null, null);
         save(301, 2, "open", "Alínea", group.getId(), "a");
