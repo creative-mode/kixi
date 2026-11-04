@@ -19,3 +19,8 @@ spring:
     pool:
       initial-size: 0
       max-size: 2
+
+app:
+  auth:
+    # O aquecimento do login (kixi#566) é só arranque a frio; nos testes só acrescentava carga e esperas.
+    warmup-enabled: false

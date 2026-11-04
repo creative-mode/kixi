@@ -22,6 +22,18 @@ public interface AccountRepository extends ReactiveCrudRepository<Account, Long>
 
     Mono<Account> findByUsernameAndDeletedAtIsNull(String username);
 
+    /**
+     * The login lookup in one round trip (kixi#566): the account whose username is {@code username} or whose e-mail is
+     * {@code email}. An exact username match wins over an e-mail match, as the two sequential lookups it replaces did.
+     */
+    @Query("""
+            SELECT * FROM accounts
+            WHERE deleted_at IS NULL AND (username = :username OR email = :email)
+            ORDER BY (username = :username) DESC, id
+            LIMIT 1
+            """)
+    Mono<Account> findForLogin(@Param("username") String username, @Param("email") String email);
+
     /** Includes soft-deleted rows so new Google accounts cannot reuse a unique username. */
     Mono<Account> findByUsername(String username);
 

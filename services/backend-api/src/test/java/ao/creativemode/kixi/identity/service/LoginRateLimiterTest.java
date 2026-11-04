@@ -21,6 +21,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -111,7 +113,6 @@ class LoginRateLimiterTest {
      */
     @Test
     void failsClosedWhenTheReservationErrors() {
-        stubCleanup();
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);
         when(databaseClient.sql(contains(INSERT))).thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
@@ -126,7 +127,6 @@ class LoginRateLimiterTest {
 
     @Test
     void failsClosedWhenTheReservationIsEmpty() {
-        stubCleanup();
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);
         when(databaseClient.sql(contains(INSERT))).thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenReturn(reserve);
@@ -180,8 +180,44 @@ class LoginRateLimiterTest {
         assertThat(bound.get("rateKey")).isNotEqualTo(blockedAddressKey);
     }
 
-    private void stubReserve(int attempts, long retryAfterSeconds) {
+    /**
+     * kixi#566: the DELETE over the whole table used to run before each of the two checks of every login, four of the eight
+     * statements a login cost. A check is now the reservation and nothing else.
+     */
+    @Test
+    void aCheckIsTheReservationAloneWithNoCleanupOnTheLoginPath() {
+        stubReserve(1, 60L);
+
+        StepVerifier.create(limiter.checkAddress("login-ip:203.0.113.30")).verifyComplete();
+        StepVerifier.create(limiter.checkIdentity("login-identity:ana")).verifyComplete();
+
+        verify(databaseClient, never()).sql(contains(CLEANUP));
+    }
+
+    @Test
+    void theScheduledPurgeDropsTheExpiredCounters() {
         stubCleanup();
+
+        limiter.purgeExpiredEntries();
+
+        verify(databaseClient).sql(contains(CLEANUP));
+    }
+
+    @Test
+    void aFailedPurgeIsLoggedAndNeverBreaksTheScheduler() {
+        DatabaseClient.GenericExecuteSpec cleanup = mock(DatabaseClient.GenericExecuteSpec.class);
+        @SuppressWarnings("unchecked")
+        FetchSpec<Map<String, Object>> fetch = mock(FetchSpec.class);
+        when(databaseClient.sql(contains(CLEANUP))).thenReturn(cleanup);
+        when(cleanup.fetch()).thenReturn(fetch);
+        when(fetch.rowsUpdated()).thenReturn(Mono.error(new RuntimeException("connection reset")));
+
+        limiter.purgeExpiredEntries();
+
+        verify(databaseClient).sql(contains(CLEANUP));
+    }
+
+    private void stubReserve(int attempts, long retryAfterSeconds) {
         DatabaseClient.GenericExecuteSpec reserve = mock(DatabaseClient.GenericExecuteSpec.class);
         when(databaseClient.sql(contains(INSERT))).thenReturn(reserve);
         when(reserve.bind(anyString(), any())).thenAnswer(call -> {
