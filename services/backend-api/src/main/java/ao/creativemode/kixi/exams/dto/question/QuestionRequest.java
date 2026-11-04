@@ -3,9 +3,9 @@ package ao.creativemode.kixi.exams.dto.question;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
-import jakarta.validation.constraints.Pattern;
 
 /**
  * A question as accepted when creating or editing one.
@@ -49,10 +49,25 @@ public record QuestionRequest(
 
     /** Explicit human acknowledgement of OCR text/formula evidence. */
     Boolean ocrReviewed,
-    /** Parent group for a new alínea; immutable when updating an existing question. */
+
+    /**
+     * On create only: the id of the active group this question is an alínea of.
+     * On update it is rejected — moving a question between groups is not
+     * supported.
+     */
     Long parentId,
+
+    /**
+     * An alínea's own label (a, b, c...). Without {@code parentId} on create it
+     * is rejected, so a top-level question never gains one by accident.
+     */
     @Size(max = 10, message = "The item label must not exceed 10 characters")
     String label,
+
+    /**
+     * How a group renders its items. Only on a group; null leaves the stored
+     * layout untouched.
+     */
     @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
     String groupLayout
 ) {
