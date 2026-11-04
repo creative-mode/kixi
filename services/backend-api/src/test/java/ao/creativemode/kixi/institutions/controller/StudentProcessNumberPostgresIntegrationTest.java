@@ -20,7 +20,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 /**
- * O número de processo do aluno na escola (kixi#512) contra um Postgres migrado (V74): só o administrador o escreve,
+ * O número de processo do aluno na escola (kixi#512) contra um Postgres migrado (V75): só o administrador o escreve,
  * é único por escola e não entre escolas, um número em branco apaga-o, a validação recusa o que não se imprime numa
  * pauta e o índice único segura a base mesmo sem o serviço.
  *

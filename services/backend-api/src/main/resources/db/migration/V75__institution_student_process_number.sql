@@ -1,4 +1,4 @@
--- V74: número de processo do aluno na escola (kixi#512).
+-- V75: número de processo do aluno na escola (kixi#512).
 --
 -- É do aluno NA ESCOLA (muda de escola para escola), por isso vive na ligação aluno–instituição e não na conta.
 -- Opcional, até 30 caracteres (o limite do contrato v1 do motor: alunos[].processo). Único por instituição quando
