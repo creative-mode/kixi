@@ -56,13 +56,14 @@ public class TermSheetReadService {
                           Long institutionId, Object grade, String course, Long subjectId, String subjectName, String subjectCode,
                           Statistics statistics, LocalDateTime updatedAt) { }
 
-    public record Row(Long accountId, Object number, String name, Object mac, Object p1, Object p2, Object mt, String status,
-                      boolean adjusted) { }
+    /** {@code processNumber}: o número de processo do aluno na escola da pauta (kixi#512), nulo se não tiver. */
+    public record Row(Long accountId, Object number, String name, String processNumber, Object mac, Object p1, Object p2, Object mt,
+                      String status, boolean adjusted) { }
 
     public record Detail(Summary sheet, List<Row> rows) { }
 
     public record Mine(String sheetId, Integer termNumber, String schoolYear, String subjectName, String subjectCode,
-                       String className, OwnRow row) { }
+                       String className, String processNumber, OwnRow row) { }
 
     public record OwnRow(Object mac, Object p1, Object p2, Object mt, String status) { }
 
@@ -98,18 +99,45 @@ public class TermSheetReadService {
                         row.get("c", String.class), row.get("s", String.class), row.get("updated_at", LocalDateTime.class)))
                 .one()
                 .filter(reader::sees)
-                .flatMap(sheet -> rows(sheetId).collectList().map(rows -> new Detail(sheet, rows)))
+                .flatMap(sheet -> rows(sheetId, sheet).collectList().map(rows -> new Detail(sheet, rows)))
                 .switchIfEmpty(missing);
     }
 
-    private Flux<Row> rows(String sheetId) {
+    /** account_id → número de processo na escola, só dos alunos que o têm (kixi#512). Lê-se agora e não do payload do motor. */
+    private Mono<Map<Long, String>> processNumbers(Long institutionId, java.util.Collection<Long> accountIds) {
+        if (institutionId == null || accountIds.isEmpty()) return Mono.just(Map.of());
+        return db.sql("SELECT u.account_id, ist.process_number FROM institution_students ist JOIN users u ON u.id = ist.user_id"
+                        + " WHERE ist.institution_id = :i AND ist.deleted_at IS NULL AND ist.process_number IS NOT NULL AND u.account_id IN (:ids)")
+                .bind("i", institutionId).bind("ids", accountIds)
+                .map((row, meta) -> Map.entry(row.get("account_id", Long.class), row.get("process_number", String.class)))
+                .all().collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
+    /** A escola da pauta: a do contexto do motor ({@code escolaId}) ou, se não vier, a da turma. */
+    private Mono<Long> institutionOf(Summary sheet) {
+        if (sheet.institutionId() != null) return Mono.just(sheet.institutionId());
+        if (sheet.classId() == null) return Mono.empty();
+        return db.sql("SELECT institution_id FROM classes WHERE id = :c").bind("c", sheet.classId())
+                .map((row, meta) -> row.get("institution_id", Long.class)).one();
+    }
+
+    private Flux<Row> rows(String sheetId, Summary sheet) {
+        return rowsOf(sheetId).collectList().flatMapMany(rows -> institutionOf(sheet).map(java.util.Optional::of)
+                .defaultIfEmpty(java.util.Optional.empty()).flatMap(institution -> processNumbers(institution.orElse(null),
+                        rows.stream().map(Row::accountId).filter(java.util.Objects::nonNull).toList())
+                        .map(numbers -> rows.stream().map(r -> new Row(r.accountId(), r.number(), r.name(),
+                        numbers.get(r.accountId()), r.mac(), r.p1(), r.p2(), r.mt(), r.status(), r.adjusted())).toList()))
+                .flatMapMany(Flux::fromIterable));
+    }
+
+    private Flux<Row> rowsOf(String sheetId) {
         return db.sql("SELECT account_id, score, status, CAST(payload AS text) AS p FROM register_term_entries"
                         + " WHERE sheet_id = :id AND component = 'MT'")
                 .bind("id", sheetId)
                 .map((row, meta) -> {
                     Map<String, Object> payload = parse(row.get("p", String.class));
                     Object mt = payload.get("mt") != null ? payload.get("mt") : row.get("score", java.math.BigDecimal.class);
-                    return new Row(row.get("account_id", Long.class), payload.get("numero"), text(payload.get("nome")),
+                    return new Row(row.get("account_id", Long.class), payload.get("numero"), text(payload.get("nome")), null,
                             payload.get("mac"), payload.get("npp"), payload.get("npt"), mt, row.get("status", String.class),
                             Boolean.TRUE.equals(payload.get("ajustada")));
                 })
@@ -130,10 +158,25 @@ public class TermSheetReadService {
                     Map<String, Object> payload = parse(row.get("p", String.class));
                     Object mt = payload.get("mt") != null ? payload.get("mt") : row.get("score", java.math.BigDecimal.class);
                     return new Mine(sheet.sheetId(), sheet.termNumber(), sheet.schoolYear(), sheet.subjectName(), sheet.subjectCode(),
-                            sheet.className(), new OwnRow(payload.get("mac"), payload.get("npp"), payload.get("npt"), mt,
+                            sheet.className(), null, new OwnRow(payload.get("mac"), payload.get("npp"), payload.get("npt"), mt,
                             row.get("es", String.class)));
                 })
-                .all();
+                .all()
+                .concatMap(mine -> ownProcessNumber(accountId, mine));
+    }
+
+    /** O número de processo do próprio aluno na escola desta pauta (kixi#512); sem número, a linha segue sem ele. */
+    private Mono<Mine> ownProcessNumber(Long accountId, Mine mine) {
+        return db.sql("SELECT ist.process_number FROM register_term_sheets s"
+                        + " JOIN institution_students ist ON ist.institution_id = COALESCE(CAST(NULLIF(s.context ->> 'escolaId', '') AS BIGINT),"
+                        + " (SELECT c.institution_id FROM classes c WHERE c.id = CAST(NULLIF(split_part(s.context ->> 'turmaId', '-', 1), '') AS BIGINT)))"
+                        + " JOIN users u ON u.id = ist.user_id AND u.account_id = :a"
+                        + " WHERE s.sheet_id = :s AND ist.deleted_at IS NULL AND ist.process_number IS NOT NULL")
+                .bind("a", accountId).bind("s", mine.sheetId())
+                .map((row, meta) -> row.get("process_number", String.class)).one()
+                .map(number -> new Mine(mine.sheetId(), mine.termNumber(), mine.schoolYear(), mine.subjectName(), mine.subjectCode(),
+                        mine.className(), number, mine.row()))
+                .defaultIfEmpty(mine);
     }
 
     private Summary summary(String sheetId, String status, String contextJson, String statsJson, LocalDateTime updatedAt) {

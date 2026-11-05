@@ -2,6 +2,7 @@ package ao.creativemode.kixi.institutions.controller;
 
 import ao.creativemode.kixi.institutions.dto.institution.InstitutionRequest;
 import ao.creativemode.kixi.institutions.dto.institution.InstitutionResponse;
+import ao.creativemode.kixi.institutions.dto.membership.ProcessNumberRequest;
 import ao.creativemode.kixi.institutions.dto.membership.StudentLinkResponse;
 import ao.creativemode.kixi.institutions.dto.membership.SubjectLinkResponse;
 import ao.creativemode.kixi.institutions.dto.membership.TeacherLinkResponse;
@@ -145,6 +146,13 @@ public class InstitutionController {
     @PostMapping("/{id}/students/{userId}")
     public Mono<ResponseEntity<Void>> addStudent(@PathVariable Long id, @PathVariable Long userId) {
         return membership.addStudent(id, userId).thenReturn(ResponseEntity.noContent().build());
+    }
+
+    /** O número de processo do aluno na escola (kixi#512); só o administrador (SecurityConfig). Vazio apaga-o. */
+    @PutMapping("/{id}/students/{userId}/process-number")
+    public Mono<ResponseEntity<StudentLinkResponse>> setProcessNumber(
+            @PathVariable Long id, @PathVariable Long userId, @RequestBody ProcessNumberRequest body) {
+        return membership.setProcessNumber(id, userId, body == null ? null : body.processNumber()).map(ResponseEntity::ok);
     }
 
     @DeleteMapping("/{id}/students/{userId}")

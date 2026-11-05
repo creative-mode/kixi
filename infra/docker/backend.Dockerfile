@@ -12,7 +12,7 @@
 # =============================================================================
 # Stage 1: Builder
 # =============================================================================
-FROM eclipse-temurin:17-jdk-jammy AS build
+FROM eclipse-temurin:22-jdk-jammy AS build
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ RUN ./mvnw clean package -DskipTests
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM eclipse-temurin:17-jre-jammy AS runtime
+FROM eclipse-temurin:22-jre-jammy AS runtime
 
 # Labels
 LABEL maintainer="Kixi Team <team@kixi.ao>" \

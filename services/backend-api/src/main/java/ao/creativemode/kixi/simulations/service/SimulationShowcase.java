@@ -28,6 +28,7 @@ public class SimulationShowcase implements SimulationShowcaseReader {
                 simulations.findByIdAndAccountIdAndDeletedAtIsNull(simulationId, accountId).flatMap(simulation ->
                         statements.findById(simulation.getStatementId()).map(statement -> new Showcase(
                                 simulationId, statement.getTitle(), result.finalScore(), statement.getTotalMaxScore(),
-                                result.correctAnswers(), result.totalQuestions(), result.timeSpentSeconds()))));
+                                result.correctAnswers(), result.totalQuestions(), result.timeSpentSeconds(),
+                                result.pendingReviewCount()))));
     }
 }

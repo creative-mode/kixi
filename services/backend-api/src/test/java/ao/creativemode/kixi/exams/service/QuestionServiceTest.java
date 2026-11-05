@@ -2,6 +2,7 @@ package ao.creativemode.kixi.exams.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -65,6 +66,325 @@ class QuestionServiceTest {
                     assertThat(response.orderIndex()).isEqualTo(4);
                     assertThat(response.needsReview()).isFalse();
                 })
+                .verifyComplete();
+    }
+
+    @Test
+    void createAddsAnItemToAnActiveGroupAndKeepsItsLabelAndParent() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        parent.setOrderIndex(2);
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        Question oldChild = question(21L, 301);
+        oldChild.setParentId(20L);
+        oldChild.setOrderIndex(4);
+        oldChild.setLabel("a");
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.just(oldChild));
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(301));
+        when(questions.shiftOrderIndexesAfter(STATEMENT_ID, 4)).thenReturn(Mono.just(5));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> {
+            Question saved = invocation.getArgument(0);
+            saved.setId(22L);
+            return Mono.just(saved);
+        });
+
+        var request = new QuestionRequest("Nova alínea", "open", 2.0, 0, null, null, 20L, "b", null);
+        StepVerifier.create(service.create(STATEMENT_ID, request, ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.id()).isEqualTo(22L);
+                    assertThat(response.number()).isEqualTo(302);
+                    assertThat(response.orderIndex()).isEqualTo(5);
+                    assertThat(response.parentId()).isEqualTo(20L);
+                    assertThat(response.label()).isEqualTo("b");
+                })
+                .verifyComplete();
+
+        verify(questions).shiftOrderIndexesAfter(STATEMENT_ID, 4);
+    }
+
+    @Test
+    void aNewItemIsSavedEvenWhenNoFollowingRowHasToMove() {
+        // The last item on the paper moves nothing; an empty update count must
+        // not swallow the save.
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.empty());
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(300));
+        when(questions.shiftOrderIndexesAfter(STATEMENT_ID, 0)).thenReturn(Mono.empty());
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> {
+            Question saved = invocation.getArgument(0);
+            saved.setId(22L);
+            return Mono.just(saved);
+        });
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Primeira alínea", "open", 1.0, 0, null, null, 20L, null, null),
+                        ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.id()).isEqualTo(22L);
+                    assertThat(response.number()).as("the first item starts at parent*100 + 1").isEqualTo(301);
+                    assertThat(response.label()).isEqualTo("a");
+                    assertThat(response.orderIndex()).isEqualTo(1);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void anItemThatIsNotLabelledGetsTheFirstFreeLetter() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        Question itemA = question(21L, 301);
+        itemA.setLabel("a");
+        Question itemC = question(23L, 303);
+        itemC.setLabel("c");
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.just(itemA, itemC));
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(303));
+        when(questions.shiftOrderIndexesAfter(anyLong(), anyInt())).thenReturn(Mono.just(1));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.number()).isEqualTo(304);
+                    assertThat(response.label()).isEqualTo("b");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void labelsPastZUseTwoLetters() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        List<Question> children = java.util.stream.IntStream.rangeClosed(1, 26)
+            .mapToObj(k -> {
+                Question child = question(300L + k, 300 + k);
+                child.setLabel(String.valueOf((char) ('a' + k - 1)));
+                return child;
+            })
+            .toList();
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.fromIterable(children));
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(326));
+        when(questions.shiftOrderIndexesAfter(anyLong(), anyInt())).thenReturn(Mono.just(1));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .assertNext(response -> {
+                    assertThat(response.number()).isEqualTo(327);
+                    assertThat(response.label()).isEqualTo("aa");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void anItemIsNumberedFromTheWholeBlockNotOnlyTheActiveRows() {
+        // A removed item keeps its number for good, so the next number has to
+        // come from MAX over every row in the group's block.
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        Question active = question(21L, 301);
+        active.setLabel("a");
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.just(active));
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(305));
+        when(questions.shiftOrderIndexesAfter(anyLong(), anyInt())).thenReturn(Mono.just(1));
+        when(questions.save(any(Question.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.number()).isEqualTo(306))
+                .verifyComplete();
+    }
+
+    @Test
+    void aGivenLabelThatIsAlreadyTakenIsRejected() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        Question existing = question(21L, 301);
+        existing.setLabel("b");
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.just(existing));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, "  B ", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).maxNumberInItemRange(anyLong(), anyInt(), anyInt());
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void aBlankItemLabelIsRejected() {
+        givenTheStatementIsWritable();
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, "   ", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void anItemPastTheNumberingRangeIsRejected() {
+        givenTheStatementIsWritable();
+        Question parent = question(20L, 3);
+        parent.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(parent));
+        when(questions.findActiveChildren(20L)).thenReturn(Flux.empty());
+        when(questions.maxNumberInItemRange(STATEMENT_ID, 300, 400)).thenReturn(Mono.just(399));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void anItemCannotItselfBeAGroup() {
+        givenTheStatementIsWritable();
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "group", 1.0, 0, null, null, 20L, null, null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).findByIdAndDeletedAtIsNull(anyLong());
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void anItemCannotCarryTheGroupLayout() {
+        givenTheStatementIsWritable();
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, null, "brace"), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void createItemOnAMissingOrForeignGroupIsNotFound() {
+        givenTheStatementIsWritable();
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, "a", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void createCannotAttachAnItemToANonGroupQuestion() {
+        givenTheStatementIsWritable();
+        when(questions.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(question(20L, 3)));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, 20L, "a", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).maxNumberInItemRange(anyLong(), anyInt(), anyInt());
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void aTopLevelQuestionCannotCarryAnItemLabel() {
+        givenTheStatementIsWritable();
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, null, "a", null), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).findNextQuestionNumber(STATEMENT_ID);
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void aNonGroupQuestionCannotDefineALayout() {
+        givenTheStatementIsWritable();
+        when(questions.findNextQuestionNumber(STATEMENT_ID)).thenReturn(Mono.just(1));
+        when(questions.findNextOrderIndex(STATEMENT_ID)).thenReturn(Mono.just(0));
+
+        StepVerifier.create(service.create(STATEMENT_ID,
+                        new QuestionRequest("Item", "open", 1.0, 0, null, null, null, null, "brace"), ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void updateRejectsMovingAQuestionToAGroup() {
+        givenTheStatementIsWritable();
+
+        StepVerifier.create(service.update(STATEMENT_ID, QUESTION_ID,
+                        new QuestionRequest("Enunciado", "open", 1.0, 0, null, null, 20L, null, null),
+                        ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).findByIdAndDeletedAtIsNull(QUESTION_ID);
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void updateRejectsAnUnknownLayout() {
+        givenTheStatementIsWritable();
+        Question group = question(QUESTION_ID, 1);
+        group.setQuestionType("group");
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(group));
+
+        StepVerifier.create(service.update(STATEMENT_ID, QUESTION_ID,
+                        new QuestionRequest("Enunciado", "group", 0.0, null, null, null, null, null, "brackets"),
+                        ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(questions, never()).save(any(Question.class));
+    }
+
+    @Test
+    void updateCanChangeOnlyTheLayoutOfAGroupQuestionWithoutDroppingItsScore() {
+        givenTheStatementIsWritable();
+        Question group = question(QUESTION_ID, 1);
+        group.setQuestionType("group");
+        group.setGroupLayout("lettered");
+        when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(group));
+        when(questions.save(group)).thenReturn(Mono.just(group));
+
+        StepVerifier.create(service.update(STATEMENT_ID, QUESTION_ID,
+                        new QuestionRequest("Enunciado", "group", 0.0, null, null, null, null, null, "brace"),
+                        ACCOUNT_ID, false))
+                .assertNext(response -> assertThat(response.groupLayout()).isEqualTo("brace"))
                 .verifyComplete();
     }
 

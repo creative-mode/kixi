@@ -135,6 +135,20 @@ public class QuestionOptionService {
             .switchIfEmpty(Mono.just(option));
     }
 
+    private Mono<QuestionOption> applyCorrectChange(QuestionOption option, QuestionOptionRequest data) {
+        if (Boolean.FALSE.equals(data.isCorrect())) {
+            return Mono.defer(() -> options.findCorrectOptionByQuestionId(option.getQuestionId()))
+                .filter(correct -> correct.getId().equals(option.getId()))
+                .flatMap(correct -> options.markAllAsIncorrect(option.getQuestionId())
+                    .then(Mono.fromSupplier(() -> {
+                        option.setIsCorrect(false);
+                        return option;
+                    })))
+                .switchIfEmpty(Mono.just(option));
+        }
+        return markCorrectIfAsked(option, data);
+    }
+
     /**
      * Changes the text, and marks the option as the answer if the body says so.
      *
@@ -160,7 +174,7 @@ public class QuestionOptionService {
                 apply(option, data);
                 return Mono.defer(() -> options.save(option));
             })
-            .flatMap(option -> markCorrectIfAsked(option, data))
+            .flatMap(option -> applyCorrectChange(option, data))
             .map(option -> toResponse(option, true));
     }
 

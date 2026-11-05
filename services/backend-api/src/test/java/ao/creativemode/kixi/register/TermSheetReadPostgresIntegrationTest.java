@@ -77,6 +77,8 @@ class TermSheetReadPostgresIntegrationTest {
     @AfterEach
     void limpar() {
         String accounts = String.join(", ", ACCOUNTS);
+        sql("DELETE FROM institution_students WHERE institution_id = 506001");
+        sql("DELETE FROM users WHERE account_id IN (" + accounts + ")");
         sql("DELETE FROM register_term_entries WHERE sheet_id LIKE 'PT-506-%'");
         sql("DELETE FROM register_term_sheets WHERE sheet_id LIKE 'PT-506-%'");
         sql("DELETE FROM teaching_assignments WHERE teacher_id IN (506002, 506003)");
@@ -115,6 +117,10 @@ class TermSheetReadPostgresIntegrationTest {
                 + "(506002, 506002, 'Helena', 'Teste', now(), now()), (506003, 506003, 'Carlos', 'Teste', now(), now())");
         sql("INSERT INTO teaching_assignments (teacher_id, class_id, subject_id, school_year_id, created_at) VALUES "
                 + "(506002, 506001, 506001, 506001, now()), (506003, 506002, 506002, 506001, now()), (506003, 506001, 506002, 506001, now())");
+
+        // kixi#512: a Ana tem número de processo nesta escola; o Bruno não (a pauta sai sem ele, sem erro)
+        sql("INSERT INTO users (id, account_id, first_name, last_name) VALUES (506004, 506004, 'Ana', 'Domingos'), (506005, 506005, 'Bruno', 'Neto')");
+        sql("INSERT INTO institution_students (institution_id, user_id, process_number) VALUES (506001, 506004, 'P-2026/0042')");
 
         // A: fechada, turma 506001 / disciplina 506001 (1.º trimestre; turmaId com sufixo, como nos ensaios)
         sheet("PT-506-A", "FECHADA", "506001-506001-t99", 506001, 1);
@@ -201,6 +207,36 @@ class TermSheetReadPostgresIntegrationTest {
 
         bearer(token(BRUNO, "STUDENT")).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$[?(@.sheetId=='PT-506-A')].row.mt").isEqualTo(8);
+    }
+
+    @Test
+    void theProcessNumberOfTheStudentInTheSchoolAppearsInTheSheetAndAStudentWithoutOneHasNone() {
+        // kixi#512: o administrador e o professor da turma veem o número na linha; quem não tem fica sem ele, sem erro
+        for (String token : List.of(token(ADMIN, "ADMIN"), token(TEACHER_A, "TEACHER"))) {
+            bearer(token).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                    .expectBody()
+                    .jsonPath("$.rows[0].name").isEqualTo("Ana Domingos")
+                    .jsonPath("$.rows[0].processNumber").isEqualTo("P-2026/0042")
+                    .jsonPath("$.rows[1].name").isEqualTo("Bruno Neto")
+                    .jsonPath("$.rows[1].processNumber").doesNotExist();
+        }
+    }
+
+    @Test
+    void aTrashedLinkOrAnotherSchoolsNumberDoesNotLeakIntoTheSheet() {
+        sql("UPDATE institution_students SET deleted_at = now() WHERE institution_id = 506001 AND user_id = 506004");
+        bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.rows[0].processNumber").doesNotExist();
+    }
+
+    @Test
+    void theStudentSeesOnlyTheirOwnProcessNumberAndNeverTheOthers() {
+        bearer(token(ANA, "STUDENT")).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$[?(@.sheetId=='PT-506-A')].processNumber").isEqualTo("P-2026/0042");
+        byte[] bruno = bearer(token(BRUNO, "STUDENT")).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
+                .expectBody().returnResult().getResponseBody();
+        assertThat(new String(bruno, java.nio.charset.StandardCharsets.UTF_8))
+                .as("o Bruno não tem número e não vê o da Ana").doesNotContain("P-2026").doesNotContain("\"processNumber\":\"");
     }
 
     @Test
