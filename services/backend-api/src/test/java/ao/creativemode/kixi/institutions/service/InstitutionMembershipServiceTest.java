@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.institutions.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -24,6 +25,7 @@ import ao.creativemode.kixi.institutions.repository.InstitutionStudentRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionSubjectRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.institutions.dto.membership.StudentLinkResponse;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -200,6 +202,98 @@ class InstitutionMembershipServiceTest {
         StepVerifier.create(service.addStudent(1L, 6L)).verifyComplete();
 
         assertThat(trashed.isDeleted()).isFalse();
+    }
+
+    // ── Número de processo (kixi#512) ───────────────────────────────────────
+
+    @Test
+    void theProcessNumberIsTrimmedBlankMeansNoneAndItNeverExceedsTheEngineLimit() {
+        assertThat(InstitutionMembershipService.normalizeProcessNumber("  P-2026/0042 ")).isEqualTo("P-2026/0042");
+        assertThat(InstitutionMembershipService.normalizeProcessNumber("   ")).isNull();
+        assertThat(InstitutionMembershipService.normalizeProcessNumber(null)).isNull();
+        assertThat(InstitutionMembershipService.normalizeProcessNumber("x".repeat(30))).hasSize(30);
+        for (String bad : List.of("x".repeat(31), "<script>", "ab\ncd", "-começa-com-traço", "a;b", "a\u0000b")) {
+            assertThatThrownBy(() -> InstitutionMembershipService.normalizeProcessNumber(bad))
+                    .as(bad).isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatusCode()).isEqualTo(400));
+        }
+    }
+
+    @Test
+    void setProcessNumberCreatesTheLinkWhenTheStudentHasNoneYet() {
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        when(users.findByIdAndDeletedAtIsNull(6L)).thenReturn(Mono.just(user(6L)));
+        when(studentLinks.existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(1L, "42", 6L)).thenReturn(Mono.just(false));
+        when(studentLinks.findFirstByInstitutionIdAndUserId(1L, 6L)).thenReturn(Mono.empty());
+        when(studentLinks.save(any(InstitutionStudent.class))).thenAnswer(i -> Mono.just(i.getArgument(0)));
+
+        StepVerifier.create(service.setProcessNumber(1L, 6L, " 42 "))
+                .assertNext(link -> assertThat(link.processNumber()).isEqualTo("42"))
+                .verifyComplete();
+
+        ArgumentCaptor<InstitutionStudent> saved = ArgumentCaptor.forClass(InstitutionStudent.class);
+        verify(studentLinks).save(saved.capture());
+        assertThat(saved.getValue().getInstitutionId()).isEqualTo(1L);
+        assertThat(saved.getValue().getProcessNumber()).isEqualTo("42");
+    }
+
+    @Test
+    void setProcessNumberIsAConflictWhenAnotherStudentOfTheSchoolHasIt() {
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        when(users.findByIdAndDeletedAtIsNull(6L)).thenReturn(Mono.just(user(6L)));
+        when(studentLinks.existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(1L, "42", 6L)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.setProcessNumber(1L, 6L, "42"))
+                .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatusCode()).isEqualTo(409))
+                .verify();
+        verify(studentLinks, never()).save(any());
+    }
+
+    @Test
+    void aBlankProcessNumberClearsItWithoutAskingWhetherItIsTaken() {
+        InstitutionStudent link = new InstitutionStudent(1L, 6L);
+        link.setProcessNumber("42");
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        when(users.findByIdAndDeletedAtIsNull(6L)).thenReturn(Mono.just(user(6L)));
+        when(studentLinks.findFirstByInstitutionIdAndUserId(1L, 6L)).thenReturn(Mono.just(link));
+        when(studentLinks.save(link)).thenReturn(Mono.just(link));
+
+        StepVerifier.create(service.setProcessNumber(1L, 6L, "  "))
+                .assertNext(result -> assertThat(result.processNumber()).isNull())
+                .verifyComplete();
+        assertThat(link.getProcessNumber()).isNull();
+        verify(studentLinks, never()).existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(any(), any(), any());
+    }
+
+    @Test
+    void restoringALinkWhoseNumberWasTakenMeanwhileBringsItBackWithoutTheNumber() {
+        InstitutionStudent trashed = new InstitutionStudent(1L, 6L);
+        trashed.setProcessNumber("42");
+        trashed.markAsDeleted();
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        when(users.findByIdAndDeletedAtIsNull(6L)).thenReturn(Mono.just(user(6L)));
+        when(studentLinks.findFirstByInstitutionIdAndUserId(1L, 6L)).thenReturn(Mono.just(trashed));
+        when(studentLinks.existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(1L, "42", 6L)).thenReturn(Mono.just(true));
+        when(studentLinks.save(trashed)).thenReturn(Mono.just(trashed));
+
+        StepVerifier.create(service.addStudent(1L, 6L)).verifyComplete();
+
+        assertThat(trashed.isDeleted()).isFalse();
+        assertThat(trashed.getProcessNumber()).as("o número é agora de outro aluno").isNull();
+    }
+
+    @Test
+    void findStudentsCarriesTheProcessNumberOfEachStudent() {
+        InstitutionStudent with = new InstitutionStudent(1L, 6L);
+        with.setProcessNumber("42");
+        InstitutionStudent without = new InstitutionStudent(1L, 7L);
+        when(institutions.findByIdAndDeletedAtIsNull(1L)).thenReturn(Mono.just(institution(1L)));
+        when(studentLinks.findAllByInstitutionIdAndDeletedAtIsNull(1L)).thenReturn(Flux.just(with, without));
+        when(users.findAllById(any(Iterable.class))).thenReturn(Flux.just(user(6L), user(7L)));
+
+        StepVerifier.create(service.findStudents(1L).collectList())
+                .assertNext(list -> assertThat(list).extracting(StudentLinkResponse::userId, StudentLinkResponse::processNumber)
+                        .containsExactlyInAnyOrder(org.assertj.core.groups.Tuple.tuple(6L, "42"), org.assertj.core.groups.Tuple.tuple(7L, null)))
+                .verifyComplete();
     }
 
     // ── What the signed-in account belongs to ───────────────────────────────

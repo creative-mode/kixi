@@ -326,7 +326,7 @@ class PostServiceTest {
         when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
                 new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
         when(showcaseReader.showcaseOf(77L, ACCOUNT_ID)).thenReturn(Mono.just(
-                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800)));
+                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800, 3)));
         when(institutionNames.nameOf(MY_INSTITUTION_ID)).thenReturn(Mono.just("Colégio Kixi"));
         when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
@@ -340,6 +340,7 @@ class PostServiceTest {
                     assertThat(response.simulation().maxScore()).isEqualTo(20.0);
                     assertThat(response.simulation().schoolName()).isEqualTo("Colégio Kixi");
                     assertThat(response.simulation().statementTitle()).isEqualTo("Exame de Matemática");
+                    assertThat(response.simulation().pendingReviewCount()).isEqualTo(3);
                 })
                 .verifyComplete();
     }

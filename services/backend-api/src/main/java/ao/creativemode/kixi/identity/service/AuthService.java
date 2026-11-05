@@ -12,6 +12,8 @@ import ao.creativemode.kixi.identity.repository.AccountRoleRepository;
 import ao.creativemode.kixi.identity.repository.RoleRepository;
 import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.identity.service.GoogleOAuth2Client.GoogleUserInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private static final String DEFAULT_ROLE_NAME = "STUDENT";
 
@@ -67,9 +71,9 @@ public class AuthService {
                 .switchIfEmpty(Mono.error(() -> ApiException.unauthorized("Account is inactive")))
                 .filterWhen(account -> passwordMatches(password, account.getPasswordHash()))
                 .switchIfEmpty(Mono.error(() -> ApiException.unauthorized("Invalid username or password")))
-                .flatMap(account -> recordLogin(account)
-                        .flatMap(updated -> loadRoleNames(updated.getId())
-                                .map(roles -> buildLoginResponse(updated.getId(), roles))));
+                // Recording the login and reading the roles do not depend on each other: one round trip of waiting, not two.
+                .flatMap(account -> Mono.zip(recordLogin(account), loadRoleNames(account.getId()))
+                        .map(done -> buildLoginResponse(done.getT1().getId(), done.getT2())));
     }
 
     @Transactional
@@ -123,8 +127,24 @@ public class AuthService {
      * requests while it ran; under load, logins froze the whole API (#124).
      */
     private Mono<Boolean> passwordMatches(String rawPassword, String passwordHash) {
-        return Mono.fromCallable(() -> passwordEncoder.matches(rawPassword, passwordHash))
-                .subscribeOn(Schedulers.boundedElastic());
+        return Mono.defer(() -> {
+            long started = System.nanoTime();
+            return Mono.fromCallable(() -> passwordEncoder.matches(rawPassword, passwordHash))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    // From subscription to the answer, so it includes waiting for a free thread when the CPU is saturated: that
+                    // wait is what a class logging in together pays, and what the #566 measurements could not see (kixi#566).
+                    .doFinally(signal -> logIfSlow("bcrypt", started));
+        });
+    }
+
+    /** Above this, a phase of the login is logged: it is the slow login the issue could not explain from outside. */
+    static final long SLOW_PHASE_MS = 750;
+
+    static void logIfSlow(String phase, long startedNanos) {
+        long ms = (System.nanoTime() - startedNanos) / 1_000_000;
+        if (ms >= SLOW_PHASE_MS) {
+            log.warn("Slow login phase: phase={} durationMs={}", phase, ms);
+        }
     }
 
     /** Same reason as {@link #passwordMatches}: hashing stays off the I/O threads. */
@@ -134,9 +154,9 @@ public class AuthService {
     }
 
     private Mono<Account> findAccountByUsernameOrEmail(String input) {
-        return accountRepository.findByUsernameAndDeletedAtIsNull(input)
-                .switchIfEmpty(Mono.defer(() -> accountRepository.findByEmailAndDeletedAtIsNull(
-                        input.toLowerCase(Locale.ROOT))));
+        // One query for both, not a username lookup and then an e-mail one: a student who logs in with their e-mail
+        // (the usual case) paid two round trips. An exact username match still wins (kixi#566).
+        return accountRepository.findForLogin(input, input.toLowerCase(Locale.ROOT));
     }
 
     private Mono<Account> recordLogin(Account account) {
@@ -145,11 +165,8 @@ public class AuthService {
     }
 
     private Mono<List<String>> loadRoleNames(Long accountId) {
-        return accountRoleRepository.findByAccountIdAndDeletedAtIsNull(accountId)
-                .flatMap(ar -> roleRepository.findById(ar.getRoleId()))
-                .filter(role -> role.getDeletedAt() == null)
-                .map(Role::getName)
-                .collect(Collectors.toList());
+        // One join instead of the grants and then one role lookup per grant (kixi#566).
+        return roleRepository.findActiveNamesByAccountId(accountId).collect(Collectors.toList());
     }
 
     private LoginResponse buildLoginResponse(Long accountId, List<String> roles) {

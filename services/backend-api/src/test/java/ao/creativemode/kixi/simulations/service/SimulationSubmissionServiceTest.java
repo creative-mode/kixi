@@ -3,6 +3,10 @@ package ao.creativemode.kixi.simulations.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -16,6 +20,7 @@ import ao.creativemode.kixi.exams.repository.QuestionOptionRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.service.SimulationCardUpdater;
 import ao.creativemode.kixi.shared.service.TeachingAssignmentAuthorizer;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
@@ -39,6 +44,7 @@ class SimulationSubmissionServiceTest {
     private QuestionOptionRepository options;
     private StatementRepository statements;
     private TeachingAssignmentAuthorizer teachingAuthorizer;
+    private SimulationCardUpdater cardUpdater;
     private SimulationSubmissionService service;
 
     @BeforeEach
@@ -49,7 +55,10 @@ class SimulationSubmissionServiceTest {
         options = mock(QuestionOptionRepository.class);
         statements = mock(StatementRepository.class);
         teachingAuthorizer = mock(TeachingAssignmentAuthorizer.class);
-        service = new SimulationSubmissionService(simulations, answers, questions, options, statements, teachingAuthorizer);
+        cardUpdater = mock(SimulationCardUpdater.class);
+        lenient().when(cardUpdater.refresh(anyLong(), anyDouble(), anyInt())).thenReturn(Mono.empty());
+        service = new SimulationSubmissionService(simulations, answers, questions, options, statements,
+                teachingAuthorizer, cardUpdater);
         when(simulations.claimSubmission(10L)).thenReturn(Mono.just(1));
         when(simulations.lockForAnswerWriteByAnswerId(30L)).thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
     }
@@ -207,6 +216,39 @@ class SimulationSubmissionServiceTest {
                     assertThat(response.isCorrect()).isFalse();
                 }).verifyComplete();
         verify(teachingAuthorizer).requireAssignedTo(7L, false, 3L, 4L);
+    }
+
+    @Test
+    void correctingAnOpenAnswerBringsThePublishedCardUpToDate() {
+        // kixi#464: the card was published with 4/20 and one open answer pending. Grading
+        // the open answer moves the attempt to 13/20, and the card must follow - while the
+        // other open answer that is still pending keeps the provisional warning alive.
+        SimulationAnswer objective = answer(1L, 101L);
+        objective.setScoreObtained(4f);
+        objective.setReviewStatus(SimulationAnswerStatus.AUTO_GRADED);
+        SimulationAnswer open = pendingAnswer();
+        SimulationAnswer stillPending = pendingAnswer();
+        stillPending.setId(31L);
+        stillPending.setQuestionId(3L);
+        Question question = question(2L, 9);
+        question.setStatementId(20L);
+        when(answers.findByIdAndDeletedAtIsNull(30L)).thenReturn(Mono.just(open));
+        when(questions.findByIdAndDeletedAtIsNull(2L)).thenReturn(Mono.just(question));
+        when(answers.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(simulations.findByIdAndDeletedAtIsNull(10L))
+                .thenReturn(Mono.just(simulation(SimulationStatus.FINISHED)));
+        when(answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(10L)))
+                .thenReturn(Flux.just(objective, open, stillPending));
+        when(simulations.save(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.grade(30L, 9.0, 99L, true))
+                .assertNext(response -> {
+                    assertThat(response.reviewStatus()).isEqualTo(SimulationAnswerStatus.GRADED);
+                    assertThat(response.scoreObtained()).isEqualTo(9.0f);
+                })
+                .verifyComplete();
+
+        verify(cardUpdater).refresh(10L, 13.0, 1);
     }
 
     @Test

@@ -208,6 +208,7 @@ public class PostService {
                     post.setCorrectAnswers(showcase.correctAnswers());
                     post.setTotalQuestions(showcase.totalQuestions());
                     post.setTimeSpentSeconds(showcase.timeSpentSeconds());
+                    post.setPendingReviewCount(showcase.pendingReviewCount());
                     return new Staged(classScope, post);
                 }));
     }
@@ -533,7 +534,7 @@ public class PostService {
                         post.getSimulationId() == null ? null : new PostResponse.SimulationCard(
                                 post.getSimulationId(), post.getStatementTitle(), post.getSchoolName(),
                                 post.getFinalScore(), post.getMaxScore(), post.getCorrectAnswers(),
-                                post.getTotalQuestions(), post.getTimeSpentSeconds()),
+                                post.getTotalQuestions(), post.getTimeSpentSeconds(), post.getPendingReviewCount()),
                         PostBlocks.fromJson(post.getBlocks())
                 ));
     }

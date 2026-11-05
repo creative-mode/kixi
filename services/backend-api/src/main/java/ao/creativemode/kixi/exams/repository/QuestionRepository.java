@@ -257,6 +257,26 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
     Flux<Question> findAllChildren(Long parentId);
 
     /**
+     * The highest question number already taken inside an item block
+     * {@code [base, ceiling)}. Deleted rows count: uk_questions_statement_number
+     * covers (statement_id, number) without deleted_at, so a deleted item keeps
+     * its number for good and taking MAX over the active rows only would hand
+     * out a number that is already taken.
+     */
+    @Query("SELECT COALESCE(MAX(number), :base) FROM questions "
+        + "WHERE statement_id = :statementId AND number >= :base AND number < :ceiling")
+    Mono<Integer> maxNumberInItemRange(Long statementId, Integer base, Integer ceiling);
+
+    /**
+     * Makes room for an item right after its group: every active question after
+     * the given position moves one step down, so the newcomer lands between the
+     * group's last alínea and whatever used to come next.
+     */
+    @Query("UPDATE questions SET order_index = order_index + 1, updated_at = CURRENT_TIMESTAMP "
+        + "WHERE statement_id = :statementId AND deleted_at IS NULL AND order_index > :afterOrderIndex")
+    Mono<Integer> shiftOrderIndexesAfter(Long statementId, Integer afterOrderIndex);
+
+    /**
      * Calculate total max score for a statement
      */
     @Query(

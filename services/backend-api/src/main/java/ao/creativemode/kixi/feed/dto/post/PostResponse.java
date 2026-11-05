@@ -22,7 +22,7 @@ public record PostResponse(
         java.util.List<PostBlock> blocks
 ) {
 
-    /** The result card of a SIMULATION post, as it was when published. */
+    /** The result card of a SIMULATION post. */
     public record SimulationCard(
             Long simulationId,
             String statementTitle,
@@ -31,5 +31,22 @@ public record PostResponse(
             Double maxScore,
             Integer correctAnswers,
             Integer totalQuestions,
-            Integer timeSpentSeconds) { }
+            Integer timeSpentSeconds,
+            /** Open answers still awaiting correction; above zero, the score is provisional (kixi#464). */
+            Integer pendingReviewCount) {
+
+        /** The card as it was before the pending count existed. */
+        public SimulationCard(
+                Long simulationId,
+                String statementTitle,
+                String schoolName,
+                Double finalScore,
+                Double maxScore,
+                Integer correctAnswers,
+                Integer totalQuestions,
+                Integer timeSpentSeconds) {
+            this(simulationId, statementTitle, schoolName, finalScore, maxScore, correctAnswers,
+                    totalQuestions, timeSpentSeconds, null);
+        }
+    }
 }

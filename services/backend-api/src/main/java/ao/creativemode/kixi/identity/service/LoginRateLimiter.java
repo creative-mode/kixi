@@ -6,6 +6,7 @@ import ao.creativemode.kixi.shared.exception.LoginRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -107,8 +108,10 @@ public class LoginRateLimiter {
 
     private Mono<Void> check(String rateKey, int maxAttempts) {
         String hashed = hash(rateKey);
-        return cleanupExpiredEntries()
-                .then(reserveAttempt(hashed))
+        // No clean-up here any more (kixi#566): it was a DELETE over the whole table before every one of the two checks of
+        // every login, four statements out of the eight a login cost. An old row is harmless to the count (the upsert
+        // restarts the window of a stale key), so the purge runs on a schedule instead.
+        return reserveAttempt(hashed)
                 .switchIfEmpty(Mono.error(ApiException.serviceUnavailable(
                         "Login protection is temporarily unavailable")))
                 .onErrorMap(error -> !(error instanceof ApiException), error ->
@@ -133,11 +136,33 @@ public class LoginRateLimiter {
                 .one();
     }
 
-    private Mono<Void> cleanupExpiredEntries() {
+    /**
+     * Drops the counters nobody has touched for a day. Scheduled, not on the login path: blocking here is safe because a
+     * {@code @Scheduled} method runs on the scheduler's own thread, bounded by {@link #PURGE_TIMEOUT}. A failure is only
+     * logged: the table just stays a little longer, and the count itself does not depend on it.
+     */
+    @Scheduled(fixedDelayString = "${app.auth.login-rate-limit.purge-interval-ms:600000}",
+            initialDelayString = "${app.auth.login-rate-limit.purge-initial-delay-ms:60000}")
+    public void purgeExpiredEntries() {
+        purgeExpired()
+                .doOnNext(removed -> {
+                    if (removed > 0) {
+                        log.debug("Login rate limit: {} expired counters purged", removed);
+                    }
+                })
+                .onErrorResume(error -> {
+                    log.warn("Login rate limit purge failed: type={}", error.getClass().getSimpleName());
+                    return Mono.empty();
+                })
+                .block(PURGE_TIMEOUT);
+    }
+
+    static final java.time.Duration PURGE_TIMEOUT = java.time.Duration.ofSeconds(30);
+
+    Mono<Long> purgeExpired() {
         return databaseClient.sql(CLEANUP_EXPIRED_SQL)
                 .fetch()
-                .rowsUpdated()
-                .then();
+                .rowsUpdated();
     }
 
     private String hash(String rateKey) {

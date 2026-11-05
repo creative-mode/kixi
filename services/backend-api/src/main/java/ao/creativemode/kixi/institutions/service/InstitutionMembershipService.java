@@ -20,6 +20,9 @@ import ao.creativemode.kixi.institutions.repository.InstitutionSubjectRepository
 import ao.creativemode.kixi.institutions.repository.InstitutionTeacherRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import org.springframework.stereotype.Service;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -170,11 +173,14 @@ public class InstitutionMembershipService {
         return requireInstitution(institutionId).thenMany(
             studentLinks
                 .findAllByInstitutionIdAndDeletedAtIsNull(institutionId)
-                .map(InstitutionStudent::getUserId)
                 .collectList()
-                .flatMapMany(ids -> userRepository.findAllById(ids))
-                .filter(user -> !user.isDeleted())
-                .map(this::toStudentLink)
+                .flatMapMany(links -> {
+                    Map<Long, String> numbers = new HashMap<>();
+                    links.forEach(link -> numbers.put(link.getUserId(), link.getProcessNumber()));
+                    return userRepository.findAllById(links.stream().map(InstitutionStudent::getUserId).toList())
+                        .filter(user -> !user.isDeleted())
+                        .map(user -> toStudentLink(user, numbers.get(user.getId())));
+                })
         );
     }
 
@@ -187,7 +193,16 @@ public class InstitutionMembershipService {
                     .flatMap(link -> {
                         if (link.isDeleted()) {
                             link.restore();
-                            return studentLinks.save(link);
+                            // O número ficou livre quando a ligação foi apagada; se entretanto é de outro aluno, perde-se
+                            // (a ligação volta sem número) em vez de rebentar no índice único (kixi#512).
+                            String number = link.getProcessNumber();
+                            if (number == null) return studentLinks.save(link);
+                            return studentLinks.existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(
+                                    institutionId, number, userId)
+                                .flatMap(taken -> {
+                                    if (taken) link.setProcessNumber(null);
+                                    return studentLinks.save(link);
+                                });
                         }
                         return Mono.<InstitutionStudent>error(
                             ApiException.conflict("Student is already enrolled in this institution"));
@@ -196,6 +211,62 @@ public class InstitutionMembershipService {
                         studentLinks.save(new InstitutionStudent(institutionId, userId))))
             ))
             .then();
+    }
+
+    /** O limite do contrato v1 do motor de pautas (alunos[].processo). */
+    public static final int PROCESS_NUMBER_MAX = 30;
+    private static final Pattern PROCESS_NUMBER = Pattern.compile("^[\\p{L}\\p{N}][\\p{L}\\p{N} ./_-]*$");
+
+    /**
+     * Normaliza o número de processo: aparado; vazio é "sem número" (nulo). Letras, dígitos, espaço e {@code . / _ -},
+     * até {@value #PROCESS_NUMBER_MAX} caracteres: o que se imprime numa pauta, sem caracteres de controlo.
+     */
+    public static String normalizeProcessNumber(String raw) {
+        if (raw == null) return null;
+        String value = raw.strip();
+        if (value.isEmpty()) return null;
+        if (value.length() > PROCESS_NUMBER_MAX) {
+            throw ApiException.badRequest("O número de processo tem no máximo " + PROCESS_NUMBER_MAX + " caracteres.");
+        }
+        if (!PROCESS_NUMBER.matcher(value).matches()) {
+            throw ApiException.badRequest("O número de processo só pode ter letras, algarismos, espaço e . / _ -");
+        }
+        return value;
+    }
+
+    /**
+     * Define (ou apaga) o número de processo do aluno nesta escola. Só o administrador (SecurityConfig); o aluno nunca
+     * o edita. Se o aluno ainda não tem ligação à escola (entrou por código de turma), a ligação cria-se aqui: o número
+     * é dele nessa escola. Único por escola entre os alunos ativos (kixi#512).
+     */
+    public Mono<StudentLinkResponse> setProcessNumber(Long institutionId, Long userId, String rawNumber) {
+        String number;
+        try {
+            number = normalizeProcessNumber(rawNumber);
+        } catch (ApiException error) {
+            return Mono.error(error);
+        }
+        return requireInstitution(institutionId)
+            .then(Mono.defer(() -> userRepository.findByIdAndDeletedAtIsNull(userId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Student not found")))))
+            .flatMap(user -> {
+                Mono<Void> unique = number == null ? Mono.empty()
+                    : studentLinks.existsByInstitutionIdAndProcessNumberAndUserIdNotAndDeletedAtIsNull(institutionId, number, userId)
+                        .flatMap(taken -> taken
+                            ? Mono.<Void>error(ApiException.conflict("O número de processo " + number + " já pertence a outro aluno desta escola."))
+                            : Mono.<Void>empty());
+                return unique.then(Mono.defer(() -> studentLinks.findFirstByInstitutionIdAndUserId(institutionId, userId)
+                    .switchIfEmpty(Mono.defer(() -> Mono.just(new InstitutionStudent(institutionId, userId))))
+                    .flatMap(link -> {
+                        if (link.isDeleted()) link.restore();
+                        link.setProcessNumber(number);
+                        return studentLinks.save(link);
+                    })
+                    // A corrida entre dois pedidos apanha-se no índice único.
+                    .onErrorMap(org.springframework.dao.DataIntegrityViolationException.class,
+                        e -> ApiException.conflict("O número de processo já pertence a outro aluno desta escola."))
+                    .map(link -> toStudentLink(user, link.getProcessNumber()))));
+            });
     }
 
     public Mono<Void> removeStudent(Long institutionId, Long userId) {
@@ -256,7 +327,7 @@ public class InstitutionMembershipService {
             teacher.getId(), teacher.getFirstName(), teacher.getLastName(), teacher.getEmail(), teacher.hasAccess());
     }
 
-    private StudentLinkResponse toStudentLink(User user) {
-        return new StudentLinkResponse(user.getId(), user.getAccountId(), user.getFirstName(), user.getLastName());
+    private StudentLinkResponse toStudentLink(User user, String processNumber) {
+        return new StudentLinkResponse(user.getId(), user.getAccountId(), user.getFirstName(), user.getLastName(), processNumber);
     }
 }
