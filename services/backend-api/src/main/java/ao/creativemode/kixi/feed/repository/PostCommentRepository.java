@@ -27,6 +27,14 @@ public interface PostCommentRepository extends ReactiveCrudRepository<PostCommen
      */
     Mono<PostComment> findByIdAndPostIdAndDeletedAtIsNull(Long id, Long postId);
 
+    /** How many of the author's answers were accepted (the «Mentor da turma» count). */
+    @org.springframework.data.r2dbc.repository.Query(
+        "SELECT COUNT(*) FROM post_comments WHERE author_account_id = :accountId AND is_accepted = TRUE AND deleted_at IS NULL")
+    Mono<Long> countAcceptedBy(Long accountId);
+
+    /** Every live comment of the post, hidden or not (the accepted-answer switch looks at all of them). */
+    Flux<PostComment> findByPostIdAndDeletedAtIsNull(Long postId);
+
     Flux<PostComment> findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(Long postId);
 
     /**

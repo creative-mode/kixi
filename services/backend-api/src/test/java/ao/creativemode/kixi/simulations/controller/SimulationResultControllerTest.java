@@ -80,6 +80,12 @@ class SimulationResultControllerTest {
     private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
+    private ao.creativemode.kixi.simulations.service.QuestionFeedbackService questionFeedbackService;
+
+    @MockBean
+    private ao.creativemode.kixi.simulations.service.PracticeService practiceService;
+
+    @MockBean
     private SimulationRepository simulations;
 
     @MockBean

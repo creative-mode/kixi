@@ -63,6 +63,8 @@ public class PostService {
     private final PostFeedRepository feedRepository;
     private final PostReactionRepository reactionRepository;
     private final PostCommentRepository commentRepository;
+    /** Optional door to gamification (kixi#729); absent in tests that build the service by hand. */
+    private ao.creativemode.kixi.shared.service.AnswerAcceptedListener answerAccepted;
     private final DisplayNameReader displayNames;
     private final PostReportRepository reportRepository;
     private final FeedScopeAuthorizer scopeAuthorizer;
@@ -321,6 +323,7 @@ public class PostService {
                 comment.getAuthorAccountId(),
                 comment.getContent(),
                 comment.getIsHidden(),
+                Boolean.TRUE.equals(comment.getIsAccepted()),
                 comment.getCreatedAt(),
                 comment.getUpdatedAt(),
                 comment.getAuthorAccountId().equals(readerAccountId),
@@ -423,6 +426,45 @@ public class PostService {
                     return commentRepository.save(comment);
                 })
                 .then();
+    }
+
+    /**
+     * The post's author accepts a comment as the answer (kixi#729). Only the author may, only one comment per
+     * post is accepted at a time (accepting another takes the previous one back), and accepting the accepted
+     * one again clears it. Returns the comment as it is after the change.
+     */
+    @Transactional
+    /** Accepting someone else's answer may earn them the mentor medal; a failure here never undoes the accept. */
+    private Mono<Void> rewardMentor(PostComment saved, Long authorAccountId) {
+        if (answerAccepted == null || !Boolean.TRUE.equals(saved.getIsAccepted())
+                || saved.getAuthorAccountId().equals(authorAccountId)) {
+            return Mono.empty();
+        }
+        return commentRepository.countAcceptedBy(saved.getAuthorAccountId())
+                .flatMap(total -> answerAccepted.answerAccepted(saved.getAuthorAccountId(), total))
+                .onErrorResume(error -> Mono.empty());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAnswerAcceptedListener(ao.creativemode.kixi.shared.service.AnswerAcceptedListener listener) {
+        this.answerAccepted = listener;
+    }
+
+    public Mono<PostCommentResponse> acceptComment(Long postId, Long commentId, Long accountId) {
+        return postRepository.findByIdAndDeletedAtIsNull(postId)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")))
+                .flatMap(post -> post.getAuthorAccountId().equals(accountId)
+                        ? requireCommentTarget(postId, commentId)
+                        : Mono.<PostComment>error(ApiException.forbidden("Only the author can accept an answer")))
+                .flatMap(target -> {
+                    boolean accept = !Boolean.TRUE.equals(target.getIsAccepted());
+                    return commentRepository.findByPostIdAndDeletedAtIsNull(postId)
+                            .filter(c -> Boolean.TRUE.equals(c.getIsAccepted()) && !c.getId().equals(target.getId()))
+                            .flatMap(c -> { c.setIsAccepted(false); return commentRepository.save(c); })
+                            .then(Mono.defer(() -> { target.setIsAccepted(accept); return commentRepository.save(target); }))
+                            .flatMap(saved -> rewardMentor(saved, accountId).thenReturn(saved));
+                })
+                .flatMap(saved -> toCommentResponse(saved, accountId));
     }
 
     /** The counterpart of {@link #hideComment}: a comment taken down can be put back. */

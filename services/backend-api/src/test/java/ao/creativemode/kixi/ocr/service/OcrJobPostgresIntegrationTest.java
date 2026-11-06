@@ -32,6 +32,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
     "spring.r2dbc.pool.max-size=2",
     "spring.r2dbc.pool.initial-size=0",
     "app.ocr.jobs.poll-interval-ms=86400000",
+    "app.ocr.jobs.initial-delay-ms=86400000",
     "app.ocr.jobs.cleanup-interval-ms=86400000",
     "app.simulations.expiry-poll-ms=86400000",
     "app.simulations.expiry-enabled=false",
