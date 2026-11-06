@@ -105,7 +105,7 @@ class PostControllerHttpTest {
     @Test
     void readsTheConversationOfAPost() {
         when(service.listComments(9L, 42L, 1, 20)).thenReturn(Flux.just(
-                new PostCommentResponse(3L, 9L, 42L, "A comment", false,
+                new PostCommentResponse(3L, 9L, 42L, "A comment", false, false,
                         LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg")));
 
         client.mutateWith(studentJwt()).get()
@@ -138,7 +138,7 @@ class PostControllerHttpTest {
         PostRequest postRequest = new PostRequest(PostType.TOPIC, 10L, "Title", "A useful topic", null);
         when(service.createPost(42L, postRequest)).thenReturn(Mono.just(post(9L)));
         when(service.addComment(9L, 42L, new PostCommentRequest("A comment")))
-                .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false,
+                .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false, false,
                         LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg")));
         when(service.toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE)))
                 .thenReturn(Mono.just(new PostReactionToggleResponse(true)));

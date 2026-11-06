@@ -28,7 +28,8 @@ public class OcrJobWorker {
         this.jobs = jobs;
     }
 
-    @Scheduled(fixedDelayString = "${app.ocr.jobs.poll-interval-ms:1000}")
+    @Scheduled(fixedDelayString = "${app.ocr.jobs.poll-interval-ms:1000}",
+               initialDelayString = "${app.ocr.jobs.initial-delay-ms:0}")
     public void poll() {
         if (!polling.compareAndSet(false, true)) return;
         UUID activeJob = active.keySet().stream().findFirst().orElse(null);

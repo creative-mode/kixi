@@ -444,7 +444,8 @@ public class SimulationService {
                         simulation.getStatus(),
                         simulation.getCreatedAt(),
                         simulation.getUpdatedAt(),
-                        simulation.getDeletedAt()
+                        simulation.getDeletedAt(),
+                        simulation.selectedQuestionIdSet() == null ? null : java.util.List.copyOf(simulation.selectedQuestionIdSet())
                     );
     }
 

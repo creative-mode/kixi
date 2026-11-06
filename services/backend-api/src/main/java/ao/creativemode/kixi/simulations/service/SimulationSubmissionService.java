@@ -162,7 +162,7 @@ public class SimulationSubmissionService {
 
     private Mono<Simulation> correct(Simulation simulation) {
         return Mono.zip(
-                questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).filter(Question::isAnswerable).collectList(),
+                questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList().map(all -> QuestionSelection.answerable(simulation, all)),
                 answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId())).collectList(),
                 statementOrDefault(simulation.getStatementId()))
             .flatMap(tuple -> correctQuestions(simulation, tuple.getT1(), tuple.getT2(), tuple.getT3().getSubjectId()));
@@ -380,7 +380,7 @@ public class SimulationSubmissionService {
                             .then(refreshPublishedCard(simulationId, score, pendingReviewCount));
                 }
                 return Mono.zip(
-                        questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList(),
+                        questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId()).collectList().map(all -> QuestionSelection.answerable(simulation, all)),
                         statementOrDefault(simulation.getStatementId()))
                     .flatMap(context -> simulations.save(simulation).flatMap(saved -> {
                         double maximumScore = context.getT1().stream().filter(question -> question.getMaxScore() != null)

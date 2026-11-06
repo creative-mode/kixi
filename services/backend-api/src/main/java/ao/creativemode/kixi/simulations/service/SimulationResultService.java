@@ -110,7 +110,8 @@ public class SimulationResultService {
         // whole list to read the parent's text, and answer only for what can be answered.
         return Mono.zip(
             questions.findAllByStatementIdAndDeletedAtIsNull(simulation.getStatementId())
-                .collectList(),
+                .collectList()
+                .map(all -> QuestionSelection.visible(simulation, all)),
             answers.findAllBySimulationIdInAndDeletedAtIsNull(List.of(simulation.getId()))
                 .collectList()
         )
