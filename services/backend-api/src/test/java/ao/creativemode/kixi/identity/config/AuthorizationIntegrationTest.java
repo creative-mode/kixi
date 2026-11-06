@@ -91,6 +91,9 @@ class AuthorizationIntegrationTest {
     private SimulationSubmissionService simulationSubmissionService;
 
     @MockBean
+    private ao.creativemode.kixi.simulations.service.QuestionFeedbackService questionFeedbackService;
+
+    @MockBean
     private SimulationAnswerService simulationAnswerService;
 
     @MockBean
