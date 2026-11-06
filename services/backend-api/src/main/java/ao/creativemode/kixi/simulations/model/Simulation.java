@@ -42,6 +42,10 @@ public class Simulation {
     @Column("status")
     private SimulationStatus status;
 
+    /** Ids das questões de um treino montado, em CSV; null numa simulação normal (todas as questões). */
+    @Column("selected_question_ids")
+    private String selectedQuestionIds;
+
     @Column("created_at")
     private LocalDateTime createdAt;
 
@@ -50,6 +54,26 @@ public class Simulation {
 
     @Column("deleted_at")
     private LocalDateTime deletedAt;
+
+    public String getSelectedQuestionIds() {
+        return selectedQuestionIds;
+    }
+
+    public void setSelectedQuestionIds(String selectedQuestionIds) {
+        this.selectedQuestionIds = selectedQuestionIds;
+    }
+
+    /** As questões escolhidas num treino montado, ou null quando a simulação usa o enunciado todo. */
+    public java.util.Set<Long> selectedQuestionIdSet() {
+        if (selectedQuestionIds == null || selectedQuestionIds.isBlank()) {
+            return null;
+        }
+        java.util.Set<Long> ids = new java.util.LinkedHashSet<>();
+        for (String part : selectedQuestionIds.split(",")) {
+            if (!part.isBlank()) ids.add(Long.valueOf(part.trim()));
+        }
+        return ids;
+    }
 
     public Simulation() {
         this.createdAt = LocalDateTime.now();
