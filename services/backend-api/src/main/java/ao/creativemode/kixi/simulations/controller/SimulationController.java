@@ -10,6 +10,7 @@ import ao.creativemode.kixi.simulations.dto.simulation.SimulationResponse;
 import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultResponse;
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
+import ao.creativemode.kixi.simulations.service.QuestionFeedbackService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -26,17 +27,20 @@ public class SimulationController {
     private final SimulationResultService resultService;
     private final CurrentAccountService currentAccountService;
     private final SimulationSubmissionService submissionService;
+    private final QuestionFeedbackService feedbackService;
 
     public SimulationController(
             SimulationService service,
             SimulationResultService resultService,
             CurrentAccountService currentAccountService,
-            SimulationSubmissionService submissionService
+            SimulationSubmissionService submissionService,
+            QuestionFeedbackService feedbackService
     ) {
         this.service = service;
         this.resultService = resultService;
         this.currentAccountService = currentAccountService;
         this.submissionService = submissionService;
+        this.feedbackService = feedbackService;
     }
 
     /**
@@ -96,6 +100,18 @@ public class SimulationController {
     public Mono<ResponseEntity<SimulationResultResponse>> findResult(@PathVariable Long id) {
         return authorizedContext().flatMap(context -> authorized(id, context)
                 .then(resultService.findResult(id, context.accountId(), context.admin() || context.teacher())))
+                .map(ResponseEntity::ok);
+    }
+
+    /** Correção de uma questão no treino (kixi#729): só simulações livres do próprio aluno, ainda em curso. */
+    @PostMapping("/{id}/questions/{questionId}/check")
+    public Mono<ResponseEntity<QuestionFeedbackService.Feedback>> check(
+            @PathVariable Long id,
+            @PathVariable Long questionId,
+            @RequestBody(required = false) java.util.Map<String, Long> body) {
+        Long selected = body == null ? null : body.get("selectedOptionId");
+        return authorizedContext().flatMap(context -> authorized(id, context)
+                .then(feedbackService.check(id, questionId, selected, context.accountId())))
                 .map(ResponseEntity::ok);
     }
 
