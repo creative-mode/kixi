@@ -34,6 +34,11 @@ public class PostComment {
     @Column("is_hidden")
     private Boolean isHidden;
 
+    /** A resposta que o autor da publicação aceitou (no máximo uma por publicação). */
+    @Column("is_accepted")
+    @Builder.Default
+    private Boolean isAccepted = false;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;

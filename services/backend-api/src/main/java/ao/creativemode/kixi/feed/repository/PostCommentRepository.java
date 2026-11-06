@@ -27,6 +27,9 @@ public interface PostCommentRepository extends ReactiveCrudRepository<PostCommen
      */
     Mono<PostComment> findByIdAndPostIdAndDeletedAtIsNull(Long id, Long postId);
 
+    /** Every live comment of the post, hidden or not (the accepted-answer switch looks at all of them). */
+    Flux<PostComment> findByPostIdAndDeletedAtIsNull(Long postId);
+
     Flux<PostComment> findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(Long postId);
 
     /**
