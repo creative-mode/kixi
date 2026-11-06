@@ -20,10 +20,13 @@ import reactor.core.publisher.Mono;
 
 /** Applies server-calculated study rewards and exposes the signed-in user's progress. */
 @Service
-public class GamificationService {
+public class GamificationService implements ao.creativemode.kixi.shared.service.AnswerAcceptedListener {
     private static final String FIRST_SIMULATION = "FIRST_SIMULATION";
     private static final String STREAK_30_DAYS = "STREAK_30_DAYS";
     private static final String TOPIC_MASTERED = "TOPIC_MASTERED";
+    private static final String MENTOR = "MENTOR";
+    /** Respostas aceites precisas para a medalha «Mentor da turma». */
+    static final long MENTOR_THRESHOLD = 3;
 
     private final GamificationRepository stats;
     private final BadgeRepository badges;
@@ -71,6 +74,13 @@ public class GamificationService {
                         return stats.save(userStats).then(unlockAchievements(userStats, accountId,
                                 previousAward.isEmpty(), subjectId, now));
                     }))));
+    }
+
+    @Override
+    public Mono<Void> answerAccepted(Long answererAccountId, long totalAccepted) {
+        return totalAccepted >= MENTOR_THRESHOLD
+            ? unlock(answererAccountId, MENTOR, null, LocalDateTime.now(clock))
+            : Mono.empty();
     }
 
     public Mono<UserStatsResponse> getStats(Long accountId) {

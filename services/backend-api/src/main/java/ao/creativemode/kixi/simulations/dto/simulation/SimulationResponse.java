@@ -28,6 +28,8 @@ public record SimulationResponse(
         SimulationStatus status,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        LocalDateTime deletedAt
+        LocalDateTime deletedAt,
+        /** Só num treino montado: as questões escolhidas. Ausente numa simulação normal. */
+        java.util.List<Long> selectedQuestionIds
 ) {
 }

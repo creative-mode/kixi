@@ -149,6 +149,13 @@ public class PostController {
                 .flatMap(tuple -> postService.hideComment(postId, commentId, tuple.getT1(), tuple.getT2()));
     }
 
+    /** The post's author accepts (or un-accepts) a comment as the answer (kixi#729). */
+    @PatchMapping("/{postId}/comments/{commentId}/accept")
+    public Mono<PostCommentResponse> acceptComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        return current.requiredAccountId()
+                .flatMap(accountId -> postService.acceptComment(postId, commentId, accountId));
+    }
+
     /** The counterpart of {@link #hideComment}: a comment taken down can be shown again. */
     @PatchMapping("/{postId}/comments/{commentId}/unhide")
     @ResponseStatus(HttpStatus.NO_CONTENT)
