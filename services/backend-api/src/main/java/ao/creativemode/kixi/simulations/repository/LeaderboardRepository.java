@@ -219,6 +219,7 @@ public class LeaderboardRepository {
                           FROM statements st
                          WHERE st.id = :statementId
                            AND st.deleted_at IS NULL
+                           AND st.practice_owner_account_id IS NULL
                         """)
                 .bind("statementId", statementId)
                 .map((row, metadata) -> ((Number) row.get("total")).longValue() > 0)
@@ -416,6 +417,8 @@ public class LeaderboardRepository {
                 // A statement that was taken down stops counting the moment it is taken
                 // down, for the same reason StatementCatalogRepository hides it from the catalog.
                 "st.deleted_at IS NULL",
+                // O enunciado virtual de um treino montado (kixi#729) nunca entra no ranking.
+                "st.practice_owner_account_id IS NULL",
                 "s.status = 'FINISHED'",
                 "s.final_score IS NOT NULL",
                 // A score without a scale cannot be turned into a percentage, and comparing

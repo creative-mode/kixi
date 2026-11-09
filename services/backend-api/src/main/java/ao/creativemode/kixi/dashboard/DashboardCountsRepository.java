@@ -72,7 +72,9 @@ public class DashboardCountsRepository {
     }
 
     private static String active(String table) {
-        return "SELECT COUNT(*) FROM " + table + " WHERE deleted_at IS NULL";
+        // Os enunciados virtuais dos treinos dos alunos (kixi#729) não contam como enunciados.
+        return "SELECT COUNT(*) FROM " + table + " WHERE deleted_at IS NULL"
+                + ("statements".equals(table) ? " AND practice_owner_account_id IS NULL" : "");
     }
 
     /**

@@ -99,6 +99,19 @@ public class StatementService {
     }
 
     /**
+     * O enunciado virtual de um treino (kixi#729) de que {@code accountId} é dono; vazio para qualquer outra conta
+     * (inclusive o administrador), que o vê como «não existe».
+     */
+    public Mono<Statement> findOwnPractice(Long id, Long accountId) {
+        return statementRepository.findPracticeByIdAndOwner(id, accountId);
+    }
+
+    /** O treino do próprio aluno com as suas questões e opções; vazio se não for dele. */
+    public Mono<StatementWithQuestions> findOwnPracticeWithQuestions(Long id, Long accountId) {
+        return findByIdWithQuestions(findOwnPractice(id, accountId));
+    }
+
+    /**
      * Find a statement with its questions.
      */
     public Mono<StatementWithQuestions> findByIdWithQuestions(Long id) {
