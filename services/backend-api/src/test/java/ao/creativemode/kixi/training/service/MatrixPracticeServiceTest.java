@@ -45,13 +45,14 @@ class MatrixPracticeServiceTest {
     private static final long ROOM_STATEMENT = 500L;
 
     private final TrainingPlanService plans = mock(TrainingPlanService.class);
+    private final TrainingPoolReader pool = mock(TrainingPoolReader.class);
     private final StatementRepository statements = mock(StatementRepository.class);
     private final QuestionRepository questions = mock(QuestionRepository.class);
     private final QuestionOptionRepository options = mock(QuestionOptionRepository.class);
     private final QuestionImageRepository images = mock(QuestionImageRepository.class);
     private final SimulationService simulations = mock(SimulationService.class);
     private final MatrixPracticeService service =
-            new MatrixPracticeService(plans, statements, questions, options, images, simulations, new Random(1));
+            new MatrixPracticeService(plans, pool, statements, questions, options, images, simulations, new Random(1));
 
     private final List<Question> savedQuestions = new ArrayList<>();
     private final List<QuestionOption> savedOptions = new ArrayList<>();
@@ -86,6 +87,7 @@ class MatrixPracticeServiceTest {
             savedImages.add(call.getArgument(0));
             return Mono.just(call.getArgument(0));
         });
+        when(pool.openPractices(eq(STUDENT), eq(ROOM))).thenReturn(Mono.just(0L));
         when(options.findAllByQuestionIdAndDeletedAtIsNull(anyLong())).thenReturn(Flux.empty());
         when(images.findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(anyLong())).thenReturn(Flux.empty());
         when(simulations.createForPractice(eq(STUDENT), eq(7000L), anyString()))
@@ -156,6 +158,7 @@ class MatrixPracticeServiceTest {
         verify(statements).save(statement.capture());
         Statement virtual = statement.getValue();
         assertThat(virtual.getPracticeOwnerAccountId()).isEqualTo(STUDENT);
+        assertThat(virtual.getPracticeExamRoomId()).isEqualTo(ROOM);
         assertThat(virtual.getCreatedBy()).isEqualTo(STUDENT);
         assertThat(virtual.getVisible()).isFalse();
         assertThat(virtual.getSource()).isEqualTo("practice");
@@ -257,7 +260,49 @@ class MatrixPracticeServiceTest {
         assertThat(itemClone.getParentId()).isEqualTo(headerClone.getId());
         assertThat(itemClone.getLabel()).isEqualTo("a");
         assertThat(itemClone.getSourceQuestionId()).isEqualTo(301L);
-        assertThat(itemClone.getNumber()).isEqualTo(101);
+        assertThat(itemClone.getNumber()).isEqualTo(1001);
+    }
+
+    @Test
+    void moreThanAHundredQuestionsInTotalIs400BeforeAnythingIsLoaded() {
+        StepVerifier.create(service.start(STUDENT, request(null, new MatrixPracticeRequest.Item(5L, 60), new MatrixPracticeRequest.Item(6L, 41))))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(400);
+                    assertThat(error.getMessage()).contains("no máximo 100 questões").contains("101");
+                })
+                .verify();
+        verify(plans, never()).context(anyLong(), anyLong(), any());
+        verify(statements, never()).save(any());
+    }
+
+    @Test
+    void exactlyAHundredIsAccepted() {
+        context("M", List.of(row(5, 101, 77, 2024)), matrixItem(5, 100));
+        when(questions.findAllById(any(Iterable.class))).thenReturn(Flux.just(source(101, 77, 1, "short_answer", 1.0)));
+        StepVerifier.create(service.start(STUDENT, request(null, new MatrixPracticeRequest.Item(5L, 100)))).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void aStudentWithTwentyOpenPracticesOfThisMatrixIsToldToFinishOne() {
+        context("M", List.of(row(5, 101, 77, 2024)), matrixItem(5, 4));
+        when(pool.openPractices(STUDENT, ROOM)).thenReturn(Mono.just(20L));
+
+        StepVerifier.create(service.start(STUDENT, request(null, new MatrixPracticeRequest.Item(5L, 2))))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatusCode()).isEqualTo(409);
+                    assertThat(error.getMessage()).isEqualTo("Termina ou cancela um treino antes de começar outro.");
+                })
+                .verify();
+        verify(statements, never()).save(any());
+        verify(simulations, never()).createForPractice(anyLong(), anyLong(), anyString());
+    }
+
+    @Test
+    void nineteenOpenPracticesStillAllowsAnother() {
+        context("M", List.of(row(5, 101, 77, 2024)), matrixItem(5, 4));
+        when(pool.openPractices(STUDENT, ROOM)).thenReturn(Mono.just(19L));
+        when(questions.findAllById(any(Iterable.class))).thenReturn(Flux.just(source(101, 77, 1, "short_answer", 1.0)));
+        StepVerifier.create(service.start(STUDENT, request(null, new MatrixPracticeRequest.Item(5L, 2)))).expectNextCount(1).verifyComplete();
     }
 
     @Test

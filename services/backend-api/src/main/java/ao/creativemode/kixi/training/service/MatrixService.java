@@ -44,7 +44,7 @@ public class MatrixService {
         }
         MatrixValidator.Validated validated = matrix;
         return ownedRoom(roomId, accountId, admin)
-                .flatMap(room -> resolveTopics(room, validated.items())
+                .flatMap(room -> resolveTopics(room, validated.items(), accountId)
                         .flatMap(resolved -> save(room, validated, resolved, accountId)))
                 .then(Mono.defer(() -> reader.read(roomId)));
     }
@@ -91,7 +91,8 @@ public class MatrixService {
     private record Resolved(Long topicId, MatrixValidator.Item item) {}
 
     /** Cada tema passa a um id da disciplina do enunciado da sala; os que vêm por nome criam-se se faltarem. */
-    private Mono<List<Resolved>> resolveTopics(TrainingRoomReader.RoomInfo room, List<MatrixValidator.Item> items) {
+    private Mono<List<Resolved>> resolveTopics(TrainingRoomReader.RoomInfo room, List<MatrixValidator.Item> items,
+            Long accountId) {
         return Flux.fromIterable(items).concatMap(item -> {
             if (item.topicId() != null) {
                 return checkTopic(room, item).thenReturn(new Resolved(item.topicId(), item));
@@ -100,7 +101,7 @@ public class MatrixService {
                 return Mono.<Resolved>error(ApiException.badRequest(
                         "O enunciado da sala não tem disciplina: indique o tema por topicId."));
             }
-            return topics.findOrCreate(room.subjectId(), item.topicName()).map(id -> new Resolved(id, item));
+            return topics.findOrCreate(room.subjectId(), item.topicName(), accountId).map(id -> new Resolved(id, item));
         }).collectList().flatMap(resolved -> {
             Set<Long> seen = new HashSet<>();
             for (Resolved r : resolved) {
@@ -117,7 +118,10 @@ public class MatrixService {
         return db.sql("SELECT subject_id FROM subject_topics WHERE id = :id AND deleted_at IS NULL").bind("id", item.topicId())
                 .map((row, meta) -> row.get("subject_id", Long.class)).one()
                 .switchIfEmpty(Mono.error(() -> ApiException.badRequest("O tema " + item.topicId() + " não existe.")))
-                .flatMap(subject -> room.subjectId() != null && !room.subjectId().equals(subject)
+                .flatMap(subject -> room.subjectId() == null
+                        ? Mono.<Void>error(ApiException.badRequest(
+                                "O enunciado da sala não tem disciplina, por isso não se pode validar o tema " + item.topicId() + "."))
+                        : !room.subjectId().equals(subject)
                         ? Mono.<Void>error(ApiException.badRequest(
                                 "O tema " + item.topicId() + " não é da disciplina do enunciado da sala."))
                         : Mono.<Void>empty());

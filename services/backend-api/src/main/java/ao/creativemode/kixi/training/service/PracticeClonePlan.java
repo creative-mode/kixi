@@ -12,8 +12,7 @@ import java.util.Map;
  *
  * <p>As questões chegam pela ordem dos temas. Uma questão solta fica no seu lugar; as alíneas de um grupo vêm todas juntas
  * a seguir ao cabeçalho do grupo (copiado uma só vez, no sítio da primeira alínea escolhida), com o enunciado comum.
- * Renumera-se: 1, 2, 3... para as questões e grupos, e {@code grupo * 100 + k} para as alíneas, como nos enunciados
- * escritos à mão. Uma alínea cujo cabeçalho não se encontra passa a questão solta.</p>
+ * Renumera-se: 1, 2, 3... para as questões e grupos, e {@code grupo * 1000 + k} para as alíneas. Uma alínea cujo cabeçalho não se encontra passa a questão solta.</p>
  */
 public final class PracticeClonePlan {
 
@@ -57,7 +56,7 @@ public final class PracticeClonePlan {
             for (int k = 0; k < items.size(); k++) {
                 Question item = items.get(k);
                 String label = item.getLabel() != null && !item.getLabel().isBlank() ? item.getLabel() : letter(k);
-                steps.add(new Step(item, header.getId(), number * 100 + k + 1, ++order, label));
+                steps.add(new Step(item, header.getId(), number * 1000 + k + 1, ++order, label));
             }
         }
         return steps;

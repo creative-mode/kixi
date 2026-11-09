@@ -55,7 +55,8 @@ class TrainingPostgresIntegrationTest {
     private static final long PREV_D = 729005L;
     private static final long HIDDEN = 729006L;
     private static final long OTHER_SUBJECT_ST = 729007L;
-    private static final long[] STATEMENTS = {ROOM_ST, PREV_A, PREV_B, PREV_C, PREV_D, HIDDEN, OTHER_SUBJECT_ST};
+    private static final long PREV_E = 729008L;
+    private static final long[] STATEMENTS = {ROOM_ST, PREV_A, PREV_B, PREV_C, PREV_D, HIDDEN, OTHER_SUBJECT_ST, PREV_E};
     private static final String ALL_ACCOUNTS = TEACHER + "," + STUDENT + "," + OTHER_STUDENT + "," + OTHER_TEACHER + "," + ADMIN;
 
     @Autowired
@@ -123,6 +124,13 @@ class TrainingPostgresIntegrationTest {
                 + "(729002, " + PREV_C + ", " + TEACHER + ", now(), now() + interval '1 day', 60, 'DRAFT'), "
                 + "(729003, " + PREV_D + ", " + TEACHER + ", now() - interval '2 day', now() - interval '1 day', 60, 'CLOSED')");
         sql("UPDATE statements SET visible = TRUE WHERE id IN (" + PREV_C + ", " + PREV_D + ")");
+        // PREV_E é o enunciado de uma avaliação do plano do trimestre (pode ainda estar por fazer): nunca alimenta o treino
+        sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (729001, 'IT729', 'Instituição IT 729', now(), now())");
+        sql("INSERT INTO courses (id, code, name, institution_id) VALUES (729001, 'IT729', 'Curso IT 729', 729001)");
+        sql("INSERT INTO terms (id, number, name) VALUES (729001, 729, 'Trimestre IT 729')");
+        sql("INSERT INTO classes (id, code, grade, course_id, school_year_id, institution_id) VALUES (729001, 'IT729A', 10, 729001, (SELECT MIN(id) FROM school_years), 729001)");
+        sql("INSERT INTO term_plans (id, class_id, subject_id, term_id, created_by) VALUES (729001, 729001, " + SUBJECT + ", 729001, " + TEACHER + ")");
+        sql("INSERT INTO term_assessments (plan_id, kind, seq, title, planned_date, statement_id) VALUES (729001, 'P1', 1, 'P1 IT', current_date, " + PREV_E + ")");
 
         // questões: Q1..Q3 (múltipla escolha) e Q11 sobre Funções; Q4 e o item Q6 do grupo Q5 sobre Geometria
         question(1, PREV_A, 1, "multiple_choice", null);
@@ -137,7 +145,8 @@ class TrainingPostgresIntegrationTest {
         question(8, OTHER_SUBJECT_ST, 1, "multiple_choice", null);
         question(9, ROOM_ST, 1, "multiple_choice", null);
         question(10, PREV_C, 1, "multiple_choice", null);
-        for (long q : new long[] {1, 2, 3, 11, 7, 8, 9, 10}) {
+        question(12, PREV_E, 1, "multiple_choice", null);
+        for (long q : new long[] {1, 2, 3, 11, 7, 8, 9, 10, 12}) {
             sql("INSERT INTO question_options (question_id, option_label, option_text, is_correct, order_index) VALUES "
                     + "(" + (729000 + q) + ", 'A', 'certa', true, 0), (" + (729000 + q) + ", 'B', 'errada', false, 1)");
         }
@@ -150,7 +159,13 @@ class TrainingPostgresIntegrationTest {
         sql("DELETE FROM simulations WHERE account_id IN (" + ALL_ACCOUNTS + ")");
         sql("DELETE FROM statements WHERE practice_owner_account_id IN (" + ALL_ACCOUNTS + ")");
         sql("DELETE FROM exam_rooms WHERE id IN (729001, 729002, 729003)");
-        sql("DELETE FROM statements WHERE id BETWEEN 729001 AND 729007");
+        sql("DELETE FROM term_assessments WHERE plan_id = 729001");
+        sql("DELETE FROM term_plans WHERE id = 729001");
+        sql("DELETE FROM classes WHERE id = 729001");
+        sql("DELETE FROM courses WHERE id = 729001");
+        sql("DELETE FROM institutions WHERE id = 729001");
+        sql("DELETE FROM terms WHERE id = 729001");
+        sql("DELETE FROM statements WHERE id BETWEEN 729001 AND 729008");
         sql("DELETE FROM subject_topics WHERE subject_id IN (" + SUBJECT + "," + OTHER_SUBJECT_ID + ")");
         sql("DELETE FROM subjects WHERE id IN (" + SUBJECT + "," + OTHER_SUBJECT_ID + ")");
         sql("DELETE FROM user_stats WHERE account_id IN (" + ALL_ACCOUNTS + ")");
@@ -174,7 +189,7 @@ class TrainingPostgresIntegrationTest {
         put(TEACHER, "TEACHER", "/api/v1/questions/729001/topics", "{\"topicIds\":[" + foreign + "]}").expectStatus().isBadRequest();
         // a etiquetagem automática nunca sobrepõe a manual: a Q1 diz «triângulo» mas já tem tema (Funções)
         sql("UPDATE questions SET text = 'Calcule a área do triângulo' WHERE id = 729001");
-        sql("UPDATE questions SET text = 'Esboce o gráfico da função f' WHERE id IN (729003, 729011, 729007, 729009, 729010, 729008)");
+        sql("UPDATE questions SET text = 'Esboce o gráfico da função f' WHERE id IN (729003, 729011, 729007, 729009, 729010, 729008, 729012)");
         sql("UPDATE questions SET text = 'Calcule a área do triângulo' WHERE id = 729004");
         sql("UPDATE questions SET text = 'Considere o triângulo ABC.' WHERE id = 729005");
         sql("UPDATE questions SET text = 'a) Justifique.' WHERE id = 729006");
@@ -187,7 +202,7 @@ class TrainingPostgresIntegrationTest {
         assertThat(tagged.get("untagged").asInt()).isZero();
         JsonNode again = json(post(TEACHER, "TEACHER", "/api/v1/statements/" + PREV_B + "/topics/auto-tag", null).expectStatus().isOk());
         assertThat(again.get("tagged").asInt()).isZero();
-        for (long st : new long[] {HIDDEN, ROOM_ST, PREV_C, PREV_D}) {
+        for (long st : new long[] {HIDDEN, ROOM_ST, PREV_C, PREV_D, PREV_E}) {
             post(ADMIN, "ADMIN", "/api/v1/statements/" + st + "/topics/auto-tag", null).expectStatus().isOk();
         }
         // Q8 é de outra disciplina: os temas desta não a apanham
@@ -220,6 +235,14 @@ class TrainingPostgresIntegrationTest {
         // substituir: a segunda escrita troca a matriz, sem acumular
         put(TEACHER, "TEACHER", "/api/v1/exam-rooms/" + ROOM + "/matrix", body).expectStatus().isOk();
         assertThat(count("SELECT COUNT(*) FROM exam_matrix_items")).isEqualTo(2);
+        // um tema que está numa matriz não se apaga, e o nome de um tema novo tem limite
+        delete(TEACHER, "TEACHER", "/api/v1/topics/" + functions).expectStatus().isEqualTo(409);
+        put(TEACHER, "TEACHER", "/api/v1/exam-rooms/" + ROOM + "/matrix",
+                "{\"items\":[{\"topicName\":\"" + "x".repeat(201) + "\",\"questionCount\":1}]}").expectStatus().isBadRequest();
+        put(TEACHER, "TEACHER", "/api/v1/exam-rooms/" + ROOM + "/matrix",
+                "{\"items\":[{\"topicId\":" + functions + ",\"questionCount\":101}]}").expectStatus().isBadRequest();
+        put(TEACHER, "TEACHER", "/api/v1/exam-rooms/" + ROOM + "/matrix",
+                "{\"totalPoints\":10000,\"items\":[{\"topicId\":" + functions + ",\"questionCount\":1}]}").expectStatus().isBadRequest();
 
         // ── plano: só o que pode sair, e a prova real nunca ─────────────────
         get(OTHER_STUDENT, "STUDENT", "/api/v1/training/rooms/" + ROOM + "/plan").expectStatus().isNotFound();
@@ -229,7 +252,8 @@ class TrainingPostgresIntegrationTest {
         JsonNode fItem = plan.get("items").get(0);
         JsonNode gItem = plan.get("items").get(1);
         // Funções: Q1, Q2 (PREV_A), Q3 (PREV_B) e Q11 (PREV_D, sala encerrada); NUNCA Q7 (não publicada), Q8 (outra disciplina),
-        // Q9 (a própria prova) nem Q10 (sala por encerrar)
+        // Q9 (a própria prova), Q10 (sala por encerrar) nem Q12 (avaliação do plano do trimestre)
+        assertThat(count("SELECT COUNT(*) FROM question_topics WHERE question_id = 729012")).as("Q12 está etiquetada").isEqualTo(1);
         assertThat(fItem.get("topicId").asLong()).isEqualTo(functions);
         assertThat(fItem.get("available").asInt()).isEqualTo(4);
         assertThat(fItem.get("attempted").asInt()).isZero();
@@ -358,9 +382,41 @@ class TrainingPostgresIntegrationTest {
     }
 
     @Test
+    void aTeacherCannotHoldMoreThanTwentyOpenPracticesOfOneMatrix() {
+        long functions = createTopic("Funções", "função");
+        for (long q : new long[] {1, 2, 3}) {
+            put(TEACHER, "TEACHER", "/api/v1/questions/" + (729000 + q) + "/topics", "{\"topicIds\":[" + functions + "]}").expectStatus().isOk();
+        }
+        put(TEACHER, "TEACHER", "/api/v1/exam-rooms/" + ROOM + "/matrix",
+                "{\"items\":[{\"topicId\":" + functions + ",\"questionCount\":2}]}").expectStatus().isOk();
+        String request = "{\"roomId\":" + ROOM + ",\"items\":[{\"topicId\":" + functions + ",\"count\":1}]}";
+        long first = 0;
+        for (int i = 0; i < 20; i++) {
+            long id = json(post(STUDENT, "STUDENT", "/api/v1/simulations/practice/matrix", request).expectStatus().isCreated())
+                    .get("simulation").get("id").asLong();
+            if (i == 0) first = id;
+        }
+        JsonNode refused = json(post(STUDENT, "STUDENT", "/api/v1/simulations/practice/matrix", request).expectStatus().isEqualTo(409));
+        assertThat(refused.get("detail").asText()).isEqualTo("Termina ou cancela um treino antes de começar outro.");
+        // mais de 100 questões no total: 400 antes de clonar
+        post(STUDENT, "STUDENT", "/api/v1/simulations/practice/matrix",
+                "{\"roomId\":" + ROOM + ",\"items\":[{\"topicId\":" + functions + ",\"count\":100},{\"topicId\":1,\"count\":1}]}")
+                .expectStatus().isBadRequest();
+        // cancelar um treino liberta a vaga
+        put(STUDENT, "STUDENT", "/api/v1/simulations/" + first, "{\"accountId\":" + STUDENT + ",\"statementId\":"
+                + one("SELECT statement_id AS s FROM simulations WHERE id = " + first).get("s") + ",\"status\":\"CANCELLED\"}").expectStatus().isOk();
+        post(STUDENT, "STUDENT", "/api/v1/simulations/practice/matrix", request).expectStatus().isCreated();
+    }
+
+    @Test
     void topicsCanBeEditedAndSoftDeletedAndTheNameCanBeReused() {
         long id = createTopic("Funções", "função");
         put(TEACHER, "TEACHER", "/api/v1/topics/" + id, "{\"name\":\"Funções reais\",\"keywords\":\"função real\"}").expectStatus().isOk();
+        // os temas são globais: só o autor ou um administrador os altera
+        put(OTHER_TEACHER, "TEACHER", "/api/v1/topics/" + id, "{\"name\":\"Outro nome\"}").expectStatus().isForbidden();
+        delete(OTHER_TEACHER, "TEACHER", "/api/v1/topics/" + id).expectStatus().isForbidden();
+        put(ADMIN, "ADMIN", "/api/v1/topics/" + id, "{\"name\":\"Funções reais\",\"keywords\":\"função real\"}").expectStatus().isOk();
+        post(TEACHER, "TEACHER", "/api/v1/subjects/" + SUBJECT + "/topics", "{\"name\":\"" + "x".repeat(201) + "\"}").expectStatus().isBadRequest();
         long other = createTopic("Geometria", null);
         put(TEACHER, "TEACHER", "/api/v1/topics/" + other, "{\"name\":\"funcoes reais\"}").expectStatus().isEqualTo(409);
         // o mesmo nome noutra classe é outro tema

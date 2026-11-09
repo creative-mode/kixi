@@ -13,6 +13,8 @@ CREATE TABLE subject_topics (
     name        VARCHAR(200) NOT NULL,
     slug        VARCHAR(200) NOT NULL,
     keywords    TEXT,
+    -- Os temas são globais por disciplina: só o autor (ou um administrador) os altera ou apaga.
+    created_by  BIGINT       NOT NULL REFERENCES accounts (id),
     created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at  TIMESTAMP WITH TIME ZONE
 );
@@ -64,6 +66,8 @@ ALTER TABLE simulations ADD COLUMN title VARCHAR(200);
 ALTER TABLE statements ADD COLUMN practice_owner_account_id BIGINT REFERENCES accounts (id);
 CREATE INDEX idx_statements_practice_owner ON statements (practice_owner_account_id)
     WHERE practice_owner_account_id IS NOT NULL;
+-- A sala (matriz) de que o treino foi montado: serve para limitar os treinos em curso por matriz.
+ALTER TABLE statements ADD COLUMN practice_exam_room_id BIGINT REFERENCES exam_rooms (id) ON DELETE SET NULL;
 
 -- A questão de origem de uma cópia de treino: liga as respostas do aluno às questões originais.
 ALTER TABLE questions ADD COLUMN source_question_id BIGINT REFERENCES questions (id) ON DELETE SET NULL;

@@ -11,7 +11,8 @@ import reactor.core.publisher.Mono;
  * anteriores. O conjunto é fechado em SQL e nunca deixa vazar a prova real:
  * <ul>
  *   <li>só enunciados visíveis, ativos, revistos e da mesma disciplina;</li>
- *   <li>nunca o enunciado da própria sala, nem o de qualquer sala que ainda não esteja encerrada;</li>
+ *   <li>nunca o enunciado da própria sala, nem o de qualquer sala que ainda não esteja encerrada, nem o de uma avaliação
+ *       do plano do trimestre ({@code term_assessments}), que pode ainda estar por fazer;</li>
  *   <li>nunca o enunciado virtual de um treino (esses são cópias).</li>
  * </ul>
  * Para cada questão diz-se também se o aluno já a tentou (respondeu numa simulação terminada) e se já a acertou, contando
@@ -38,6 +39,7 @@ public class TrainingPoolReader {
                   LEFT JOIN school_years sy ON sy.id = st.school_year_id
                  WHERE qt.topic_id IN (:topics)
                    AND NOT EXISTS (SELECT 1 FROM exam_rooms r WHERE r.statement_id = st.id AND r.status <> 'CLOSED')
+                   AND NOT EXISTS (SELECT 1 FROM term_assessments ta WHERE ta.statement_id = st.id)
             ), mine AS (
                 SELECT COALESCE(q.source_question_id, q.id) AS original_id,
                        bool_or(a.selected_option_id IS NOT NULL OR COALESCE(btrim(a.answer_text), '') <> '') AS attempted,
@@ -60,6 +62,18 @@ public class TrainingPoolReader {
 
     public TrainingPoolReader(DatabaseClient db) {
         this.db = db;
+    }
+
+    /** Os treinos desta conta, montados desta sala, que ainda estão em curso. */
+    public Mono<Long> openPractices(Long accountId, Long roomId) {
+        return db.sql("""
+                SELECT COUNT(*) AS total
+                  FROM simulations s JOIN statements st ON st.id = s.statement_id
+                 WHERE s.account_id = :account AND s.status = 'IN_PROGRESS' AND s.deleted_at IS NULL
+                   AND st.practice_owner_account_id = :account AND st.practice_exam_room_id = :room
+                """)
+                .bind("account", accountId).bind("room", roomId)
+                .map((row, meta) -> row.get("total", Long.class)).one().defaultIfEmpty(0L);
     }
 
     public Mono<List<PoolRow>> read(Long accountId, Long subjectId, Long roomStatementId, Collection<Long> topicIds) {

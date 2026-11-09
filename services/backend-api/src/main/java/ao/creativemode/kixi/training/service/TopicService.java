@@ -12,7 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,45 +60,51 @@ public class TopicService {
     }
 
     @Transactional
-    public Mono<TopicResponse> create(Long subjectId, TopicRequest request) {
+    public Mono<TopicResponse> create(Long subjectId, TopicRequest request, Long accountId) {
         return requireSubject(subjectId).then(Mono.defer(() -> insert(subjectId, request.name().trim(), request.grade(),
-                blankToNull(request.keywords()))));
+                blankToNull(request.keywords()), accountId)));
     }
 
     /** O tema da disciplina com este nome (qualquer classe, a de «todas» primeiro), ou um novo para todas as classes. */
     @Transactional
-    public Mono<Long> findOrCreate(Long subjectId, String name) {
+    public Mono<Long> findOrCreate(Long subjectId, String name, Long accountId) {
         String slug = TopicText.slug(name);
         return db.sql("SELECT id FROM subject_topics WHERE subject_id = :subject AND slug = :slug AND deleted_at IS NULL "
                         + "ORDER BY (grade IS NULL) DESC, id LIMIT 1")
                 .bind("subject", subjectId).bind("slug", slug)
                 .map((row, meta) -> row.get("id", Long.class)).one()
-                .switchIfEmpty(Mono.defer(() -> insert(subjectId, name.trim(), null, null).map(TopicResponse::id)));
+                .switchIfEmpty(Mono.defer(() -> insert(subjectId, name.trim(), null, null, accountId).map(TopicResponse::id)));
     }
 
-    private Mono<TopicResponse> insert(Long subjectId, String name, Integer grade, String keywords) {
+    private Mono<TopicResponse> insert(Long subjectId, String name, Integer grade, String keywords, Long accountId) {
         String slug = TopicText.slug(name);
         if (slug.isEmpty()) {
             return Mono.error(ApiException.badRequest("O nome do tema tem de ter letras ou números."));
         }
-        DatabaseClient.GenericExecuteSpec spec = db.sql("INSERT INTO subject_topics (subject_id, grade, name, slug, keywords) "
-                        + "VALUES (:subject, :grade, :name, :slug, :keywords) RETURNING id")
-                .bind("subject", subjectId).bind("name", name).bind("slug", slug);
+        if (name.length() > MAX_NAME) {
+            return Mono.error(nameTooLong());
+        }
+        DatabaseClient.GenericExecuteSpec spec = db.sql("INSERT INTO subject_topics (subject_id, grade, name, slug, keywords, created_by) "
+                        + "VALUES (:subject, :grade, :name, :slug, :keywords, :by) RETURNING id")
+                .bind("subject", subjectId).bind("name", name).bind("slug", slug).bind("by", accountId);
         spec = grade == null ? spec.bindNull("grade", Integer.class) : spec.bind("grade", grade);
         spec = keywords == null ? spec.bindNull("keywords", String.class) : spec.bind("keywords", keywords);
         return spec.map((row, meta) -> row.get("id", Long.class)).one()
-                .onErrorMap(DataIntegrityViolationException.class, e -> duplicate(name))
+                .onErrorMap(DuplicateKeyException.class, e -> duplicate(name))
                 .flatMap(this::byId);
     }
 
     @Transactional
-    public Mono<TopicResponse> update(Long id, TopicRequest request) {
+    public Mono<TopicResponse> update(Long id, TopicRequest request, Long accountId, boolean admin) {
         String name = request.name().trim();
         String slug = TopicText.slug(name);
         if (slug.isEmpty()) {
             return Mono.error(ApiException.badRequest("O nome do tema tem de ter letras ou números."));
         }
-        return byId(id).flatMap(current -> {
+        if (name.length() > MAX_NAME) {
+            return Mono.error(nameTooLong());
+        }
+        return byId(id).flatMap(current -> requireAuthor(id, accountId, admin).thenReturn(current)).flatMap(current -> {
             DatabaseClient.GenericExecuteSpec spec = db.sql("UPDATE subject_topics SET name = :name, slug = :slug, "
                             + "grade = :grade, keywords = :keywords WHERE id = :id AND deleted_at IS NULL")
                     .bind("id", id).bind("name", name).bind("slug", slug);
@@ -106,16 +112,41 @@ public class TopicService {
             String keywords = blankToNull(request.keywords());
             spec = keywords == null ? spec.bindNull("keywords", String.class) : spec.bind("keywords", keywords);
             return spec.fetch().rowsUpdated()
-                    .onErrorMap(DataIntegrityViolationException.class, e -> duplicate(name))
+                    .onErrorMap(DuplicateKeyException.class, e -> duplicate(name))
                     .then(byId(id));
         });
     }
 
     /** Apaga o tema (soft delete): as etiquetas ficam, mas deixa de contar e pode ser recriado. */
     @Transactional
-    public Mono<Void> delete(Long id) {
-        return byId(id).then(db.sql("UPDATE subject_topics SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
-                .bind("id", id).fetch().rowsUpdated()).then();
+    public Mono<Void> delete(Long id, Long accountId, boolean admin) {
+        return byId(id).then(requireAuthor(id, accountId, admin))
+                .then(Mono.defer(() -> db.sql("SELECT 1 FROM exam_matrix_items WHERE topic_id = :id LIMIT 1").bind("id", id)
+                        .map((row, meta) -> 1).one().hasElement()))
+                .flatMap(inUse -> inUse
+                        ? Mono.<Long>error(ApiException.conflict(
+                                "O tema está em uso numa matriz de prova; retire-o da matriz antes de o apagar."))
+                        : db.sql("UPDATE subject_topics SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
+                                .bind("id", id).fetch().rowsUpdated())
+                .then();
+    }
+
+    /** Os temas são globais: só quem os criou, ou um administrador, os altera ou apaga. */
+    private Mono<Void> requireAuthor(Long id, Long accountId, boolean admin) {
+        if (admin) {
+            return Mono.empty();
+        }
+        return db.sql("SELECT created_by FROM subject_topics WHERE id = :id").bind("id", id)
+                .map((row, meta) -> row.get("created_by", Long.class)).one()
+                .flatMap(author -> accountId.equals(author)
+                        ? Mono.<Void>empty()
+                        : Mono.<Void>error(ApiException.forbidden("Só o autor do tema ou um administrador o pode alterar.")));
+    }
+
+    static final int MAX_NAME = 200;
+
+    private static ApiException nameTooLong() {
+        return ApiException.badRequest("O nome do tema não pode passar de " + MAX_NAME + " caracteres.");
     }
 
     private Mono<TopicResponse> byId(Long id) {

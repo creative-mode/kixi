@@ -97,6 +97,43 @@ class MatrixCsvParserTest {
     }
 
     @Test
+    void onlyAnExactLabelWithNoNumericColumnIsAHeader() {
+        // «Unidade 1: Funções» é uma linha de dados, não um cabeçalho por começar por «unidade»
+        MatrixCsvParser.Parsed data = MatrixCsvParser.parse("Unidade 1: Funções;3;8\nGeometria;2;4");
+        assertThat(data.errors()).isEmpty();
+        assertThat(data.items()).extracting(MatrixItemRequest::topicName).containsExactly("Unidade 1: Funções", "Geometria");
+        // um tema chamado «Tema» com número na 2.ª coluna também é dado
+        assertThat(MatrixCsvParser.parse("Tema;3;8").items()).hasSize(1);
+        // um rótulo com número mal escrito não se perde em silêncio
+        assertThat(MatrixCsvParser.parse("Tema;abc;8").errors()).containsExactly("Linha 1: número de questões inválido «abc»");
+        // cabeçalhos exatos, com ou sem acentos e maiúsculas
+        assertThat(MatrixCsvParser.parse("Unidade Temática;Questões;Cotação\nFunções;3;8").items()).hasSize(1);
+        assertThat(MatrixCsvParser.parse("CONTEÚDO;Itens\nFunções;3").items()).hasSize(1);
+        // cotação numa coluna 3 numérica faz da 1.ª linha uma linha de dados
+        assertThat(MatrixCsvParser.parse("Tema;x;5\nFunções;3").errors()).isNotEmpty();
+    }
+
+    @Test
+    void textThatIsNotUtf8IsRefused() {
+        MatrixCsvParser.Parsed parsed = MatrixCsvParser.parse("Fun\uFFFD\uFFFDes;3;8");
+        assertThat(parsed.items()).isEmpty();
+        assertThat(parsed.errors()).containsExactly("o ficheiro deve estar em UTF-8");
+    }
+
+    @Test
+    void aByteOrderMarkIsIgnored() {
+        assertThat(MatrixCsvParser.parse("\uFEFFTema;Questões\nFunções;3").items()).hasSize(1);
+        assertThat(MatrixCsvParser.parse("\uFEFFFunções;3").items().get(0).topicName()).isEqualTo("Funções");
+    }
+
+    @Test
+    void numbersBeyondTheLimitsAreErrors() {
+        assertThat(MatrixCsvParser.parse("Funções;101").errors()).containsExactly("Linha 1: número de questões inválido «101»");
+        assertThat(MatrixCsvParser.parse("Funções;3;10000").errors()).containsExactly("Linha 1: cotação inválida «10000»");
+        assertThat(MatrixCsvParser.parse("Funções;100;9999,99").errors()).isEmpty();
+    }
+
+    @Test
     void anEmptyFileIsAnError() {
         assertThat(MatrixCsvParser.parse("  \n ").errors()).isNotEmpty();
         assertThat(MatrixCsvParser.parse("Tema;Questões\n").errors()).containsExactly("o ficheiro não tem linhas de temas");

@@ -42,8 +42,13 @@ import reactor.core.publisher.Mono;
 public class MatrixPracticeService {
 
     static final String SOURCE = "practice";
+    /** Questões pedidas num só treino, somadas todos os temas. */
+    static final int MAX_QUESTIONS = 100;
+    /** Treinos em curso por conta e matriz. */
+    static final int MAX_OPEN_PRACTICES = 20;
 
     private final TrainingPlanService plans;
+    private final TrainingPoolReader pool;
     private final StatementRepository statements;
     private final QuestionRepository questions;
     private final QuestionOptionRepository options;
@@ -52,14 +57,17 @@ public class MatrixPracticeService {
     private final Random random;
 
     @Autowired
-    public MatrixPracticeService(TrainingPlanService plans, StatementRepository statements, QuestionRepository questions,
-            QuestionOptionRepository options, QuestionImageRepository images, SimulationService simulations) {
-        this(plans, statements, questions, options, images, simulations, new Random());
+    public MatrixPracticeService(TrainingPlanService plans, TrainingPoolReader pool, StatementRepository statements,
+            QuestionRepository questions, QuestionOptionRepository options, QuestionImageRepository images,
+            SimulationService simulations) {
+        this(plans, pool, statements, questions, options, images, simulations, new Random());
     }
 
-    MatrixPracticeService(TrainingPlanService plans, StatementRepository statements, QuestionRepository questions,
-            QuestionOptionRepository options, QuestionImageRepository images, SimulationService simulations, Random random) {
+    MatrixPracticeService(TrainingPlanService plans, TrainingPoolReader pool, StatementRepository statements,
+            QuestionRepository questions, QuestionOptionRepository options, QuestionImageRepository images,
+            SimulationService simulations, Random random) {
         this.plans = plans;
+        this.pool = pool;
         this.statements = statements;
         this.questions = questions;
         this.options = options;
@@ -76,7 +84,21 @@ public class MatrixPracticeService {
                 return Mono.error(ApiException.badRequest("O tema " + item.topicId() + " aparece repetido no pedido."));
             }
         }
-        return plans.context(request.roomId(), accountId, requestedTopics).flatMap(ctx -> {
+        int requestedTotal = request.items().stream().mapToInt(MatrixPracticeRequest.Item::count).sum();
+        if (requestedTotal > MAX_QUESTIONS) {
+            return Mono.error(ApiException.badRequest("Um treino tem no máximo " + MAX_QUESTIONS
+                    + " questões no total (pediu " + requestedTotal + ")."));
+        }
+        return plans.context(request.roomId(), accountId, requestedTopics).flatMap(ctx -> pool
+                .openPractices(accountId, ctx.room().roomId()).defaultIfEmpty(0L).flatMap(open -> open >= MAX_OPEN_PRACTICES
+                        ? Mono.<MatrixPracticeResponse>error(ApiException.conflict(
+                                "Termina ou cancela um treino antes de começar outro."))
+                        : build(accountId, request, ctx, requestedTopics)));
+    }
+
+    private Mono<MatrixPracticeResponse> build(Long accountId, MatrixPracticeRequest request, TrainingPlanService.Context ctx,
+            Set<Long> requestedTopics) {
+        {
             Set<Long> inMatrix = ctx.matrix().items().stream().map(MatrixResponse.Item::topicId).collect(Collectors.toSet());
             for (Long topic : requestedTopics) {
                 if (!inMatrix.contains(topic)) {
@@ -84,14 +106,14 @@ public class MatrixPracticeService {
                             "O tema " + topic + " não faz parte da matriz desta prova."));
                 }
             }
-            Map<Long, List<PracticeAllocator.Candidate>> pool = new HashMap<>();
+            Map<Long, List<PracticeAllocator.Candidate>> candidates = new HashMap<>();
             for (TrainingPoolReader.PoolRow row : ctx.pool()) {
-                pool.computeIfAbsent(row.topicId(), key -> new ArrayList<>()).add(new PracticeAllocator.Candidate(
+                candidates.computeIfAbsent(row.topicId(), key -> new ArrayList<>()).add(new PracticeAllocator.Candidate(
                         row.questionId(), row.statementId(), row.year(), row.attempted(), row.correct()));
             }
             List<PracticeAllocator.Request> asked = request.items().stream()
                     .map(item -> new PracticeAllocator.Request(item.topicId(), item.count())).toList();
-            List<PracticeAllocator.Allocation> allocation = PracticeAllocator.allocate(asked, pool, random);
+            List<PracticeAllocator.Allocation> allocation = PracticeAllocator.allocate(asked, candidates, random);
             List<Long> chosen = allocation.stream().flatMap(a -> a.questionIds().stream()).toList();
             if (chosen.isEmpty()) {
                 return Mono.<MatrixPracticeResponse>error(ApiException.badRequest(
@@ -102,12 +124,12 @@ public class MatrixPracticeService {
             String title = "Treino · " + (name == null ? "prova" : name);
             Integer duration = request.durationMinutes() != null ? request.durationMinutes()
                     : proportionalDuration(ctx.room().durationMinutes(), chosen.size(), matrixTotal);
-            return virtualStatement(accountId, ctx.room().statementId(), title, duration, chosen)
+            return virtualStatement(accountId, ctx.room().statementId(), ctx.room().roomId(), title, duration, chosen)
                     .flatMap(statement -> simulations.createForPractice(accountId, statement.getId(), shorten(title, 200)))
                     .map(simulation -> new MatrixPracticeResponse(simulation, allocation.stream()
                             .map(a -> new MatrixPracticeResponse.Allocation(a.topicId(), a.requested(), a.provided()))
                             .toList()));
-        });
+        }
     }
 
     /** Sem duração pedida: a da prova, na proporção das questões do treino face às da matriz (e nunca mais do que ela). */
@@ -122,8 +144,8 @@ public class MatrixPracticeService {
         return (int) Math.max(1, Math.min(roomMinutes, minutes));
     }
 
-    private Mono<Statement> virtualStatement(Long accountId, Long roomStatementId, String title, Integer duration,
-            List<Long> chosen) {
+    private Mono<Statement> virtualStatement(Long accountId, Long roomStatementId, Long roomId, String title,
+            Integer duration, List<Long> chosen) {
         return statements.findAnyByIdAndDeletedAtIsNull(roomStatementId)
                 .switchIfEmpty(Mono.error(() -> ApiException.notFound("Enunciado da sala não encontrado.")))
                 .flatMap(origin -> loadSources(chosen).flatMap(sources -> {
@@ -140,6 +162,7 @@ public class MatrixPracticeService {
                     statement.setInstitutionId(origin.getInstitutionId());
                     statement.setCreatedBy(accountId);
                     statement.setPracticeOwnerAccountId(accountId);
+                    statement.setPracticeExamRoomId(roomId);
                     statement.setVisible(false);
                     statement.setNeedsReview(false);
                     statement.setSource(SOURCE);

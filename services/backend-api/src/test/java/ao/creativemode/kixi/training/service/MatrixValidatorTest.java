@@ -84,6 +84,21 @@ class MatrixValidatorTest {
     }
 
     @Test
+    void limitsOnPointsQuestionsAndNames() {
+        assertThatThrownBy(() -> MatrixValidator.validate(matrix(10000.0, item(1L, null, 1, null, null))))
+                .hasMessageContaining("total de pontos da prova não pode passar de 9999,99");
+        MatrixValidator.validate(matrix(9999.99, item(1L, null, 1, 9999.99, null)));
+        assertThatThrownBy(() -> MatrixValidator.validate(matrix(null, item(1L, null, 1, 10000.0, null))))
+                .hasMessageContaining("cotação do tema").hasMessageContaining("não pode passar de 9999,99");
+        assertThatThrownBy(() -> MatrixValidator.validate(matrix(null, item(1L, null, 101, null, null))))
+                .hasMessageContaining("não pode ter mais de 100 questões");
+        MatrixValidator.validate(matrix(null, item(1L, null, 100, null, null)));
+        assertThatThrownBy(() -> MatrixValidator.validate(matrix(null, item(null, "x".repeat(201), 1, null, null))))
+                .isInstanceOf(ApiException.class).hasMessageContaining("não pode passar de 200 caracteres");
+        MatrixValidator.validate(matrix(null, item(null, "x".repeat(200), 1, null, null)));
+    }
+
+    @Test
     void levelsParseInPortugueseAndEnglishWithoutAccents() {
         assertThat(CognitiveLevel.parse("Compreensão")).contains(CognitiveLevel.COMPREHENSION);
         assertThat(CognitiveLevel.parse("analise")).contains(CognitiveLevel.ANALYSIS);

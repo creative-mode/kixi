@@ -18,6 +18,10 @@ public final class MatrixValidator {
 
     static final BigDecimal DEFAULT_TOTAL = BigDecimal.valueOf(20);
     static final BigDecimal TOLERANCE = new BigDecimal("0.01");
+    /** O que cabe em NUMERIC(6,2). */
+    static final BigDecimal MAX_POINTS = new BigDecimal("9999.99");
+    static final int MAX_QUESTIONS_PER_TOPIC = 100;
+    static final int MAX_TOPIC_NAME = 200;
 
     private MatrixValidator() {}
 
@@ -43,6 +47,9 @@ public final class MatrixValidator {
         BigDecimal total = request.totalPoints() == null ? DEFAULT_TOTAL : decimal(request.totalPoints());
         if (total.signum() <= 0) {
             throw ApiException.badRequest("O total de pontos da prova tem de ser positivo.");
+        }
+        if (total.compareTo(MAX_POINTS) > 0) {
+            throw ApiException.badRequest("O total de pontos da prova não pode passar de " + format(MAX_POINTS) + ".");
         }
         List<Item> items = new ArrayList<>();
         Set<String> seen = new HashSet<>();
@@ -70,14 +77,23 @@ public final class MatrixValidator {
             throw ApiException.badRequest("Cada tema da matriz precisa de um topicId ou de um topicName.");
         }
         String label = hasName ? raw.topicName().trim() : "#" + raw.topicId();
+        if (label.length() > MAX_TOPIC_NAME) {
+            throw ApiException.badRequest("O nome do tema não pode passar de " + MAX_TOPIC_NAME + " caracteres.");
+        }
         if (raw.questionCount() == null || raw.questionCount() < 1) {
             throw ApiException.badRequest("O tema «" + label + "» precisa de pelo menos uma questão.");
+        }
+        if (raw.questionCount() > MAX_QUESTIONS_PER_TOPIC) {
+            throw ApiException.badRequest("O tema «" + label + "» não pode ter mais de " + MAX_QUESTIONS_PER_TOPIC + " questões.");
         }
         BigDecimal points = null;
         if (raw.points() != null) {
             points = decimal(raw.points());
             if (points.signum() < 0) {
                 throw ApiException.badRequest("A cotação do tema «" + label + "» não pode ser negativa.");
+            }
+            if (points.compareTo(MAX_POINTS) > 0) {
+                throw ApiException.badRequest("A cotação do tema «" + label + "» não pode passar de " + format(MAX_POINTS) + ".");
             }
         }
         CognitiveLevel level = null;

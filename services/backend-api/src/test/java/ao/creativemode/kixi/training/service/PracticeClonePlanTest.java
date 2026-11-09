@@ -49,7 +49,7 @@ class PracticeClonePlanTest {
         List<PracticeClonePlan.Step> steps = PracticeClonePlan.build(List.of(303L, 9L, 301L), sources(header, a, b, c, loose));
 
         assertThat(steps).extracting(s -> s.source().getId()).containsExactly(100L, 301L, 303L, 9L);
-        assertThat(steps).extracting(PracticeClonePlan.Step::number).containsExactly(1, 101, 102, 2);
+        assertThat(steps).extracting(PracticeClonePlan.Step::number).containsExactly(1, 1001, 1002, 2);
         assertThat(steps).extracting(PracticeClonePlan.Step::label).containsExactly(null, "a", "c", null);
         assertThat(steps).extracting(PracticeClonePlan.Step::orderIndex).containsExactly(1, 2, 3, 4);
         assertThat(steps.get(1).parentSourceId()).isEqualTo(100L);

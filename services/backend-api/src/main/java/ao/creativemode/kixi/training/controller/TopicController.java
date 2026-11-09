@@ -43,18 +43,23 @@ public class TopicController {
 
     @PostMapping("/subjects/{subjectId}/topics")
     public Mono<ResponseEntity<TopicResponse>> create(@PathVariable Long subjectId, @Valid @RequestBody TopicRequest request) {
-        return requireStaff().then(Mono.defer(() -> topics.create(subjectId, request)))
+        return requireStaff().flatMap(admin -> current.requiredAccountId()
+                        .flatMap(account -> topics.create(subjectId, request, account)))
                 .map(topic -> ResponseEntity.status(HttpStatus.CREATED).body(topic));
     }
 
     @PutMapping("/topics/{id}")
     public Mono<ResponseEntity<TopicResponse>> update(@PathVariable Long id, @Valid @RequestBody TopicRequest request) {
-        return requireStaff().then(Mono.defer(() -> topics.update(id, request))).map(ResponseEntity::ok);
+        return requireStaff().flatMap(admin -> current.requiredAccountId()
+                        .flatMap(account -> topics.update(id, request, account, admin)))
+                .map(ResponseEntity::ok);
     }
 
     @DeleteMapping("/topics/{id}")
     public Mono<ResponseEntity<Void>> delete(@PathVariable Long id) {
-        return requireStaff().then(Mono.defer(() -> topics.delete(id))).then(Mono.just(ResponseEntity.noContent().<Void>build()));
+        return requireStaff().flatMap(admin -> current.requiredAccountId()
+                        .flatMap(account -> topics.delete(id, account, admin)))
+                .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @PutMapping("/questions/{questionId}/topics")

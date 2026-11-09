@@ -84,19 +84,19 @@ class TopicControllerTest {
 
     @Test
     void aTeacherCreatesATopicAndGets201() {
-        when(topics.create(eq(3L), any(TopicRequest.class))).thenReturn(Mono.just(topic()));
+        when(topics.create(eq(3L), any(TopicRequest.class), eq(TEACHER))).thenReturn(Mono.just(topic()));
 
         client.mutateWith(as(TEACHER, "TEACHER")).post().uri("/api/v1/subjects/3/topics")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"name\":\"Funções\",\"grade\":10,\"keywords\":\"função\"}")
                 .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id").isEqualTo(5);
 
-        verify(topics).create(3L, new TopicRequest("Funções", 10, "função"));
+        verify(topics).create(3L, new TopicRequest("Funções", 10, "função"), TEACHER);
     }
 
     @Test
     void aDuplicateTopicIs409() {
-        when(topics.create(eq(3L), any(TopicRequest.class)))
+        when(topics.create(eq(3L), any(TopicRequest.class), anyLong()))
                 .thenReturn(Mono.error(ApiException.conflict("Já existe um tema «Funções» nesta disciplina e classe.")));
 
         client.mutateWith(as(ADMIN, "ADMIN")).post().uri("/api/v1/subjects/3/topics")
@@ -119,8 +119,8 @@ class TopicControllerTest {
         client.mutateWith(as(STUDENT, "STUDENT")).post().uri("/api/v1/statements/4/topics/auto-tag")
                 .exchange().expectStatus().isForbidden();
 
-        verify(topics, never()).create(anyLong(), any());
-        verify(topics, never()).delete(anyLong());
+        verify(topics, never()).create(anyLong(), any(), anyLong());
+        verify(topics, never()).delete(anyLong(), anyLong(), anyBoolean());
     }
 
     @Test
@@ -132,15 +132,33 @@ class TopicControllerTest {
 
     @Test
     void aTeacherUpdatesAndSoftDeletes() {
-        when(topics.update(eq(5L), any(TopicRequest.class))).thenReturn(Mono.just(topic()));
-        when(topics.delete(5L)).thenReturn(Mono.empty());
+        when(topics.update(eq(5L), any(TopicRequest.class), eq(TEACHER), eq(false))).thenReturn(Mono.just(topic()));
+        when(topics.delete(5L, TEACHER, false)).thenReturn(Mono.empty());
 
         client.mutateWith(as(TEACHER, "TEACHER")).put().uri("/api/v1/topics/5")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"name\":\"Funções\"}")
                 .exchange().expectStatus().isOk();
         client.mutateWith(as(TEACHER, "TEACHER")).delete().uri("/api/v1/topics/5").exchange().expectStatus().isNoContent();
 
-        verify(topics).delete(5L);
+        verify(topics).delete(5L, TEACHER, false);
+    }
+
+    @Test
+    void onlyTheAuthorOrAnAdminChangesAndATopicInUseCannotBeDeleted() {
+        when(topics.update(eq(5L), any(TopicRequest.class), eq(8L), eq(false)))
+                .thenReturn(Mono.error(ApiException.forbidden("Só o autor do tema ou um administrador o pode alterar.")));
+        when(topics.delete(5L, 8L, false))
+                .thenReturn(Mono.error(ApiException.forbidden("Só o autor do tema ou um administrador o pode alterar.")));
+        when(topics.delete(5L, TEACHER, false)).thenReturn(Mono.error(ApiException.conflict(
+                "O tema está em uso numa matriz de prova; retire-o da matriz antes de o apagar.")));
+        when(topics.delete(5L, ADMIN, true)).thenReturn(Mono.empty());
+
+        client.mutateWith(as(8L, "TEACHER")).put().uri("/api/v1/topics/5")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"name\":\"X\"}").exchange().expectStatus().isForbidden();
+        client.mutateWith(as(8L, "TEACHER")).delete().uri("/api/v1/topics/5").exchange().expectStatus().isForbidden();
+        client.mutateWith(as(TEACHER, "TEACHER")).delete().uri("/api/v1/topics/5").exchange().expectStatus().isEqualTo(409)
+                .expectBody().jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("em uso numa matriz"));
+        client.mutateWith(as(ADMIN, "ADMIN")).delete().uri("/api/v1/topics/5").exchange().expectStatus().isNoContent();
     }
 
     @Test
