@@ -88,6 +88,9 @@ class FeedPostgresIntegrationTest {
                 + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + "))");
         sql("DELETE FROM posts WHERE author_account_id IN ("
                 + STUDENT + "," + OTHER_STUDENT + "," + CLASSMATE + "," + ADMIN + ")");
+        sql("DELETE FROM simulations WHERE id IN (587001, 587002, 587003)");
+        sql("DELETE FROM statements WHERE id IN (587001, 587002)");
+        sql("DELETE FROM subjects WHERE id = 587001");
         sql("DELETE FROM feed_rate_limits WHERE rate_key IN ('account:" + STUDENT + "','account:" + OTHER_STUDENT
                 + "','account:" + CLASSMATE + "','account:" + ADMIN + "')");
         sql("DELETE FROM enrollments WHERE account_id IN ("
@@ -245,6 +248,70 @@ class FeedPostgresIntegrationTest {
 
         assertThat(cardOf(464001L)).isEqualTo(new Card(13.0, 0, false));
         assertThat(cardOf(464002L)).isEqualTo(new Card(4.0, 2, true));
+    }
+
+    /**
+     * kixi#587: o cartão publicado traz o cabeçalho da folha, lido do enunciado no servidor (nunca do pedido), e
+     * um cartão antigo, publicado antes das colunas existirem, é preenchido pelo backfill da migração.
+     */
+    @Test
+    void thePublishedCardCarriesThePaperHeaderAndAnOldCardIsBackfilled() throws Exception {
+        sql("INSERT INTO subjects (id, code, name) VALUES (587001, 'F587', 'Matemática')");
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, variant, total_max_score, subject_id, class_id,"
+                + " school_year_id, visible, needs_review, source) VALUES (587001, 'Exame de Matemática', 'Exame', 90, 'A', 20, 587001, "
+                + CLASS + ", " + YEAR + ", true, false, 'manual')");
+        // um enunciado sem classe, disciplina nem ano: o cartão degrada, a publicação não falha
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, visible, needs_review, source)"
+                + " VALUES (587002, 'Teste solto', 'Teste', 45, 10, true, false, 'manual')");
+        sql("INSERT INTO simulations (id, account_id, statement_id, status, final_score, finished_at) VALUES"
+                + " (587001, " + STUDENT + ", 587001, 'FINISHED', 14, now()),"
+                + " (587002, " + CLASSMATE + ", 587002, 'FINISHED', 7, now()),"
+                + " (587003, " + OTHER_STUDENT + ", 587001, 'FINISHED', 9, now())");
+
+        // publicar: o cliente não envia o cabeçalho e, se enviasse, não contava
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"SIMULATION\",\"classId\":" + CLASS + ",\"simulationId\":587001,\"content\":\"Correu bem\","
+                        + "\"paperKind\":\"Falso\",\"subject\":\"Falsa\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.simulation.paperKind").isEqualTo("Exame")
+                .jsonPath("$.simulation.grade").isEqualTo("12ª Classe")
+                .jsonPath("$.simulation.subject").isEqualTo("Matemática")
+                .jsonPath("$.simulation.durationMinutes").isEqualTo(90)
+                .jsonPath("$.simulation.schoolYear").isEqualTo("2424/2425")
+                .jsonPath("$.simulation.variant").isEqualTo("A")
+                .jsonPath("$.simulation.statementTitle").isEqualTo("Exame de Matemática");
+        // e a leitura do feed devolve o mesmo cartão
+        bearer(studentToken).get().uri("/api/v1/feed/posts").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].simulation.paperKind").isEqualTo("Exame")
+                .jsonPath("$[0].simulation.grade").isEqualTo("12ª Classe")
+                .jsonPath("$[0].simulation.schoolYear").isEqualTo("2424/2425")
+                .jsonPath("$[0].simulation.variant").isEqualTo("A");
+
+        bearer(classmateToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"SIMULATION\",\"classId\":" + CLASS + ",\"simulationId\":587002}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.simulation.paperKind").isEqualTo("Teste")
+                .jsonPath("$.simulation.durationMinutes").isEqualTo(45)
+                .jsonPath("$.simulation.grade").doesNotExist()
+                .jsonPath("$.simulation.subject").doesNotExist()
+                .jsonPath("$.simulation.schoolYear").doesNotExist();
+
+        // um cartão antigo (sem as colunas preenchidas) recebe o cabeçalho pelo backfill da migração
+        sql("INSERT INTO posts (author_account_id, institution_id, school_year_id, course_id, class_id, type, content, simulation_id,"
+                + " final_score, is_auto_generated, is_hidden, created_at, updated_at) VALUES (" + OTHER_STUDENT + ", " + OTHER_INSTITUTION
+                + ", " + YEAR + ", " + OTHER_COURSE + ", " + OTHER_CLASS + ", 'SIMULATION', 'Antigo', 587003, 9.0, false, false, now(), now())");
+        String migration = new String(new org.springframework.core.io.ClassPathResource(
+                "db/migration/V81__post_card_paper_header.sql").getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        sql(migration.substring(migration.indexOf("UPDATE posts")));
+        var old = database.sql("SELECT paper_kind, grade, subject, duration_minutes, school_year, variant FROM posts WHERE simulation_id = 587003")
+                .fetch().one().block(Duration.ofSeconds(10));
+        assertThat(old).containsEntry("paper_kind", "Exame").containsEntry("grade", "12ª Classe")
+                .containsEntry("subject", "Matemática").containsEntry("duration_minutes", 90)
+                .containsEntry("school_year", "2424/2425").containsEntry("variant", "A");
+        // o backfill é idempotente e não toca no que já estava certo
+        sql(migration.substring(migration.indexOf("UPDATE posts")));
+        assertThat(database.sql("SELECT COUNT(*) AS n FROM posts WHERE paper_kind = 'Exame' AND simulation_id IN (587001, 587003)")
+                .fetch().one().block(Duration.ofSeconds(10))).containsEntry("n", 2L);
     }
 
     private void insertSimulationCard(long simulationId, String deletedAt) {

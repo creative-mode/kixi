@@ -498,6 +498,46 @@ class ManualStatementServiceTest {
     }
 
     @Test
+    void theModelAnswerOfAnOpenQuestionAndOfAnOpenItemIsKept() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        ManualStatementRequest paper = paperOf(
+            new ManualStatementRequest.Question("Defina inflação.", 4.0, null, "open", null,
+                null, null, null, null, null, "  Subida generalizada e persistente dos preços.  "),
+            new ManualStatementRequest.Question("Resolva:", null, null, "group", List.of(
+                new ManualStatementRequest.Item("a", "Calcule x.", "open", 2.0, null,
+                    null, null, null, null, "x = 3"),
+                new ManualStatementRequest.Item("b", "Justifique.", "open", 2.0, null,
+                    null, null, null, null, "   "))));
+
+        StepVerifier.create(service.create(paper, 9L, false)).expectNextCount(1).verifyComplete();
+
+        List<Question> saved = savedQuestions();
+        assertThat(saved).hasSize(4);
+        assertThat(saved.get(0).getModelAnswer()).isEqualTo("Subida generalizada e persistente dos preços.");
+        assertThat(saved.get(1).getModelAnswer()).as("a group has nothing to answer").isNull();
+        assertThat(saved.get(2).getModelAnswer()).isEqualTo("x = 3");
+        assertThat(saved.get(3).getModelAnswer()).as("blank means no key").isNull();
+    }
+
+    @Test
+    void aModelAnswerOnAQuestionWithOptionsIsNotKept() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+
+        ManualStatementRequest paper = paperOf(new ManualStatementRequest.Question(
+            "Escolha", 2.0, List.of(
+                new ManualStatementRequest.Option("A", "um", true),
+                new ManualStatementRequest.Option("B", "dois", false)), "multiple_choice", null,
+            null, null, null, null, null, "um"));
+
+        StepVerifier.create(service.create(paper, 9L, false)).expectNextCount(1).verifyComplete();
+
+        assertThat(savedQuestions().get(0).getModelAnswer()).isNull();
+    }
+
+    @Test
     void theOldRequestWithoutTypeStillDerivesItFromTheOptions() {
         when(access.requireCanAuthor(9L, false, 1L, 2L, CLASS_ID)).thenReturn(Mono.empty());
         givenSaves();

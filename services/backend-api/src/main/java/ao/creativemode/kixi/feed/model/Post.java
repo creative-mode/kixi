@@ -76,6 +76,25 @@ public class Post {
     @Column("time_spent_seconds")
     private Integer timeSpentSeconds;
 
+    /** O cabeçalho da folha, lido do enunciado ao publicar (kixi#587). */
+    @Column("paper_kind")
+    private String paperKind;
+
+    @Column("grade")
+    private String grade;
+
+    @Column("subject")
+    private String subject;
+
+    @Column("duration_minutes")
+    private Integer durationMinutes;
+
+    @Column("school_year")
+    private String schoolYear;
+
+    @Column("variant")
+    private String variant;
+
     /** Open answers still awaiting correction when the card was last refreshed (kixi#464). */
     @Column("pending_review_count")
     private Integer pendingReviewCount;

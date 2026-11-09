@@ -326,7 +326,8 @@ class PostServiceTest {
         when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
                 new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
         when(showcaseReader.showcaseOf(77L, ACCOUNT_ID)).thenReturn(Mono.just(
-                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800, 3)));
+                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800, 3,
+                        "Exame", "12ª Classe", "Matemática", 90, "2025/2026", "A")));
         when(institutionNames.nameOf(MY_INSTITUTION_ID)).thenReturn(Mono.just("Colégio Kixi"));
         when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
         when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
@@ -341,6 +342,13 @@ class PostServiceTest {
                     assertThat(response.simulation().schoolName()).isEqualTo("Colégio Kixi");
                     assertThat(response.simulation().statementTitle()).isEqualTo("Exame de Matemática");
                     assertThat(response.simulation().pendingReviewCount()).isEqualTo(3);
+                    // o cabeçalho da folha vem do enunciado, lido no servidor
+                    assertThat(response.simulation().paperKind()).isEqualTo("Exame");
+                    assertThat(response.simulation().grade()).isEqualTo("12ª Classe");
+                    assertThat(response.simulation().subject()).isEqualTo("Matemática");
+                    assertThat(response.simulation().durationMinutes()).isEqualTo(90);
+                    assertThat(response.simulation().schoolYear()).isEqualTo("2025/2026");
+                    assertThat(response.simulation().variant()).isEqualTo("A");
                 })
                 .verifyComplete();
     }
@@ -358,7 +366,13 @@ class PostServiceTest {
 
         StepVerifier.create(postService.createPost(ACCOUNT_ID,
                         new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null, null, 77L)))
-                .assertNext(response -> assertThat(response.content()).isEmpty())
+                .assertNext(response -> {
+                    assertThat(response.content()).isEmpty();
+                    // um showcase sem cabeçalho (o enunciado não o tem) dá um cartão com os campos nulos, nunca um erro
+                    assertThat(response.simulation().paperKind()).isNull();
+                    assertThat(response.simulation().grade()).isNull();
+                    assertThat(response.simulation().schoolYear()).isNull();
+                })
                 .verifyComplete();
 
         StepVerifier.create(postService.createPost(ACCOUNT_ID,
