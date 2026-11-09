@@ -23,17 +23,31 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Find all active (non-deleted) statements
      */
+    @Query("SELECT * FROM statements WHERE deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllByDeletedAtIsNull();
 
     /**
      * Find all soft-deleted statements
      */
+    @Query("SELECT * FROM statements WHERE deleted_at IS NOT NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllByDeletedAtIsNotNull();
 
     /**
      * Find an active statement by ID
      */
+    @Query("SELECT * FROM statements WHERE id = :id AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Mono<Statement> findByIdAndDeletedAtIsNull(Long id);
+
+    /**
+     * O enunciado virtual de um treino (kixi#729), só para o seu dono: para qualquer outra conta é «não existe». Os
+     * restantes métodos deste repositório não devolvem nunca um enunciado de treino.
+     */
+    @Query("SELECT * FROM statements WHERE id = :id AND practice_owner_account_id = :ownerAccountId AND deleted_at IS NULL")
+    Mono<Statement> findPracticeByIdAndOwner(Long id, Long ownerAccountId);
+
+    /** Qualquer enunciado ativo, de treino ou não: para o código que já provou quem é o dono (a simulação do treino). */
+    @Query("SELECT * FROM statements WHERE id = :id AND deleted_at IS NULL")
+    Mono<Statement> findAnyByIdAndDeletedAtIsNull(Long id);
 
     /**
      * The school a statement effectively belongs to: its own column when set,
@@ -96,6 +110,7 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Find statements by school year
      */
+    @Query("SELECT * FROM statements WHERE school_year_id = :schoolYearId AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllBySchoolYearIdAndDeletedAtIsNull(Long schoolYearId);
 
     /**
@@ -106,6 +121,7 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Find statements by subject
      */
+    @Query("SELECT * FROM statements WHERE subject_id = :subjectId AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllBySubjectIdAndDeletedAtIsNull(Long subjectId);
 
     /**
@@ -116,27 +132,33 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Find statements by term
      */
+    @Query("SELECT * FROM statements WHERE term_id = :termId AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllByTermIdAndDeletedAtIsNull(Long termId);
 
     /**
      * Find statements by class
      */
+    @Query("SELECT * FROM statements WHERE class_id = :classId AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllByClassIdAndDeletedAtIsNull(Long classId);
 
     /**
      * Find statements by school year and subject
      */
+    @Query("SELECT * FROM statements WHERE school_year_id = :schoolYearId AND subject_id = :subjectId AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllBySchoolYearIdAndSubjectIdAndDeletedAtIsNull(Long schoolYearId, Long subjectId);
 
     /**
      * Find statements by school year, term, and subject
      */
+    @Query("SELECT * FROM statements WHERE school_year_id = :schoolYearId AND term_id = :termId AND subject_id = :subjectId "
+            + "AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllBySchoolYearIdAndTermIdAndSubjectIdAndDeletedAtIsNull(
             Long schoolYearId, Long termId, Long subjectId);
 
     /**
      * Find statements created by a specific user
      */
+    @Query("SELECT * FROM statements WHERE created_by = :createdBy AND deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Flux<Statement> findAllByCreatedByAndDeletedAtIsNull(Long createdBy);
 
     /**
@@ -174,6 +196,7 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Count active statements
      */
+    @Query("SELECT COUNT(*) FROM statements WHERE deleted_at IS NULL AND practice_owner_account_id IS NULL")
     Mono<Long> countByDeletedAtIsNull();
 
     /**
@@ -189,12 +212,13 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Check if a statement exists by ID and is active
      */
+    @Query("SELECT EXISTS (SELECT 1 FROM statements WHERE id = :id AND deleted_at IS NULL AND practice_owner_account_id IS NULL)")
     Mono<Boolean> existsByIdAndDeletedAtIsNull(Long id);
 
     /**
      * Search statements by title (case-insensitive partial match)
      */
-    @Query("SELECT * FROM statements WHERE LOWER(title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) AND deleted_at IS NULL ORDER BY created_at DESC")
+    @Query("SELECT * FROM statements WHERE LOWER(title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) AND deleted_at IS NULL AND practice_owner_account_id IS NULL ORDER BY created_at DESC")
     Flux<Statement> searchByTitle(String searchTerm);
 
     /**
@@ -206,7 +230,7 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     /**
      * Find recent statements with pagination
      */
-    @Query("SELECT * FROM statements WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    @Query("SELECT * FROM statements WHERE deleted_at IS NULL AND practice_owner_account_id IS NULL ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Statement> findRecentStatements(int limit, int offset);
 
     /**
@@ -215,6 +239,7 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     @Query("""
         SELECT * FROM statements
         WHERE deleted_at IS NULL
+        AND practice_owner_account_id IS NULL
         AND (:schoolYearId IS NULL OR school_year_id = :schoolYearId)
         AND (:termId IS NULL OR term_id = :termId)
         AND (:subjectId IS NULL OR subject_id = :subjectId)

@@ -154,6 +154,18 @@ public class SecurityConfig {
                         // material it should not (teaching-assignments, gabarito).
                         .pathMatchers("/api/v1/chat/**")
                         .authenticated()
+                        // Matriz da prova e treino por temas (kixi#729). O aluno lê a matriz e monta treinos; só o professor
+                        // (dono da sala, o serviço confirma) ou o administrador a escrevem.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/*/matrix", "/api/v1/training/**")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.PUT, "/api/v1/exam-rooms/*/matrix")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.POST, "/api/v1/exam-rooms/*/matrix/import")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.DELETE, "/api/v1/exam-rooms/*/matrix")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers(HttpMethod.POST, "/api/v1/simulations/practice/matrix")
+                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
                         .pathMatchers(HttpMethod.GET, "/api/v1/exam-rooms/mine", "/api/exam-rooms/mine",
                                 "/api/v1/exam-rooms/*/student", "/api/exam-rooms/*/student")
                         .authenticated()
@@ -207,6 +219,13 @@ public class SecurityConfig {
                         // still pass through QuestionImageReadAccessService in the controller.
                         .pathMatchers(HttpMethod.GET, "/api/v1/question-images", "/api/v1/question-images/trash")
                         .hasRole("ADMIN")
+                        // Temas de uma disciplina (kixi#729): lê qualquer conta; escrevem professores e administradores.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/subjects/*/topics")
+                        .authenticated()
+                        .pathMatchers(HttpMethod.POST, "/api/v1/subjects/*/topics")
+                        .hasAnyRole("ADMIN", "TEACHER")
+                        .pathMatchers("/api/v1/topics/*")
+                        .hasAnyRole("ADMIN", "TEACHER")
                         // #253: where a subject is taught across schools is for the administrator.
                         .pathMatchers(HttpMethod.GET, "/api/v1/subjects/*/offerings")
                         .hasRole("ADMIN")

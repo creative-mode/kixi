@@ -46,6 +46,10 @@ public class Simulation {
     @Column("selected_question_ids")
     private String selectedQuestionIds;
 
+    /** Título de um treino montado («Treino · ...»); nulo numa simulação normal. */
+    @Column("title")
+    private String title;
+
     @Column("created_at")
     private LocalDateTime createdAt;
 
@@ -54,6 +58,14 @@ public class Simulation {
 
     @Column("deleted_at")
     private LocalDateTime deletedAt;
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
 
     public String getSelectedQuestionIds() {
         return selectedQuestionIds;

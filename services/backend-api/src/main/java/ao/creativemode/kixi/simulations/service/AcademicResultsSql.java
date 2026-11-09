@@ -27,6 +27,7 @@ class AcademicResultsSql implements AcademicResultsReader {
                   JOIN statements st ON st.id = s.statement_id
                   LEFT JOIN subjects sub ON sub.id = st.subject_id
                  WHERE s.account_id = :account AND s.deleted_at IS NULL AND s.status = 'FINISHED'
+                   AND st.practice_owner_account_id IS NULL
                    AND COALESCE(
                          s.school_year_id,
                          st.school_year_id,
