@@ -118,6 +118,71 @@ class ExamRoomServiceTest {
                 }).verifyComplete();
     }
 
+    private Statement statementOfClass(Long classId) {
+        Statement statement = new Statement();
+        statement.setId(5L);
+        statement.setClassId(classId);
+        // `create` assembles the class and account lookups before the statement rules run.
+        when(classes.findByIdAndDeletedAtIsNull(3L)).thenReturn(Mono.just(new ao.creativemode.kixi.academic.model.Class()));
+        when(accounts.findById(9L)).thenReturn(Mono.just(account(9L)));
+        return statement;
+    }
+
+    @Test
+    void aTeacherCannotUseAStatementWithoutAClassInARoom() {
+        Statement paper = statementOfClass(null);
+        when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(paper));
+
+        StepVerifier.create(service.create(new ExamRoomRequest(5L, 3L, start, start.plusHours(2), 90), 9L, false))
+                .expectErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.FORBIDDEN
+                        && api.getMessage().contains("assigned class"))
+                .verify();
+        verify(rooms, never()).save(any(ExamRoom.class));
+    }
+
+    @Test
+    void anAdministratorMayUseAStatementWithoutAClass() {
+        Statement paper = statementOfClass(null);
+        when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(paper));
+        when(rooms.save(any(ExamRoom.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0, ExamRoom.class)));
+
+        StepVerifier.create(service.create(new ExamRoomRequest(5L, 3L, start, start.plusHours(2), 90), 9L, true))
+                .expectNextCount(1)
+                .verifyComplete();
+    }
+
+    @Test
+    void theRoomClassMustBeTheStatementClass() {
+        Statement paper = statementOfClass(4L);
+        when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(paper));
+
+        StepVerifier.create(service.create(new ExamRoomRequest(5L, 3L, start, start.plusHours(2), 90), 9L, false))
+                .expectErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.FORBIDDEN
+                        && api.getMessage().contains("must match the statement class"))
+                .verify();
+        verify(rooms, never()).save(any(ExamRoom.class));
+    }
+
+    @Test
+    void aTeacherWhoDoesNotTeachTheStatementClassAndSubjectCannotCreateTheRoom() {
+        var writeAccess = mock(ao.creativemode.kixi.exams.service.StatementWriteAccessService.class);
+        var guarded = new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
+                writeAccess, null, null, questions, options, Clock.systemDefaultZone(), deadlineService);
+        Statement paper = statementOfClass(3L);
+        when(statements.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(paper));
+        when(writeAccess.requireCanWrite(5L, 9L, false))
+                .thenReturn(Mono.error(ApiException.forbidden("Teacher is not assigned to this class and subject")));
+
+        StepVerifier.create(guarded.create(new ExamRoomRequest(5L, 3L, start, start.plusHours(2), 90), 9L, false))
+                .expectErrorMatches(error -> error instanceof ApiException api
+                        && api.getStatus() == HttpStatus.FORBIDDEN
+                        && api.getMessage().contains("not assigned to this class and subject"))
+                .verify();
+        verify(rooms, never()).save(any(ExamRoom.class));
+    }
+
     @Test
     void nonParticipantIsForbiddenAndCannotCreateSimulation() {
         ExamRoom room = room(20L, ExamRoomStatus.OPEN);

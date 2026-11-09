@@ -87,7 +87,7 @@ public class ManualStatementService {
         if (!isGroup(data)) {
             return saveLeaf(statementId, number, data.text(), leafType(data.type(), data.options()),
                 data.maxScore(), data.options(), null, null, data.rawText(), data.confidence(),
-                data.reviewed(), data.formulas(), position.incrementAndGet());
+                data.reviewed(), data.formulas(), data.modelAnswer(), position.incrementAndGet());
         }
         // The group is only the common statement: nothing to answer, so no score and no options.
         Question header = new Question(statementId, number, data.text().trim(), Question.GROUP);
@@ -105,7 +105,7 @@ public class ManualStatementService {
                     return saveLeaf(statementId, number * 100 + k + 1, item.text(),
                         leafType(item.type(), item.options()), item.maxScore(), item.options(),
                         saved.getId(), labelOf(item.label(), k), item.rawText(), item.confidence(),
-                        item.reviewed(), item.formulas(), position.incrementAndGet());
+                        item.reviewed(), item.formulas(), item.modelAnswer(), position.incrementAndGet());
                 })
                 .then(Mono.just(saved));
         });
@@ -113,7 +113,8 @@ public class ManualStatementService {
 
     private Mono<Question> saveLeaf(Long statementId, int number, String text, String type, Double maxScore,
             List<ManualStatementRequest.Option> given, Long parentId, String label, String rawText,
-            Double confidence, Boolean reviewed, List<ManualStatementRequest.Formula> formulas, int orderIndex) {
+            Double confidence, Boolean reviewed, List<ManualStatementRequest.Formula> formulas, String modelAnswer,
+            int orderIndex) {
         List<ManualStatementRequest.Option> options = optionsFor(type, given);
 
         Question question = new Question(statementId, number, text.trim(), type);
@@ -121,6 +122,11 @@ public class ManualStatementService {
         question.setMaxScore(maxScore);
         question.setParentId(parentId);
         question.setLabel(label);
+        // The answer key of an open question is its expected answer; the other types are keyed by the
+        // option marked correct, so a stray model answer would only mislead the correction.
+        if (OPEN.equals(type) && modelAnswer != null && !modelAnswer.isBlank()) {
+            question.setModelAnswer(modelAnswer.trim());
+        }
         applyOcrEvidence(question, rawText, confidence, reviewed, formulas);
 
         return questionRepository
