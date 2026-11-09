@@ -29,7 +29,32 @@ public interface SimulationShowcaseReader {
             Integer totalQuestions,
             Integer timeSpentSeconds,
             /** Open answers still awaiting correction when the card is published (kixi#464). */
-            Integer pendingReviewCount) {
+            Integer pendingReviewCount,
+            /** O cabeçalho da folha, lido do enunciado (kixi#587): o {@code examType} («Teste», «Exame»...). */
+            String paperKind,
+            /** A classe do enunciado por extenso, como «12ª Classe»; nulo se o enunciado não tem classe. */
+            String grade,
+            /** O nome da disciplina do enunciado. */
+            String subject,
+            Integer durationMinutes,
+            /** O ano letivo do enunciado, como «2025/2026». */
+            String schoolYear,
+            /** A série da prova (A, B...). */
+            String variant) {
+
+        /** The showcase as it was before the paper header existed. */
+        public Showcase(
+                Long simulationId,
+                String statementTitle,
+                Double finalScore,
+                Double maxScore,
+                Integer correctAnswers,
+                Integer totalQuestions,
+                Integer timeSpentSeconds,
+                Integer pendingReviewCount) {
+            this(simulationId, statementTitle, finalScore, maxScore, correctAnswers, totalQuestions,
+                    timeSpentSeconds, pendingReviewCount, null, null, null, null, null, null);
+        }
 
         /** The showcase as it was before the pending count existed. */
         public Showcase(
@@ -41,7 +66,7 @@ public interface SimulationShowcaseReader {
                 Integer totalQuestions,
                 Integer timeSpentSeconds) {
             this(simulationId, statementTitle, finalScore, maxScore, correctAnswers,
-                    totalQuestions, timeSpentSeconds, null);
+                    totalQuestions, timeSpentSeconds, null, null, null, null, null, null, null);
         }
     }
 }

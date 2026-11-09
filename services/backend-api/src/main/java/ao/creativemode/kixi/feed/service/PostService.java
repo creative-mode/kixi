@@ -211,6 +211,12 @@ public class PostService {
                     post.setTotalQuestions(showcase.totalQuestions());
                     post.setTimeSpentSeconds(showcase.timeSpentSeconds());
                     post.setPendingReviewCount(showcase.pendingReviewCount());
+                    post.setPaperKind(showcase.paperKind());
+                    post.setGrade(showcase.grade());
+                    post.setSubject(showcase.subject());
+                    post.setDurationMinutes(showcase.durationMinutes());
+                    post.setSchoolYear(showcase.schoolYear());
+                    post.setVariant(showcase.variant());
                     return new Staged(classScope, post);
                 }));
     }
@@ -576,7 +582,9 @@ public class PostService {
                         post.getSimulationId() == null ? null : new PostResponse.SimulationCard(
                                 post.getSimulationId(), post.getStatementTitle(), post.getSchoolName(),
                                 post.getFinalScore(), post.getMaxScore(), post.getCorrectAnswers(),
-                                post.getTotalQuestions(), post.getTimeSpentSeconds(), post.getPendingReviewCount()),
+                                post.getTotalQuestions(), post.getTimeSpentSeconds(), post.getPendingReviewCount(),
+                                post.getPaperKind(), post.getGrade(), post.getSubject(), post.getDurationMinutes(),
+                                post.getSchoolYear(), post.getVariant()),
                         PostBlocks.fromJson(post.getBlocks())
                 ));
     }
