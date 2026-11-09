@@ -277,6 +277,27 @@ public class SimulationService {
         return create(dto, accountId, false, false, true, true);
     }
 
+    /**
+     * Começa a simulação de um treino por temas (kixi#729) sobre o enunciado virtual que o próprio aluno tem. Não passa
+     * pelas regras de {@link #createForAccount}: esse enunciado nunca é visível, nunca tem sala e só existe para o dono,
+     * que é o que aqui se confirma (para qualquer outra conta, é «não encontrado»).
+     */
+    @Transactional
+    public Mono<SimulationResponse> createForPractice(Long accountId, Long practiceStatementId, String title) {
+        return statementRepository.findPracticeByIdAndOwner(practiceStatementId, accountId)
+                .switchIfEmpty(Mono.error(() -> ApiException.notFound("Statement not found")))
+                .then(Mono.defer(() -> {
+                    Simulation simulation = new Simulation();
+                    simulation.setAccountId(accountId);
+                    simulation.setStatementId(practiceStatementId);
+                    simulation.setStartedAt(LocalDateTime.now());
+                    simulation.setStatus(SimulationStatus.IN_PROGRESS);
+                    simulation.setTitle(title);
+                    return repository.save(simulation);
+                }))
+                .flatMap(this::toResponse);
+    }
+
     @Transactional
     public Mono<SimulationResponse> update(Long id, SimulationRequest dto) {
         return repository.findByIdAndDeletedAtIsNull(id)

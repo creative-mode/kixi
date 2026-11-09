@@ -24,8 +24,10 @@ import org.junit.jupiter.api.Test;
  *  |- chat       (AI tutor sessions, messages, Groq streaming) -&gt; shared, exams
  *  |- feed       (social feed posts, reactions, comments, reports) -&gt; shared only
  *  |- analytics  (dashboard queries and scope) -&gt; shared only
- *  '- examrooms  (live exam rooms and grading) -&gt; shared, academic, exams,
- *                identity, institutions, simulations
+ *  |- examrooms  (live exam rooms and grading) -&gt; shared, academic, exams,
+ *  |              identity, institutions, simulations
+ *  '- training   (topics, exam matrix, topic-based practice) -&gt; shared, exams, examrooms tables, simulations;
+ *                a leaf: nothing depends on it
  * </pre>
  *
  * If a change violates one of these, this test fails at build time instead of
@@ -160,6 +162,26 @@ class ArchitectureTest {
         noClasses().that().resideInAPackage("..examrooms..")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..analytics..", "..gamification..", "..ocr..", "..chat..", "..feed..")
+                .check(classes);
+    }
+
+    /**
+     * O treino por temas (kixi#729) junta temas, matriz da prova e simulações: lê de {@code exams} e escreve
+     * simulações, por isso fica no fim da cadeia. Nenhum outro módulo pode depender dele.
+     */
+    @Test
+    void nothingDependsOnTraining() {
+        noClasses().that().resideOutsideOfPackage("..training..")
+                .should().dependOnClassesThat().resideInAPackage("..training..")
+                .check(classes);
+    }
+
+    @Test
+    void trainingOnlyDependsOnItsUpstreamModules() {
+        noClasses().that().resideInAPackage("..training..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..analytics..", "..gamification..", "..ocr..", "..chat..", "..feed..", "..dashboard..",
+                        "..donations..", "..moderation..")
                 .check(classes);
     }
 

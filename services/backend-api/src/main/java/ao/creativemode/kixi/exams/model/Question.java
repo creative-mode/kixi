@@ -114,6 +114,10 @@ public class Question {
     @Column("model_answer")
     private String modelAnswer;
 
+    /** Numa cópia de treino (kixi#729): a questão original de que foi copiada. Nulo nas restantes. */
+    @Column("source_question_id")
+    private Long sourceQuestionId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -350,6 +354,10 @@ public class Question {
                 ", needsReview=" + needsReview +
                 '}';
     }
+
+    public Long getSourceQuestionId() { return sourceQuestionId; }
+
+    public void setSourceQuestionId(Long sourceQuestionId) { this.sourceQuestionId = sourceQuestionId; }
 
     public Long getParentId() {
         return parentId;

@@ -69,6 +69,14 @@ public class QuestionImageReadAccessService {
     }
 
     private Mono<Void> requireStatement(Question question, Long accountId, boolean admin, boolean teacher) {
+        // As imagens de um treino montado (kixi#729) só as lê o dono do treino; os outros leitores não o veem existir.
+        Mono<Statement> ownPractice = statements.findPracticeByIdAndOwner(question.getStatementId(), accountId);
+        if (ownPractice == null) ownPractice = Mono.empty();
+        return ownPractice.hasElement()
+                .flatMap(own -> own ? Mono.<Void>empty() : requireNormalStatement(question, accountId, admin, teacher));
+    }
+
+    private Mono<Void> requireNormalStatement(Question question, Long accountId, boolean admin, boolean teacher) {
         Mono<Statement> statement = admin
                 ? statements.findByIdAndDeletedAtIsNull(question.getStatementId())
                 : teacher

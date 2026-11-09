@@ -163,7 +163,13 @@ public class QuestionImageService {
     public Mono<Void> hardDelete(Long id) {
         return repository.findByIdAndDeletedAtIsNotNull(id)
                 .switchIfEmpty(Mono.error(ApiException.badRequest("Only deleted images can be permanently removed")))
-                .flatMap(entity -> storage.delete(entity.getStorageKey())
+                .flatMap(entity -> Mono.defer(() -> {
+                            // As cópias de treino (kixi#729) partilham o ficheiro: só se apaga com a última referência.
+                            Mono<Long> others = entity.getStorageKey() == null ? null
+                                    : repository.countByStorageKeyAndIdNot(entity.getStorageKey(), entity.getId());
+                            return others == null ? Mono.just(0L) : others.defaultIfEmpty(0L);
+                        })
+                        .flatMap(others -> others > 0 ? Mono.<Void>empty() : storage.delete(entity.getStorageKey()))
                         .then(repository.delete(entity)))
                 .then();
     }
