@@ -33,7 +33,32 @@ public record PostResponse(
             Integer totalQuestions,
             Integer timeSpentSeconds,
             /** Open answers still awaiting correction; above zero, the score is provisional (kixi#464). */
-            Integer pendingReviewCount) {
+            Integer pendingReviewCount,
+            /** O cabeçalho da folha, lido do enunciado ao publicar (kixi#587); nulo num cartão sem esse dado. */
+            String paperKind,
+            /** A classe por extenso, como «12ª Classe». */
+            String grade,
+            String subject,
+            Integer durationMinutes,
+            /** O ano letivo, como «2025/2026». */
+            String schoolYear,
+            /** A série da prova (A, B...). */
+            String variant) {
+
+        /** The card as it was before the paper header existed. */
+        public SimulationCard(
+                Long simulationId,
+                String statementTitle,
+                String schoolName,
+                Double finalScore,
+                Double maxScore,
+                Integer correctAnswers,
+                Integer totalQuestions,
+                Integer timeSpentSeconds,
+                Integer pendingReviewCount) {
+            this(simulationId, statementTitle, schoolName, finalScore, maxScore, correctAnswers,
+                    totalQuestions, timeSpentSeconds, pendingReviewCount, null, null, null, null, null, null);
+        }
 
         /** The card as it was before the pending count existed. */
         public SimulationCard(
@@ -46,7 +71,7 @@ public record PostResponse(
                 Integer totalQuestions,
                 Integer timeSpentSeconds) {
             this(simulationId, statementTitle, schoolName, finalScore, maxScore, correctAnswers,
-                    totalQuestions, timeSpentSeconds, null);
+                    totalQuestions, timeSpentSeconds, null, null, null, null, null, null, null);
         }
     }
 }

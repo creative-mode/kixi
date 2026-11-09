@@ -77,20 +77,33 @@ public record ManualStatementRequest(
         Boolean reviewed,
         @Size(max = 100) @Valid List<Formula> formulas,
         @Pattern(regexp = "lettered|brace", message = "The group layout must be lettered or brace")
-        String groupLayout
+        String groupLayout,
+        /**
+         * The expected answer of an {@code open} question: the answer key the automatic correction and
+         * the room's "count by key" compare with. Ignored for the other types (their key is the option
+         * marked {@code correct}) and for a group, which has nothing to answer. No size limit:
+         * {@code questions.model_answer} is TEXT.
+         */
+        String modelAnswer
     ) {
         /** The shape the exam builder sent before types and alíneas existed. */
         public Question(String text, Double maxScore, List<Option> options) {
-            this(text, maxScore, options, null, null, null, null, null, null, null);
+            this(text, maxScore, options, null, null, null, null, null, null, null, null);
         }
 
         public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items) {
-            this(text, maxScore, options, type, items, null, null, null, null, null);
+            this(text, maxScore, options, type, items, null, null, null, null, null, null);
         }
 
         public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items,
                 String rawText, Double confidence, Boolean reviewed, List<Formula> formulas) {
-            this(text, maxScore, options, type, items, rawText, confidence, reviewed, formulas, null);
+            this(text, maxScore, options, type, items, rawText, confidence, reviewed, formulas, null, null);
+        }
+
+        /** The shape the exam builder sent before the answer key of an open question could be written there. */
+        public Question(String text, Double maxScore, List<Option> options, String type, List<Item> items,
+                String rawText, Double confidence, Boolean reviewed, List<Formula> formulas, String groupLayout) {
+            this(text, maxScore, options, type, items, rawText, confidence, reviewed, formulas, groupLayout, null);
         }
     }
 
@@ -114,10 +127,17 @@ public record ManualStatementRequest(
         String rawText,
         @DecimalMin("0.0") @DecimalMax("1.0") Double confidence,
         Boolean reviewed,
-        @Size(max = 100) @Valid List<Formula> formulas
+        @Size(max = 100) @Valid List<Formula> formulas,
+        /** The expected answer of an {@code open} alínea; see {@link Question#modelAnswer()}. */
+        String modelAnswer
     ) {
         public Item(String label, String text, String type, Double maxScore, List<Option> options) {
-            this(label, text, type, maxScore, options, null, null, null, null);
+            this(label, text, type, maxScore, options, null, null, null, null, null);
+        }
+
+        public Item(String label, String text, String type, Double maxScore, List<Option> options,
+                String rawText, Double confidence, Boolean reviewed, List<Formula> formulas) {
+            this(label, text, type, maxScore, options, rawText, confidence, reviewed, formulas, null);
         }
     }
 
