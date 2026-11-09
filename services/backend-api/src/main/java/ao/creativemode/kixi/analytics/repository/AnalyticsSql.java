@@ -51,6 +51,7 @@ public final class AnalyticsSql {
                 FROM statements s
                 LEFT JOIN classes cl ON cl.id = s.class_id
                 WHERE s.deleted_at IS NULL
+                  AND s.practice_owner_account_id IS NULL
                   AND (:admin OR EXISTS (
                       SELECT 1 FROM scope_pairs p
                       WHERE p.class_id = s.class_id AND p.subject_id = s.subject_id))
@@ -209,7 +210,7 @@ public final class AnalyticsSql {
         return SCOPE + """
                 SELECT CASE
                   WHEN EXISTS (SELECT 1 FROM scoped_statements WHERE id = :statementId) THEN 2
-                  WHEN EXISTS (SELECT 1 FROM statements WHERE id = :statementId AND deleted_at IS NULL) THEN 1
+                  WHEN EXISTS (SELECT 1 FROM statements WHERE id = :statementId AND deleted_at IS NULL AND practice_owner_account_id IS NULL) THEN 1
                   ELSE 0 END AS access
                 """;
     }

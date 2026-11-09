@@ -156,7 +156,8 @@ public class SimulationSubmissionService {
     }
 
     private Mono<Statement> statementOrDefault(Long statementId) {
-        Mono<Statement> statement = statements.findByIdAndDeletedAtIsNull(statementId);
+        // Inclui o enunciado virtual de um treino (kixi#729): a simulação já provou quem é o dono.
+        Mono<Statement> statement = statements.findAnyByIdAndDeletedAtIsNull(statementId);
         return (statement == null ? Mono.<Statement>empty() : statement).defaultIfEmpty(new Statement());
     }
 

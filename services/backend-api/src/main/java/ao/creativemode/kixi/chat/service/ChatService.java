@@ -119,10 +119,10 @@ public class ChatService {
             if (answered) {
                 return Mono.error(ApiException.badRequest("The student's answer needs a questionId"));
             }
-            return statementService.findByIdVisible(request.statementId())
+            return readableStatement(accountId, request.statementId())
                     .flatMap(statement -> save(accountId, statement, mode, null, request));
         }
-        return statementService.findByIdWithQuestionsVisible(request.statementId())
+        return readableMaterial(accountId, request.statementId())
                 .flatMap(withQuestions -> {
                     Question focus = focusOf(withQuestions, request.questionId());
                     if (focus == null) {
@@ -135,6 +135,22 @@ public class ChatService {
                     }
                     return save(accountId, withQuestions.statement(), mode, focus, request);
                 });
+    }
+
+    /**
+     * O enunciado que a conta pode ler: um publicado, ou o treino montado que é dela (kixi#729). O enunciado virtual
+     * de um treino é privado do aluno, por isso para outra conta continua a ser «não encontrado».
+     */
+    private Mono<Statement> readableStatement(Long accountId, Long statementId) {
+        Mono<Statement> own = statementService.findOwnPractice(statementId, accountId);
+        Mono<Statement> published = Mono.defer(() -> statementService.findByIdVisible(statementId));
+        return own == null ? published : own.switchIfEmpty(published);
+    }
+
+    private Mono<StatementWithQuestions> readableMaterial(Long accountId, Long statementId) {
+        Mono<StatementWithQuestions> own = statementService.findOwnPracticeWithQuestions(statementId, accountId);
+        Mono<StatementWithQuestions> published = Mono.defer(() -> statementService.findByIdWithQuestionsVisible(statementId));
+        return own == null ? published : own.switchIfEmpty(published);
     }
 
     private Mono<ChatSessionResponse> save(Long accountId, Statement statement, TutorMode mode,
@@ -182,7 +198,7 @@ public class ChatService {
     private Mono<Flux<ServerSentEvent<ChatStreamEvent>>> answer(
             Long accountId, ChatSession session, String content) {
         return messageRepository.save(new ChatMessage(session.getId(), ChatRole.USER, content))
-                .then(statementService.findByIdWithQuestionsVisible(session.getStatementId()))
+                .then(Mono.defer(() -> readableMaterial(accountId, session.getStatementId())))
                 .flatMap(withQuestions -> {
                     TutorMode mode = session.getMode();
                     // The question may have been deleted or sent back to review since the

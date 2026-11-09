@@ -114,8 +114,10 @@ public class StatementController {
     public Mono<ResponseEntity<StatementSummary>> getById(
         @PathVariable Long id
     ) {
-        return reader().flatMap(reader -> readableStatement(() -> statementService.findById(id), () -> statementService.findByIdVisible(id))
-            .map(statement -> StatementSummary.from(statement, reader.staff())))
+        return ownPractice(id)
+            .map(statement -> StatementSummary.from(statement, false))
+            .switchIfEmpty(Mono.defer(() -> reader().flatMap(reader -> readableStatement(() -> statementService.findById(id), () -> statementService.findByIdVisible(id))
+                .map(statement -> StatementSummary.from(statement, reader.staff())))))
             .map(ResponseEntity::ok);
     }
 
@@ -132,12 +134,15 @@ public class StatementController {
     public Mono<ResponseEntity<StatementOcrResponse>> getByIdWithQuestions(
         @PathVariable Long id
     ) {
-        return reader()
-            .flatMap(reader -> readableStatementWithQuestions(
-                    reader,
-                    () -> statementService.findByIdWithQuestions(id),
-                    () -> statementService.findByIdWithQuestionsVisible(id))
-                .map(result -> StatementOcrResponse.from(result, reader.staff())))
+        return ownPracticeWithQuestions(id)
+            // O treino do próprio aluno: nunca com o gabarito, como qualquer outro leitor que não corrige.
+            .map(result -> StatementOcrResponse.from(result, false))
+            .switchIfEmpty(Mono.defer(() -> reader()
+                .flatMap(reader -> readableStatementWithQuestions(
+                        reader,
+                        () -> statementService.findByIdWithQuestions(id),
+                        () -> statementService.findByIdWithQuestionsVisible(id))
+                    .map(result -> StatementOcrResponse.from(result, reader.staff())))))
             .map(ResponseEntity::ok);
     }
 
@@ -181,6 +186,24 @@ public class StatementController {
                 () -> statementService.findBySubjectVisible(subjectId))
             .collectList()
             .map(ResponseEntity::ok);
+    }
+
+    /**
+     * O enunciado virtual de um treino (kixi#729) só o lê o seu dono: para qualquer outra conta este Mono fica vazio e
+     * o enunciado segue o caminho normal, onde não existe (404).
+     */
+    private Mono<Statement> ownPractice(Long id) {
+        return currentAccountService.requiredAccountId().flatMap(accountId -> {
+            Mono<Statement> own = statementService.findOwnPractice(id, accountId);
+            return own == null ? Mono.<Statement>empty() : own;
+        });
+    }
+
+    private Mono<StatementWithQuestions> ownPracticeWithQuestions(Long id) {
+        return currentAccountService.requiredAccountId().flatMap(accountId -> {
+            Mono<StatementWithQuestions> own = statementService.findOwnPracticeWithQuestions(id, accountId);
+            return own == null ? Mono.<StatementWithQuestions>empty() : own;
+        });
     }
 
     /** The signed-in account and whether it is an administrator, for the write operations. */

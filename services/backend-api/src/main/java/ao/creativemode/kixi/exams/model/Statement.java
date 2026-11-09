@@ -132,6 +132,17 @@ public class Statement {
     @Column("source")
     private String source;
 
+    /**
+     * Só num enunciado «virtual» de treino (kixi#729): a conta dona, a única que o lê. Nulo em qualquer enunciado a
+     * sério. Um enunciado com dono nunca aparece em catálogos, listas, estatísticas nem no ranking.
+     */
+    @Column("practice_owner_account_id")
+    private Long practiceOwnerAccountId;
+
+    /** Só num enunciado de treino: a sala cuja matriz o originou. */
+    @Column("practice_exam_room_id")
+    private Long practiceExamRoomId;
+
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -261,6 +272,26 @@ public class Statement {
 
     public void setCourseId(Long courseId) {
         this.courseId = courseId;
+    }
+
+    public Long getPracticeOwnerAccountId() {
+        return practiceOwnerAccountId;
+    }
+
+    public void setPracticeOwnerAccountId(Long practiceOwnerAccountId) {
+        this.practiceOwnerAccountId = practiceOwnerAccountId;
+    }
+
+    public Long getPracticeExamRoomId() {
+        return practiceExamRoomId;
+    }
+
+    public void setPracticeExamRoomId(Long practiceExamRoomId) {
+        this.practiceExamRoomId = practiceExamRoomId;
+    }
+
+    public boolean isPractice() {
+        return practiceOwnerAccountId != null;
     }
 
     public Long getCreatedBy() {
