@@ -24,6 +24,24 @@ class TutorSystemPromptTest {
         }
     }
 
+    /**
+     * Issue #594: the format is pinned where the screen can see it. The model used to
+     * answer with {@code \( \)} and lists marked with {@code *}, and the page showed
+     * both raw. BASE carries the rule; the mode instructions repeat it.
+     */
+    @Test
+    void theAnswerFormatIsPinned() {
+        assertThat(TutorSystemPrompt.FORMAT_RULES)
+                .contains("entre $...$")
+                .contains("$$...$$")
+                .contains("Nunca uses \\( \\)")
+                .contains("\\[ \\]")
+                .contains("\"- \"")
+                .contains("um item por linha")
+                .contains("não uses \"*\" como marcador");
+        assertThat(TutorSystemPrompt.BASE).endsWith(TutorSystemPrompt.FORMAT_RULES);
+    }
+
     /** The acceptance criterion: two teachers, two prompts. */
     @Test
     void twoTeachersWithDifferentStylesProduceDifferentPrompts() {

@@ -19,7 +19,23 @@ package ao.creativemode.kixi.chat.service;
  */
 public final class TutorSystemPrompt {
 
-    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph was added later (see the tests, which compare against this constant, not its text). */
+    /**
+     * The answer format, stated once and reused: the base prompt carries it and the
+     * mode instructions repeat it (issue #594). Asking only for "$...$" and "Markdown
+     * simples" was not enough — the model still wrote {@code \( \)} and started list
+     * items with {@code *}, and the screen showed raw LaTeX and stray asterisks.
+     */
+    static final String FORMAT_RULES = """
+            FORMATO DA RESPOSTA:
+            - Fórmulas: sempre em LaTeX, entre $...$ no meio da frase e entre $$...$$
+              quando ficam sozinhas numa linha. Nunca uses \\( \\) nem \\[ \\], e nunca
+              ponhas fórmulas em blocos de código.
+            - Listas: cada item começa por "- ", um item por linha. Nunca uses "*",
+              "•" nem vários itens na mesma linha.
+            - Asteriscos só existem aos pares, em **negrito**; não uses "*" como marcador.
+            """;
+
+    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph came with issue #431 and these rules with #594 (the tests compare against this constant, not its text). */
     static final String BASE = """
             És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
             Responde sempre em português, usando APENAS o enunciado e as questões
@@ -34,8 +50,8 @@ public final class TutorSystemPrompt {
             **negrito** só para os termos-chave, e uma lista só quando a resposta
             for mesmo uma sequência de passos ou de itens que não fazem sentido em
             prosa. Não fragmentes a resposta em itens soltos, não uses títulos nem
-            tabelas, e escreve as fórmulas em LaTeX entre $...$.
-            """;
+            tabelas.
+            """ + FORMAT_RULES;
 
     private TutorSystemPrompt() { }
 
