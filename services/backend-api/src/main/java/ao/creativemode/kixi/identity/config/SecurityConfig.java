@@ -260,9 +260,15 @@ public class SecurityConfig {
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .authenticated()
+                        // kixi#596: apagar, restaurar e purgar respostas de alunos muda o que o recálculo das notas vê; só o
+                        // administrador, com motivo e auditoria. O professor corrige pela nota (PATCH .../grade), não apagando.
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers/*/restore")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.DELETE,
+                                "/api/v1/simulation-answers/*",
+                                "/api/v1/simulation-answers/*/purge")
+                        .hasRole("ADMIN")
                         // Social learning (issue #119): revoking is an explicit act
                         // of the simulation's owner, and without its own rule the
                         // DELETE would fall through to the staff-only catch-all
@@ -280,9 +286,12 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
+                        // kixi#596: a resposta é do aluno (ou do motor, por INTEGRATION); o staff não cria nem edita em nome dele.
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
-                                "/api/v1/simulation-answers/**",
+                                "/api/v1/simulation-answers/**")
+                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulations",
                                 "/api/v1/simulations/**",
                                 "/api/simulations",
@@ -293,7 +302,9 @@ public class SecurityConfig {
                                 "/api/simulations/*/restore")
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.PUT,
-                                "/api/v1/simulation-answers/*",
+                                "/api/v1/simulation-answers/*")
+                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulations/*",
                                 "/api/simulations/*")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT", "INTEGRATION")

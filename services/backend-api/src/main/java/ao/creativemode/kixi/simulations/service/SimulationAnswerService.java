@@ -299,6 +299,13 @@ public class SimulationAnswerService {
             );
     }
 
+    /** A simulação a que a resposta pertence (mesmo apagada), para o trilho de auditoria (kixi#596). */
+    public Mono<Long> simulationIdOf(Long answerId) {
+        return repository.findById(answerId)
+            .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation answer not found")))
+            .map(SimulationAnswer::getSimulationId);
+    }
+
     @Transactional
     public Mono<Void> softDelete(Long id) {
         return lifecycleMutation(id, false, entity -> {

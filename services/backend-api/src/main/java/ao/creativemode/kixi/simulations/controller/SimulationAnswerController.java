@@ -8,6 +8,8 @@ import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerAiG
 import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerGradeRequest;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.PlanRoomLookup;
+import ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService;
+import ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService.Action;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -30,6 +32,10 @@ public class SimulationAnswerController {
     /** Opcional: sem ele (testes unitários) não há provas de plano a proteger. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PlanRoomLookup planRooms;
+
+    /** Opcional, como o anterior: sem ele (testes unitários) não se grava o trilho. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SimulationAnswerAuditService audit;
 
     public SimulationAnswerController(
         SimulationAnswerService service,
@@ -88,7 +94,8 @@ public class SimulationAnswerController {
     }
 
     /**
-     * Creates a new simulation answer.
+     * Creates a new simulation answer. Sempre em nome do dono da simulação (kixi#596): o staff não responde em nome do aluno;
+     * quem não é o dono recebe 403, mesmo sendo ADMIN ou professor.
      */
     @PostMapping
     public Mono<ResponseEntity<SimulationAnswerResponse>> create(
@@ -96,10 +103,8 @@ public class SimulationAnswerController {
         UriComponentsBuilder uriBuilder
     ) {
         return currentAccountService.requiredAccountId()
-            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> authorizeSimulation(request.simulationId()).then(tuple.getT2()
-                ? service.create(request)
-                : service.createForAccount(request, tuple.getT1())))
+            .flatMap(accountId -> authorizeSimulation(request.simulationId())
+                .then(Mono.defer(() -> service.createForAccount(request, accountId))))
             .map(created -> {
                 URI location = uriBuilder
                     .path("/api/v1/simulation-answers/{id}")
@@ -111,7 +116,7 @@ public class SimulationAnswerController {
     }
 
     /**
-     * Updates an existing active simulation answer.
+     * Updates an existing active simulation answer, só pelo dono da simulação (kixi#596).
      */
     @PutMapping("/{id}")
     public Mono<ResponseEntity<SimulationAnswerResponse>> update(
@@ -119,10 +124,8 @@ public class SimulationAnswerController {
         @Valid @RequestBody SimulationAnswerRequest request
     ) {
         return currentAccountService.requiredAccountId()
-            .zipWith(currentAccountService.hasAnyRole("ADMIN", "TEACHER"))
-            .flatMap(tuple -> authorize(id).then(tuple.getT2()
-                ? service.update(id, request)
-                : service.updateForAccount(id, request, tuple.getT1())))
+            .flatMap(accountId -> authorize(id)
+                .then(Mono.defer(() -> service.updateForAccount(id, request, accountId))))
             .map(ResponseEntity::ok);
     }
 
@@ -168,11 +171,11 @@ public class SimulationAnswerController {
     }
 
     /**
-     * Soft-deletes a simulation answer (moves it to trash).
+     * Soft-deletes a simulation answer (moves it to trash). Só o administrador, com motivo, e fica auditado (kixi#596).
      */
     @DeleteMapping("/{id}")
-    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return staffLifecycleContext(id, false).then(Mono.defer(() -> service.softDelete(id)))
+    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        return audited(id, false, Action.SOFT_DELETE, reason, () -> service.softDelete(id))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -180,8 +183,8 @@ public class SimulationAnswerController {
      * Restores a soft-deleted simulation answer from trash.
      */
     @PostMapping("/{id}/restore")
-    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.restore(id)))
+    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        return audited(id, true, Action.RESTORE, reason, () -> service.restore(id))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -189,24 +192,33 @@ public class SimulationAnswerController {
      * Permanently deletes a simulation answer (only if already soft-deleted).
      */
     @DeleteMapping("/{id}/purge")
-    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return staffLifecycleContext(id, true).then(Mono.defer(() -> service.hardDelete(id)))
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        return audited(id, true, Action.PURGE, reason, () -> service.hardDelete(id))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
-    private Mono<Void> staffLifecycleContext(Long answerId, boolean includeDeleted) {
-        return currentAccountService.requiredAccountId()
-            .zipWith(currentAccountService.hasAnyRole("ADMIN"))
-            .zipWith(currentAccountService.hasAnyRole("TEACHER"))
-            .flatMap(tuple -> {
-                boolean admin = tuple.getT1().getT2();
-                boolean teacher = tuple.getT2();
-                if (!admin && !teacher) {
-                    return Mono.error(ao.creativemode.kixi.shared.exception.ApiException.forbidden(
-                        "Only ADMIN or an assigned teacher can manage simulation answers"));
-                }
-                return service.authorizeAnswer(answerId, tuple.getT1().getT1(), admin, teacher, includeDeleted);
-            });
+    /**
+     * Apagar, restaurar e purgar mudam o que o recálculo das notas vê (kixi#596): só o administrador, com motivo, e o acto
+     * fica no trilho. O professor corrige pela nota (PATCH .../grade), nunca mexendo nas respostas do aluno.
+     */
+    private Mono<Void> audited(Long answerId, boolean includeDeleted, Action action, String reason,
+            java.util.function.Supplier<Mono<Void>> mutation) {
+        return Mono.defer(() -> {
+            String why = SimulationAnswerAuditService.requireReason(reason);
+            return currentAccountService.requiredAccountId()
+                .zipWith(currentAccountService.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> {
+                    if (!tuple.getT2()) {
+                        return Mono.<Void>error(ApiException.forbidden("Only ADMIN can manage simulation answers"));
+                    }
+                    Long actor = tuple.getT1();
+                    return service.authorizeAnswer(answerId, actor, true, false, includeDeleted)
+                        .then(service.simulationIdOf(answerId))
+                        .flatMap(simulationId -> mutation.get()
+                            .then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
+                                : audit.record(answerId, simulationId, action, actor, why))));
+                });
+        });
     }
 
     private Mono<Void> authorize(Long answerId) {

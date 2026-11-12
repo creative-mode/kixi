@@ -48,6 +48,7 @@ class StudentIsolationPostgresIntegrationTest {
     private static final long TEACHER = 123001L;
     private static final long STUDENT_A = 123002L;
     private static final long STUDENT_B = 123003L;
+    private static final long ADMIN = 123004L;
     private static final long STATEMENT = 123001L;
     private static final long QUESTION = 123001L;
     private static final long WRONG_OPTION = 123001L;
@@ -104,12 +105,15 @@ class StudentIsolationPostgresIntegrationTest {
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
-        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ")");
+        sql("DELETE FROM simulation_answer_audit WHERE actor_account_id = " + ADMIN);
+        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ")");
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
                 + "(" + TEACHER + ", 'it-iso-teacher', 'it-iso-teacher@example.com', 'x', true),"
                 + "(" + STUDENT_A + ", 'it-iso-a', 'it-iso-a@example.com', 'x', true),"
-                + "(" + STUDENT_B + ", 'it-iso-b', 'it-iso-b@example.com', 'x', true)");
+                + "(" + STUDENT_B + ", 'it-iso-b', 'it-iso-b@example.com', 'x', true),"
+                + "(" + ADMIN + ", 'it-iso-admin', 'it-iso-admin@example.com', 'x', true)");
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + STUDENT_A + ", id FROM roles WHERE name = 'STUDENT'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + STUDENT_B + ", id FROM roles WHERE name = 'STUDENT'");
@@ -202,6 +206,51 @@ class StudentIsolationPostgresIntegrationTest {
 
         assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE simulation_id = "
                 + B_SIMULATION.get() + " AND question_id = " + QUESTION + " AND deleted_at IS NULL")).isEqualTo(1L);
+    }
+
+    /** kixi#596: o professor não cria, edita nem apaga a resposta de um aluno; a linha fica como estava. */
+    @Test
+    void aTeacherCannotCreateEditOrDeleteAStudentsAnswer() {
+        // Com o papel STUDENT também, como toda a conta registada: o POST/PUT chega ao controlador e é o dono que decide.
+        String teacher = jwtService.generateToken(TEACHER, List.of("TEACHER", "STUDENT"));
+        String body = "{\"simulationId\":" + B_SIMULATION.get() + ",\"questionId\":" + QUESTION
+                + ",\"selectedOptionId\":" + WRONG_OPTION + "}";
+
+        bearer(teacher).post().uri("/api/v1/simulation-answers").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).exchange().expectStatus().isForbidden();
+        bearer(teacher).put().uri("/api/v1/simulation-answers/" + B_ANSWER.get()).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).exchange().expectStatus().isForbidden();
+        bearer(teacher).delete().uri("/api/v1/simulation-answers/" + B_ANSWER.get() + "?reason=sem+permissao")
+                .exchange().expectStatus().isForbidden();
+
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                + " AND deleted_at IS NULL AND selected_option_id = " + RIGHT_OPTION)).isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()))
+                .isEqualTo(0L);
+    }
+
+    /** kixi#596: o administrador apaga e purga com motivo, e cada acto fica no trilho, que sobrevive ao purge. */
+    @Test
+    void anAdminDeletesAndPurgesWithAReasonAndLeavesAnAuditTrail() {
+        String admin = jwtService.generateToken(ADMIN, List.of("ADMIN"));
+        String uri = "/api/v1/simulation-answers/" + B_ANSWER.get();
+
+        bearer(admin).delete().uri(uri).exchange().expectStatus().isBadRequest();
+        bearer(admin).delete().uri(uri + "?reason=abc").exchange().expectStatus().isBadRequest();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                + " AND deleted_at IS NULL")).isEqualTo(1L);
+
+        bearer(admin).delete().uri(uri + "?reason=resposta+duplicada").exchange().expectStatus().isNoContent();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                + " AND deleted_at IS NOT NULL")).isEqualTo(1L);
+
+        bearer(admin).delete().uri(uri + "/purge?reason=pedido+do+aluno").exchange().expectStatus().isNoContent();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get())).isEqualTo(0L);
+
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()
+                + " AND actor_account_id = " + ADMIN + " AND simulation_id = " + B_SIMULATION.get()
+                + " AND ((action = 'SOFT_DELETE' AND reason = 'resposta duplicada')"
+                + " OR (action = 'PURGE' AND reason = 'pedido do aluno'))")).isEqualTo(2L);
     }
 
     private HttpStatusCode submit(String token) {
