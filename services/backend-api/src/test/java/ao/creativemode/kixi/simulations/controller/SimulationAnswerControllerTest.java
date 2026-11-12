@@ -117,11 +117,10 @@ class SimulationAnswerControllerTest {
         var deadline = mock(ao.creativemode.kixi.simulations.service.SimulationDeadlineService.class);
         when(deadline.expired(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Mono.just(false));
-        SimulationAnswerController controller = new SimulationAnswerController(
-                new SimulationAnswerService(answers, simulations, mock(QuestionRepository.class),
-                        mock(QuestionOptionRepository.class), deadline, null),
-                current, null);
-        org.springframework.test.util.ReflectionTestUtils.setField(controller, "audit", audit);
+        SimulationAnswerService service = new SimulationAnswerService(answers, simulations, mock(QuestionRepository.class),
+                mock(QuestionOptionRepository.class), deadline, null);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "audit", audit);
+        SimulationAnswerController controller = new SimulationAnswerController(service, current, null);
 
         StepVerifier.create(controller.softDelete(10L, "  duplicada ")).expectNextCount(1).verifyComplete();
 

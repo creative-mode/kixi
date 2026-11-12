@@ -32,6 +32,10 @@ public class SimulationAnswerService {
     private final SimulationService simulationService;
     private final ExamRoomAccess examRooms;
 
+    /** Opcional: sem ele (testes unitários que constroem o serviço à mão) não se grava o trilho. */
+    @Autowired(required = false)
+    private SimulationAnswerAuditService audit;
+
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
@@ -304,6 +308,32 @@ public class SimulationAnswerService {
         return repository.findById(answerId)
             .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation answer not found")))
             .map(SimulationAnswer::getSimulationId);
+    }
+
+    /**
+     * Apagar, restaurar e purgar com o registo da auditoria na MESMA transação da mutação (kixi#596): se o INSERT do trilho
+     * falhar, a mutação desfaz-se, e nunca fica uma resposta apagada ou purgada sem registo.
+     */
+    @Transactional
+    public Mono<Void> softDelete(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAnswerAuditService.Action.SOFT_DELETE, actorAccountId, reason, () -> softDelete(id));
+    }
+
+    @Transactional
+    public Mono<Void> restore(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAnswerAuditService.Action.RESTORE, actorAccountId, reason, () -> restore(id));
+    }
+
+    @Transactional
+    public Mono<Void> hardDelete(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAnswerAuditService.Action.PURGE, actorAccountId, reason, () -> hardDelete(id));
+    }
+
+    private Mono<Void> audited(Long id, SimulationAnswerAuditService.Action action, Long actor, String reason,
+            java.util.function.Supplier<Mono<Void>> mutation) {
+        return simulationIdOf(id).flatMap(simulationId -> mutation.get()
+            .then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
+                : audit.record(id, simulationId, action, actor, reason))));
     }
 
     @Transactional

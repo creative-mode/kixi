@@ -9,7 +9,6 @@ import ao.creativemode.kixi.simulations.dto.simulationanswer.SimulationAnswerGra
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.PlanRoomLookup;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService;
-import ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService.Action;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.SimulationAnswerService;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -32,10 +31,6 @@ public class SimulationAnswerController {
     /** Opcional: sem ele (testes unitários) não há provas de plano a proteger. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PlanRoomLookup planRooms;
-
-    /** Opcional, como o anterior: sem ele (testes unitários) não se grava o trilho. */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private SimulationAnswerAuditService audit;
 
     public SimulationAnswerController(
         SimulationAnswerService service,
@@ -175,7 +170,7 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id, @RequestParam(required = false) String reason) {
-        return audited(id, false, Action.SOFT_DELETE, reason, () -> service.softDelete(id))
+        return audited(id, false, reason, (actor, why) -> service.softDelete(id, actor, why))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -184,7 +179,7 @@ public class SimulationAnswerController {
      */
     @PostMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id, @RequestParam(required = false) String reason) {
-        return audited(id, true, Action.RESTORE, reason, () -> service.restore(id))
+        return audited(id, true, reason, (actor, why) -> service.restore(id, actor, why))
             .thenReturn(ResponseEntity.noContent().build());
     }
 
@@ -193,7 +188,7 @@ public class SimulationAnswerController {
      */
     @DeleteMapping("/{id}/purge")
     public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id, @RequestParam(required = false) String reason) {
-        return audited(id, true, Action.PURGE, reason, () -> service.hardDelete(id))
+        return audited(id, true, reason, (actor, why) -> service.hardDelete(id, actor, why))
             .thenReturn(ResponseEntity.status(NO_CONTENT).build());
     }
 
@@ -201,8 +196,8 @@ public class SimulationAnswerController {
      * Apagar, restaurar e purgar mudam o que o recálculo das notas vê (kixi#596): só o administrador, com motivo, e o acto
      * fica no trilho. O professor corrige pela nota (PATCH .../grade), nunca mexendo nas respostas do aluno.
      */
-    private Mono<Void> audited(Long answerId, boolean includeDeleted, Action action, String reason,
-            java.util.function.Supplier<Mono<Void>> mutation) {
+    private Mono<Void> audited(Long answerId, boolean includeDeleted, String reason,
+            java.util.function.BiFunction<Long, String, Mono<Void>> mutationAndAudit) {
         return Mono.defer(() -> {
             String why = SimulationAnswerAuditService.requireReason(reason);
             return currentAccountService.requiredAccountId()
@@ -212,11 +207,10 @@ public class SimulationAnswerController {
                         return Mono.<Void>error(ApiException.forbidden("Only ADMIN can manage simulation answers"));
                     }
                     Long actor = tuple.getT1();
+                    // A mutação e o registo da auditoria correm na mesma transação do serviço: se o registo falhar, a
+                    // mutação desfaz-se (nunca há resposta apagada ou purgada sem trilho).
                     return service.authorizeAnswer(answerId, actor, true, false, includeDeleted)
-                        .then(service.simulationIdOf(answerId))
-                        .flatMap(simulationId -> mutation.get()
-                            .then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
-                                : audit.record(answerId, simulationId, action, actor, why))));
+                        .then(Mono.defer(() -> mutationAndAudit.apply(actor, why)));
                 });
         });
     }

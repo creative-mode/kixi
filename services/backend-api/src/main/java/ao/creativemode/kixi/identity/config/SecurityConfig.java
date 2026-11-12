@@ -286,11 +286,13 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
-                        // kixi#596: a resposta é do aluno (ou do motor, por INTEGRATION); o staff não cria nem edita em nome dele.
+                        // kixi#596: a resposta é do aluno; ninguém a cria nem edita em nome dele. O controlador exige sempre o dono
+                        // da simulação (também antes deste PR, para a conta INTEGRATION): o motor escreve a nota pelo
+                        // PUT .../ai-grade, nunca criando respostas, por isso aqui só o STUDENT.
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
                                 "/api/v1/simulation-answers/**")
-                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        .hasRole("STUDENT")
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulations",
                                 "/api/v1/simulations/**",
@@ -303,7 +305,7 @@ public class SecurityConfig {
                         .hasAnyRole("ADMIN", "TEACHER")
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulation-answers/*")
-                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        .hasRole("STUDENT")
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulations/*",
                                 "/api/simulations/*")

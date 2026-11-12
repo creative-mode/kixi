@@ -49,6 +49,7 @@ class StudentIsolationPostgresIntegrationTest {
     private static final long STUDENT_A = 123002L;
     private static final long STUDENT_B = 123003L;
     private static final long ADMIN = 123004L;
+    private static final long ENGINE = 123005L;
     private static final long STATEMENT = 123001L;
     private static final long QUESTION = 123001L;
     private static final long WRONG_OPTION = 123001L;
@@ -106,13 +107,15 @@ class StudentIsolationPostgresIntegrationTest {
         sql("DELETE FROM questions WHERE id = " + QUESTION);
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM simulation_answer_audit WHERE actor_account_id = " + ADMIN);
-        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ")");
-        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ")");
+        sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ", " + ENGINE + ")");
+        sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ", " + ENGINE + ")");
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
                 + "(" + TEACHER + ", 'it-iso-teacher', 'it-iso-teacher@example.com', 'x', true),"
                 + "(" + STUDENT_A + ", 'it-iso-a', 'it-iso-a@example.com', 'x', true),"
                 + "(" + STUDENT_B + ", 'it-iso-b', 'it-iso-b@example.com', 'x', true),"
-                + "(" + ADMIN + ", 'it-iso-admin', 'it-iso-admin@example.com', 'x', true)");
+                + "(" + ADMIN + ", 'it-iso-admin', 'it-iso-admin@example.com', 'x', true),"
+                + "(" + ENGINE + ", 'it-iso-engine', 'it-iso-engine@example.com', 'x', true)");
+        sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ENGINE + ", id FROM roles WHERE name = 'INTEGRATION'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + ADMIN + ", id FROM roles WHERE name = 'ADMIN'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + TEACHER + ", id FROM roles WHERE name = 'TEACHER'");
         sql("INSERT INTO account_roles (account_id, role_id) SELECT " + STUDENT_A + ", id FROM roles WHERE name = 'STUDENT'");
@@ -227,6 +230,52 @@ class StudentIsolationPostgresIntegrationTest {
                 + " AND deleted_at IS NULL AND selected_option_id = " + RIGHT_OPTION)).isEqualTo(1L);
         assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()))
                 .isEqualTo(0L);
+    }
+
+    /**
+     * kixi#596: o motor (INTEGRATION), com uma conta diferente da do aluno, não cria nem edita a resposta dele: o controlador
+     * sempre exigiu o dono da simulação, e a regra de segurança já não promete outra coisa. A nota entra por PUT .../ai-grade.
+     */
+    @Test
+    void theEngineAccountCannotCreateOrEditAnAnswerOfAnotherAccount() {
+        String engine = jwtService.generateToken(ENGINE, List.of("INTEGRATION"));
+        String body = "{\"simulationId\":" + B_SIMULATION.get() + ",\"questionId\":" + QUESTION
+                + ",\"selectedOptionId\":" + WRONG_OPTION + "}";
+
+        bearer(engine).post().uri("/api/v1/simulation-answers").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).exchange().expectStatus().isForbidden();
+        bearer(engine).put().uri("/api/v1/simulation-answers/" + B_ANSWER.get()).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).exchange().expectStatus().isForbidden();
+
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                + " AND deleted_at IS NULL AND selected_option_id = " + RIGHT_OPTION)).isEqualTo(1L);
+    }
+
+    /**
+     * kixi#596: a mutação e o registo da auditoria são uma só transação. Com o INSERT do trilho a falhar (a tabela
+     * desaparece por um instante), o pedido devolve erro E a resposta continua intacta: nunca fica apagada sem registo.
+     */
+    @Test
+    void ifTheAuditInsertFailsTheDeleteIsRolledBack() {
+        String admin = jwtService.generateToken(ADMIN, List.of("ADMIN"));
+        String uri = "/api/v1/simulation-answers/" + B_ANSWER.get();
+
+        sql("ALTER TABLE simulation_answer_audit RENAME TO simulation_answer_audit_off");
+        try {
+            bearer(admin).delete().uri(uri + "?reason=resposta+duplicada").exchange()
+                    .expectStatus().is5xxServerError();
+            assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                    + " AND deleted_at IS NULL")).as("a resposta não ficou apagada").isEqualTo(1L);
+        } finally {
+            sql("ALTER TABLE simulation_answer_audit_off RENAME TO simulation_answer_audit");
+        }
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()))
+                .isEqualTo(0L);
+
+        // Com o trilho de volta, o mesmo pedido apaga e regista.
+        bearer(admin).delete().uri(uri + "?reason=resposta+duplicada").exchange().expectStatus().isNoContent();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()
+                + " AND action = 'SOFT_DELETE'")).isEqualTo(1L);
     }
 
     /** kixi#596: o administrador apaga e purga com motivo, e cada acto fica no trilho, que sobrevive ao purge. */
