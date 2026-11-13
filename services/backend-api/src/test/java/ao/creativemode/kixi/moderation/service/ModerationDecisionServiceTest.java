@@ -2,6 +2,7 @@ package ao.creativemode.kixi.moderation.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -100,14 +101,14 @@ class ModerationDecisionServiceTest {
     }
 
     @Test
-    void ignoringChangesNothingInTheTargetButIsStillAuditedAndNeedsNoNote() {
+    void ignoringChangesNothingInTheTargetButIsStillAudited() {
         account();
 
-        StepVerifier.create(service.decide(ADMIN, 7L, "IGNORED", null)).expectNext(view).verifyComplete();
+        StepVerifier.create(service.decide(ADMIN, 7L, "IGNORED", NOTE)).expectNext(view).verifyComplete();
 
         verify(admin, never()).deactivateAccount(anyLong());
         verify(admin, never()).hideInstitution(anyLong());
-        verify(admin).recordAudit(eq(7L), eq("IGNORED"), eq("ACCOUNT"), eq(42L), eq(ADMIN), eq(""), any());
+        verify(admin).recordAudit(eq(7L), eq("IGNORED"), eq("ACCOUNT"), eq(42L), eq(ADMIN), eq(NOTE), any());
     }
 
     @Test
@@ -122,9 +123,11 @@ class ModerationDecisionServiceTest {
     }
 
     @Test
-    void hidingAndSuspendingNeedARealNoteButIgnoringDoesNot() {
+    void everyDecisionNeedsARealNote() {
         failsWith(service.decide(ADMIN, 7L, "SUSPENDED", "curta"), HttpStatus.BAD_REQUEST, "pelo menos 10");
         failsWith(service.decide(ADMIN, 8L, "HIDDEN", "   "), HttpStatus.BAD_REQUEST, "pelo menos 10");
+        failsWith(service.decide(ADMIN, 7L, "IGNORED", null), HttpStatus.BAD_REQUEST, "ignorar");
+        failsWith(service.decide(ADMIN, 7L, "IGNORED", "  curta "), HttpStatus.BAD_REQUEST, "pelo menos 10");
         failsWith(service.decide(ADMIN, 7L, "IGNORED", "x".repeat(501)), HttpStatus.BAD_REQUEST, "no máximo 500");
         verifyNoInteractions(reports);
         verifyNoInteractions(admin);
@@ -134,7 +137,7 @@ class ModerationDecisionServiceTest {
     void aReportThatDoesNotExistIsNotFound() {
         when(reports.findById(99L)).thenReturn(Mono.empty());
 
-        failsWith(service.decide(ADMIN, 99L, "IGNORED", ""), HttpStatus.NOT_FOUND, "Denúncia");
+        failsWith(service.decide(ADMIN, 99L, "IGNORED", NOTE), HttpStatus.NOT_FOUND, "Denúncia");
     }
 
     @Test
@@ -177,11 +180,27 @@ class ModerationDecisionServiceTest {
 
     @Test
     void theQueueRejectsAnUnknownStatusAndPassesAKnownOne() {
-        when(admin.queue("OPEN")).thenReturn(Flux.just(view));
-        when(admin.queue(null)).thenReturn(Flux.just(view));
+        when(admin.queue("OPEN", 100, 0)).thenReturn(Flux.just(view));
+        when(admin.queue(null, 100, 0)).thenReturn(Flux.just(view));
 
-        StepVerifier.create(service.queue("PENDING")).expectError(ApiException.class).verify();
-        StepVerifier.create(service.queue(" OPEN ")).expectNext(view).verifyComplete();
-        StepVerifier.create(service.queue(null)).expectNext(view).verifyComplete();
+        StepVerifier.create(service.queue("PENDING", null, null)).expectError(ApiException.class).verify();
+        StepVerifier.create(service.queue(" OPEN ", null, null)).expectNext(view).verifyComplete();
+        StepVerifier.create(service.queue(null, null, null)).expectNext(view).verifyComplete();
+    }
+
+    @Test
+    void theQueueAndTheAuditAreAlwaysBounded() {
+        when(admin.queue(any(), anyInt(), anyInt())).thenReturn(Flux.empty());
+        when(admin.audit(anyInt(), anyInt())).thenReturn(Flux.empty());
+
+        service.queue(null, 100000, -5).blockLast();
+        service.queue("OPEN", 0, 40).blockLast();
+        service.audit(null, null).blockLast();
+        service.audit(25, 50).blockLast();
+
+        verify(admin).queue(null, 500, 0);
+        verify(admin).queue("OPEN", 1, 40);
+        verify(admin).audit(100, 0);
+        verify(admin).audit(25, 50);
     }
 }

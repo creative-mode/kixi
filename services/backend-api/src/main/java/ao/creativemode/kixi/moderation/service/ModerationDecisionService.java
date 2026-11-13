@@ -28,6 +28,8 @@ public class ModerationDecisionService {
     /** Os mesmos mínimos e máximos que o ecrã do administrador aplica (lib/moderation/model.ts). */
     static final int MIN_NOTE_TO_ACT = 10;
     static final int MAX_NOTE = 500;
+    static final int DEFAULT_LIMIT = 100;
+    static final int MAX_LIMIT = 500;
 
     private static final Set<String> STATUSES = Set.of("OPEN", IGNORED, HIDDEN, SUSPENDED);
 
@@ -40,15 +42,24 @@ public class ModerationDecisionService {
     }
 
     /** A fila, opcionalmente só as de um estado ({@code OPEN}, {@code IGNORED}, {@code HIDDEN}, {@code SUSPENDED}). */
-    public Flux<ModerationReportResponse> queue(String status) {
+    public Flux<ModerationReportResponse> queue(String status, Integer limit, Integer offset) {
         if (status != null && !status.isBlank() && !STATUSES.contains(status.trim())) {
             return Flux.error(ApiException.badRequest("Estado inválido."));
         }
-        return admin.queue(status == null || status.isBlank() ? null : status.trim());
+        return admin.queue(status == null || status.isBlank() ? null : status.trim(), clampLimit(limit), clampOffset(offset));
     }
 
-    public Flux<AuditEntryResponse> audit() {
-        return admin.audit();
+    public Flux<AuditEntryResponse> audit(Integer limit, Integer offset) {
+        return admin.audit(clampLimit(limit), clampOffset(offset));
+    }
+
+    /** O histórico só cresce: nenhuma consulta devolve tudo. Sem {@code limit} valem {@value #DEFAULT_LIMIT}; o tecto é {@value #MAX_LIMIT}. */
+    static int clampLimit(Integer limit) {
+        return limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, MAX_LIMIT));
+    }
+
+    static int clampOffset(Integer offset) {
+        return offset == null ? 0 : Math.max(0, offset);
     }
 
     /**
@@ -61,9 +72,10 @@ public class ModerationDecisionService {
         if (note.length() > MAX_NOTE) {
             return Mono.error(ApiException.badRequest("A nota tem de ter no máximo " + MAX_NOTE + " caracteres."));
         }
-        if (!IGNORED.equals(decision) && note.length() < MIN_NOTE_TO_ACT) {
-            return Mono.error(ApiException.badRequest("Para " + (HIDDEN.equals(decision) ? "ocultar" : "suspender")
-                    + " escreva uma nota com pelo menos " + MIN_NOTE_TO_ACT + " caracteres: é ela que explica a decisão."));
+        if (note.length() < MIN_NOTE_TO_ACT) {
+            String verb = HIDDEN.equals(decision) ? "ocultar" : SUSPENDED.equals(decision) ? "suspender" : "ignorar";
+            return Mono.error(ApiException.badRequest("Para " + verb + " escreva uma nota com pelo menos "
+                    + MIN_NOTE_TO_ACT + " caracteres: é ela que explica a decisão."));
         }
         return reports.findById(reportId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Denúncia não encontrada.")))

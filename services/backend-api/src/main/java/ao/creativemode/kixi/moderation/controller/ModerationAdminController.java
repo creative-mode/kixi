@@ -32,8 +32,10 @@ public class ModerationAdminController {
     }
 
     @GetMapping("/reports")
-    public Flux<ModerationReportResponse> queue(@RequestParam(required = false) String status) {
-        return service.queue(status);
+    public Flux<ModerationReportResponse> queue(@RequestParam(required = false) String status,
+                                                @RequestParam(required = false) Integer limit,
+                                                @RequestParam(required = false) Integer offset) {
+        return service.queue(status, limit, offset);
     }
 
     @PostMapping("/reports/{id}/ignore")
@@ -52,8 +54,9 @@ public class ModerationAdminController {
     }
 
     @GetMapping("/audit")
-    public Flux<AuditEntryResponse> audit() {
-        return service.audit();
+    public Flux<AuditEntryResponse> audit(@RequestParam(required = false) Integer limit,
+                                          @RequestParam(required = false) Integer offset) {
+        return service.audit(limit, offset);
     }
 
     private Mono<ModerationReportResponse> decide(Long id, String decision, DecisionRequest body) {

@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.moderation.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -77,8 +78,8 @@ class ModerationAdminAuthorizationTest {
     void setUp() {
         ModerationReportResponse decided = new ModerationReportResponse(7L, "ACCOUNT", 42L, "Aluno", 9L, "Outro",
                 "OTHER", "x", "SUSPENDED", LocalDateTime.now(), LocalDateTime.now(), "Admin", "nota da decisão");
-        when(admin.queue(any())).thenReturn(Flux.just(decided));
-        when(admin.audit()).thenReturn(Flux.just(new AuditEntryResponse(1L, LocalDateTime.now(), "Admin", "SUSPENDED",
+        when(admin.queue(any(), anyInt(), anyInt())).thenReturn(Flux.just(decided));
+        when(admin.audit(anyInt(), anyInt())).thenReturn(Flux.just(new AuditEntryResponse(1L, LocalDateTime.now(), "Admin", "SUSPENDED",
                 "ACCOUNT", 42L, "Aluno", 7L, "nota da decisão")));
         ModerationReport open = new ModerationReport();
         open.setId(7L);
@@ -99,7 +100,7 @@ class ModerationAdminAuthorizationTest {
         client.mutateWith(as(ADMIN_ID, "ROLE_ADMIN")).get().uri("/api/v1/moderation/reports?status=OPEN")
                 .exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$[0].id").isEqualTo(7).jsonPath("$[0].targetName").isEqualTo("Aluno");
-        verify(admin).queue("OPEN");
+        verify(admin).queue("OPEN", 100, 0);
     }
 
     @Test

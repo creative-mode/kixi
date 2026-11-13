@@ -132,7 +132,7 @@ class ModerationPostgresIntegrationTest {
 
         // decidir outra vez a mesma denúncia: 409, e a auditoria não ganha uma segunda linha
         bearer(admin).post().uri("/api/v1/moderation/reports/" + ACCOUNT_REPORT + "/ignore")
-                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"\"}").exchange().expectStatus().isEqualTo(409);
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"" + NOTE + "\"}").exchange().expectStatus().isEqualTo(409);
         assertThat(count("SELECT COUNT(*) FROM moderation_audit WHERE report_id = " + ACCOUNT_REPORT)).isEqualTo(1);
     }
 
@@ -160,7 +160,7 @@ class ModerationPostgresIntegrationTest {
     @Test
     void ignoringChangesNothingButIsAudited() {
         bearer(token(ADMIN, "ADMIN")).post().uri("/api/v1/moderation/reports/" + ACCOUNT_REPORT + "/ignore")
-                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"\"}")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"" + NOTE + "\"}")
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.status").isEqualTo("IGNORED");
         assertThat(count("SELECT COUNT(*) FROM accounts WHERE id = " + REPORTED + " AND active = TRUE")).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM moderation_audit WHERE report_id = " + ACCOUNT_REPORT + " AND action = 'IGNORED'")).isEqualTo(1);
@@ -188,6 +188,27 @@ class ModerationPostgresIntegrationTest {
                     .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"\"}").exchange().expectStatus().isForbidden();
         }
         assertThat(count("SELECT COUNT(*) FROM moderation_reports WHERE status = 'OPEN' AND id IN (" + ACCOUNT_REPORT + ", " + SCHOOL_REPORT + ")")).isEqualTo(2);
+    }
+
+    @Test
+    void theQueueAndTheAuditArePaged() {
+        String admin = token(ADMIN, "ADMIN");
+        bearer(admin).post().uri("/api/v1/moderation/reports/" + ACCOUNT_REPORT + "/ignore")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"" + NOTE + "\"}").exchange().expectStatus().isOk();
+        bearer(admin).post().uri("/api/v1/moderation/reports/" + SCHOOL_REPORT + "/hide")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"" + NOTE + "\"}").exchange().expectStatus().isOk();
+
+        bearer(admin).get().uri("/api/v1/moderation/reports?limit=1").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(1);
+        bearer(admin).get().uri("/api/v1/moderation/reports?limit=1&offset=1").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(1);
+        bearer(admin).get().uri("/api/v1/moderation/reports?offset=2").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(0);
+        bearer(admin).get().uri("/api/v1/moderation/audit?limit=1").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(1);
+        bearer(admin).get().uri("/api/v1/moderation/audit?limit=1&offset=1").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.length()").isEqualTo(1)
+                .jsonPath("$[0].action").value(a -> assertThat(a).isIn("IGNORED", "HIDDEN"));
     }
 
     private long count(String query) {

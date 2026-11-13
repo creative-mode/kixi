@@ -41,19 +41,20 @@ public class ModerationAdminRepository {
     }
 
     /** A fila: as por decidir primeiro; dentro de cada grupo, as mais recentes à frente. */
-    public Flux<ModerationReportResponse> queue(String status) {
-        String order = " ORDER BY (r.status = 'OPEN') DESC, COALESCE(r.decided_at, r.created_at) DESC, r.id DESC";
+    public Flux<ModerationReportResponse> queue(String status, int limit, int offset) {
+        String order = " ORDER BY (r.status = 'OPEN') DESC, COALESCE(r.decided_at, r.created_at) DESC, r.id DESC"
+                + " LIMIT :limit OFFSET :offset";
         DatabaseClient.GenericExecuteSpec spec = status == null
                 ? db.sql(REPORT_SELECT + order)
                 : db.sql(REPORT_SELECT + " WHERE r.status = :status" + order).bind("status", status);
-        return spec.map((row, meta) -> report(row)).all();
+        return spec.bind("limit", limit).bind("offset", offset).map((row, meta) -> report(row)).all();
     }
 
     public Mono<ModerationReportResponse> report(Long id) {
         return db.sql(REPORT_SELECT + " WHERE r.id = :id").bind("id", id).map((row, meta) -> report(row)).one();
     }
 
-    public Flux<AuditEntryResponse> audit() {
+    public Flux<AuditEntryResponse> audit(int limit, int offset) {
         return db.sql("""
                 SELECT m.id, m.created_at, %s AS actor, m.action, m.target_type, m.target_id,
                        CASE WHEN m.target_type = 'ACCOUNT' THEN %s
@@ -61,7 +62,9 @@ public class ModerationAdminRepository {
                        m.report_id, m.note
                 FROM moderation_audit m
                 ORDER BY m.created_at DESC, m.id DESC
+                LIMIT :limit OFFSET :offset
                 """.formatted(accountName("m.actor_account_id"), accountName("m.target_id")))
+                .bind("limit", limit).bind("offset", offset)
                 .map((row, meta) -> new AuditEntryResponse(
                         row.get("id", Long.class), row.get("created_at", LocalDateTime.class),
                         row.get("actor", String.class), row.get("action", String.class),
