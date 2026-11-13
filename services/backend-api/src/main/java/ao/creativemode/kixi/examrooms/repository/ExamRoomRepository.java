@@ -15,6 +15,12 @@ public interface ExamRoomRepository extends ReactiveCrudRepository<ExamRoom, Lon
             + "WHERE r.teacher_account_id = :teacherAccountId AND cl.institution_id = :institutionId "
             + "ORDER BY r.created_at DESC")
     Flux<ExamRoom> findByTeacherAccountIdAndInstitutionId(Long teacherAccountId, Long institutionId);
+    /** Every room, newest first: what the integration account (the SchoolOps engine) sees, since it owns none (#600). */
+    Flux<ExamRoom> findAllByOrderByCreatedAtDesc();
+    /** Every room in the classes of one school, newest first. */
+    @Query("SELECT r.* FROM exam_rooms r JOIN classes cl ON cl.id = r.class_id "
+            + "WHERE cl.institution_id = :institutionId ORDER BY r.created_at DESC")
+    Flux<ExamRoom> findAllByInstitutionId(Long institutionId);
     Mono<ExamRoom> findByIdAndTeacherAccountId(Long id, Long teacherAccountId);
     @Query("SELECT EXISTS (SELECT 1 FROM exam_rooms WHERE statement_id = :statementId "
             + "AND status IN ('OPEN', 'RUNNING'))")
