@@ -146,7 +146,7 @@ public class SchoolOpsPautaOpener {
                     FROM term_plans p JOIN classes c ON c.id = p.class_id JOIN institutions i ON i.id = c.institution_id
                       JOIN school_years sy ON sy.id = c.school_year_id JOIN terms t ON t.id = p.term_id JOIN courses co ON co.id = c.course_id
                       JOIN subjects s ON s.id = p.subject_id WHERE p.id = :p
-                    """).bind("p", planId).fetch().one().flatMap(h -> teacher(h).zipWith(students(h)).map(ts -> {
+                    """).bind("p", planId).fetch().one().flatMap(h -> Mono.zip(teacher(h), students(h), coordinator(h)).map(ts -> {
                 Map<String, Object> pedido = new LinkedHashMap<>();
                 pedido.put("contratoVersao", "1");
                 pedido.put("pautaRef", "kixi-plano-" + planId);
@@ -159,6 +159,8 @@ public class SchoolOpsPautaOpener {
                         "curso", Map.of("sourcedId", String.valueOf(h.get("course_id")), "sigla", String.valueOf(h.get("course_code")), "nome", String.valueOf(h.get("course_name"))),
                         "disciplina", Map.of("sourcedId", String.valueOf(h.get("subject_id")), "sigla", subjectCode, "nome", String.valueOf(h.get("subject_name")))));
                 pedido.put("professor", ts.getT1());
+                // O coordenador da escola é opcional no contrato: com ele, o motor atribui-lhe as homologações (kixi#602).
+                ts.getT3().ifPresent(c -> pedido.put("coordenador", c));
                 pedido.put("alunos", ts.getT2());
                 pedido.put("provas", List.of(prova(p1, "P1"), prova(p2, "P2")));
                 // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44).
@@ -182,6 +184,23 @@ public class SchoolOpsPautaOpener {
                 """).bind("c", h.get("class_id")).bind("s", h.get("subject_id")).fetch().one()
                 .map(r -> Map.<String, Object>of("sourcedId", String.valueOf(r.get("account_id")), "nome", (r.get("first_name") + " " + r.get("last_name")).trim()))
                 .switchIfEmpty(Mono.error(new IllegalStateException("A turma e a disciplina não têm professor com conta")));
+    }
+
+    /** O coordenador da escola da turma (o mais antigo, se houver vários); vazio quando a escola não tem. */
+    private Mono<java.util.Optional<Map<String, Object>>> coordinator(Map<String, Object> h) {
+        return db.sql("""
+                SELECT a.id, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name, a.username
+                FROM institution_coordinators ic JOIN accounts a ON a.id = ic.account_id AND a.deleted_at IS NULL
+                  LEFT JOIN users u ON u.account_id = a.id AND u.deleted_at IS NULL
+                WHERE ic.institution_id = :i ORDER BY ic.created_at, a.id LIMIT 1
+                """).bind("i", h.get("inst_id")).fetch().one().map(r -> java.util.Optional.of(coordinatorOf(r)))
+                .defaultIfEmpty(java.util.Optional.empty());
+    }
+
+    /** A pessoa do contrato v1: {@code sourcedId} é o id da conta, que é também o assignee das tarefas no gestor. */
+    static Map<String, Object> coordinatorOf(Map<String, Object> row) {
+        String name = String.valueOf(row.get("name")).isBlank() ? String.valueOf(row.get("username")) : String.valueOf(row.get("name"));
+        return Map.of("sourcedId", String.valueOf(row.get("id")), "nome", name);
     }
 
     private Mono<List<Map<String, Object>>> students(Map<String, Object> h) {
