@@ -43,14 +43,14 @@ class SimulationIntegrityEventServiceTest {
         when(deadlines.now()).thenReturn(now);
         when(deadlines.expired(any(), any())).thenReturn(Mono.just(false));
         service = new SimulationIntegrityEventService(simulations, events, questions, deadlines,
-                Clock.fixed(Instant.parse("2026-10-21T10:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-10-21T09:00:00Z"), ao.creativemode.kixi.shared.config.ServerClockConfig.ZONE));
     }
 
     @Test
     void recordsOnlyTheOwnersActiveSimulationAndUsesServerTime() {
         Simulation simulation = simulation(SimulationStatus.IN_PROGRESS);
         when(simulations.lockForIntegrityEventWrite(12L, 7L)).thenReturn(Mono.just(simulation));
-        when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1))).thenReturn(Mono.just(0L));
+        when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1).atOffset(ZoneOffset.ofHours(1)))).thenReturn(Mono.just(0L));
         when(events.save(any(SimulationIntegrityEvent.class))).thenAnswer(invocation -> {
             SimulationIntegrityEvent event = invocation.getArgument(0);
             event.setId(31L);
@@ -137,7 +137,7 @@ class SimulationIntegrityEventServiceTest {
     void capsEventVolumePerAttempt() {
         when(simulations.lockForIntegrityEventWrite(12L, 7L))
                 .thenReturn(Mono.just(simulation(SimulationStatus.IN_PROGRESS)));
-        when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1))).thenReturn(Mono.just(120L));
+        when(events.countBySimulationIdAndAtAfter(12L, now.minusMinutes(1).atOffset(ZoneOffset.ofHours(1)))).thenReturn(Mono.just(120L));
 
         StepVerifier.create(service.record(12L, 7L,
                         new SimulationIntegrityEventRequest(SimulationIntegrityEventKind.TAB_HIDDEN, null)))

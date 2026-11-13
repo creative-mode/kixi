@@ -1,6 +1,8 @@
 package ao.creativemode.kixi.simulations.model;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import ao.creativemode.kixi.shared.config.ServerClockConfig;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
@@ -21,7 +23,7 @@ public class SimulationIntegrityEvent {
     private Long questionId;
 
     @Column("occurred_at")
-    private LocalDateTime at;
+    private OffsetDateTime atInstant;
 
     public Long getId() { return id; }
     public void setId(Long value) { id = value; }
@@ -31,6 +33,11 @@ public class SimulationIntegrityEvent {
     public void setKind(SimulationIntegrityEventKind value) { kind = value; }
     public Long getQuestionId() { return questionId; }
     public void setQuestionId(Long value) { questionId = value; }
-    public LocalDateTime getAt() { return at; }
-    public void setAt(LocalDateTime value) { at = value; }
+    public LocalDateTime getAt() {
+        return atInstant == null ? null : atInstant.atZoneSameInstant(ServerClockConfig.ZONE).toLocalDateTime();
+    }
+    public void setAt(LocalDateTime value) {
+        atInstant = value == null ? null : value.atZone(ServerClockConfig.ZONE).toOffsetDateTime();
+    }
+    public void setAtInstant(OffsetDateTime value) { atInstant = value; }
 }

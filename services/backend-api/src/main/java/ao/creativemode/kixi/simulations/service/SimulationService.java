@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.config.ServerClockConfig;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
@@ -261,7 +262,7 @@ public class SimulationService {
                     simulation.setSchoolYearId(dto.schoolYearId());
                     simulation.setStatementId(dto.statementId());
                     // The clock starts on the server; a client must not choose its own elapsed time.
-                    simulation.setStartedAt(LocalDateTime.now());
+                    simulation.setStartedAt(LocalDateTime.now(ServerClockConfig.ZONE));
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     return repository.save(simulation);
                 }))
@@ -317,7 +318,7 @@ public class SimulationService {
                     Simulation simulation = new Simulation();
                     simulation.setAccountId(accountId);
                     simulation.setStatementId(practiceStatementId);
-                    simulation.setStartedAt(LocalDateTime.now());
+                    simulation.setStartedAt(LocalDateTime.now(ServerClockConfig.ZONE));
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     simulation.setTitle(title);
                     return repository.save(simulation);
@@ -357,7 +358,7 @@ public class SimulationService {
                     }
                     if (locked.getExamRoomId() == null || examRoomAccess == null) return Mono.just(locked);
                     Mono<Boolean> accepts = examRoomAccess.acceptsSimulationAnswers(locked.getExamRoomId(),
-                            LocalDateTime.now());
+                            LocalDateTime.now(ServerClockConfig.ZONE));
                     return (accepts == null ? Mono.just(false) : accepts)
                             .filter(Boolean::booleanValue)
                             .switchIfEmpty(Mono.error(ApiException.conflict(

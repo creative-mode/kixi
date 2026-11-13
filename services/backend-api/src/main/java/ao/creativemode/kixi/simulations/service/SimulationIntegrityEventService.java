@@ -3,6 +3,7 @@ package ao.creativemode.kixi.simulations.service;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -81,7 +82,7 @@ public class SimulationIntegrityEventService {
     }
 
     private Mono<Void> enforceRateLimit(Long simulationId) {
-        LocalDateTime since = LocalDateTime.now(clock).minus(RATE_WINDOW);
+        OffsetDateTime since = OffsetDateTime.now(clock).minus(RATE_WINDOW);
         return events.countBySimulationIdAndAtAfter(simulationId, since)
                 .defaultIfEmpty(0L)
                 .flatMap(count -> count >= MAX_EVENTS_PER_MINUTE
@@ -96,7 +97,7 @@ public class SimulationIntegrityEventService {
         event.setSimulationId(simulationId);
         event.setKind(request.kind());
         event.setQuestionId(request.questionId());
-        event.setAt(LocalDateTime.now(clock));
+        event.setAtInstant(OffsetDateTime.now(clock));
         return events.save(event).map(SimulationIntegrityEventService::response);
     }
 

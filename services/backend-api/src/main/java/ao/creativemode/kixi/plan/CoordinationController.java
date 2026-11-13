@@ -2,7 +2,12 @@ package ao.creativemode.kixi.plan;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import ao.creativemode.kixi.examrooms.model.ExamRoomPhase;
+import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import ao.creativemode.kixi.shared.config.ServerClockConfig;
 import java.util.List;
 import java.util.Set;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -22,16 +27,19 @@ import reactor.core.publisher.Mono;
 public class CoordinationController {
 
     public record RoomRow(Long id, String status, OffsetDateTime startsAt, OffsetDateTime endsAt, String className, String statementTitle,
-                          Long teacherAccountId, String teacherName, long participants, long finished, long pendingAnswers) { }
+                          Long teacherAccountId, String teacherName, long participants, long finished, long pendingAnswers,
+                          ExamRoomPhase phase) { }
 
     public record GradeRow(Long accountId, String name, String status, Double finalScore, long pendingAnswers) { }
 
     private final DatabaseClient db;
     private final CurrentAccountService current;
+    private final Clock clock;
 
-    public CoordinationController(DatabaseClient db, CurrentAccountService current) {
+    public CoordinationController(DatabaseClient db, CurrentAccountService current, Clock clock) {
         this.db = db;
         this.current = current;
+        this.clock = clock;
     }
 
     @GetMapping
@@ -50,7 +58,14 @@ public class CoordinationController {
                 .map((row, meta) -> new RoomRow(row.get("id", Long.class), row.get("status", String.class), row.get("starts_at", OffsetDateTime.class),
                         row.get("ends_at", OffsetDateTime.class), row.get("class_code", String.class), row.get("statement_title", String.class),
                         row.get("teacher_account_id", Long.class), row.get("teacher_name", String.class), row.get("participants", Long.class),
-                        row.get("finished", Long.class), row.get("pending", Long.class))).all().collectList());
+                        row.get("finished", Long.class), row.get("pending", Long.class),
+                        ExamRoomPhase.at(ExamRoomStatus.valueOf(row.get("status", String.class)),
+                                local(row.get("starts_at", OffsetDateTime.class)), local(row.get("ends_at", OffsetDateTime.class)),
+                                LocalDateTime.now(clock)))).all().collectList());
+    }
+
+    private static LocalDateTime local(OffsetDateTime value) {
+        return value.atZoneSameInstant(ServerClockConfig.ZONE).toLocalDateTime();
     }
 
     @GetMapping("/{roomId}/grades")
