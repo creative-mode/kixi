@@ -24,6 +24,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
         "spring.r2dbc.pool.initial-size=0",
         "app.simulations.expiry-poll-ms=86400000",
         "app.simulations.expiry-enabled=false",
+        // A sessão revalida-se a cada 1 ms em vez de 30 s, para o teste da suspensão não ter de esperar (kixi#450).
+        "app.jwt.revalidation-ms=1",
         "app.jwt.secret=integration-test-secret-which-is-long-enough",
         "ocr.service.url=http://127.0.0.1:1",
         "ocr.service.api-key=test"
@@ -81,6 +83,7 @@ class ModerationPostgresIntegrationTest {
         // tem de os ter lá, para o 403 vir da regra e não de uma sessão revogada.
         role(ADMIN, "ADMIN");
         for (String role : List.of("STUDENT", "TEACHER", "COORDINATOR")) role(STUDENT, role);
+        role(REPORTED, "STUDENT");
         sql("INSERT INTO users (account_id, first_name, last_name) VALUES (" + ADMIN + ", 'Ana', 'Admin'), (" + STUDENT
                 + ", 'Sara', 'Aluna'), (" + REPORTED + ", 'Rui', 'Denunciado')");
         sql("INSERT INTO institutions (id, code, name, created_at, updated_at) VALUES (" + INSTITUTION + ", 'IT591', 'Escola 591', now(), now())");
@@ -188,6 +191,21 @@ class ModerationPostgresIntegrationTest {
                     .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"\"}").exchange().expectStatus().isForbidden();
         }
         assertThat(count("SELECT COUNT(*) FROM moderation_reports WHERE status = 'OPEN' AND id IN (" + ACCOUNT_REPORT + ", " + SCHOOL_REPORT + ")")).isEqualTo(2);
+    }
+
+    @Test
+    void aSuspendedAccountLosesTheTokenItAlreadyHeld() throws InterruptedException {
+        String held = token(REPORTED, "STUDENT");
+        // Antes: o token vale (a conta autentica e a rota de moderação recusa-lhe o papel, 403).
+        bearer(held).get().uri("/api/v1/moderation/reports").exchange().expectStatus().isForbidden();
+
+        bearer(token(ADMIN, "ADMIN")).post().uri("/api/v1/moderation/reports/" + ACCOUNT_REPORT + "/suspend")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"note\":\"" + NOTE + "\"}")
+                .exchange().expectStatus().isOk();
+        Thread.sleep(20);
+
+        // Depois: o mesmo token, emitido antes da suspensão, já não autentica (o filtro de sessão lê accounts.active).
+        bearer(held).get().uri("/api/v1/moderation/reports").exchange().expectStatus().isUnauthorized();
     }
 
     @Test
