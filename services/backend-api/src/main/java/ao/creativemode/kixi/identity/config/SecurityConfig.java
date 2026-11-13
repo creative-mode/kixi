@@ -94,6 +94,11 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST, "/api/v1/profiles/accounts/*/reports",
                                 "/api/v1/institutions/*/reports")
                         .hasRole("STUDENT")
+                        // kixi#591: a fila de denúncias, a decisão e a auditoria são do administrador. Sem esta regra o
+                        // ModerationAdminController cairia no denyAll final e daria 403 também ao ADMIN. O que o aluno
+                        // faz (denunciar, bloquear) continua nas rotas /profiles e /institutions acima.
+                        .pathMatchers("/api/v1/moderation", "/api/v1/moderation/**")
+                        .hasRole("ADMIN")
                         // Public profiles (issue #331): any signed-in account, read only.
                         .pathMatchers(HttpMethod.GET, "/api/v1/profiles/**")
                         .authenticated()
@@ -373,7 +378,8 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED))
-                        .accessDeniedHandler(new HttpStatusServerAccessDeniedHandler(HttpStatus.FORBIDDEN))
+                        .accessDeniedHandler(new ModerationAccessDeniedHandler(
+                                new HttpStatusServerAccessDeniedHandler(HttpStatus.FORBIDDEN)))
                 )
                 .addFilterAt(requestIdWebFilter, SecurityWebFiltersOrder.FIRST)
                 .addFilterAt(jwtAuthenticationFilter, SecurityWebFiltersOrder.AUTHENTICATION)
