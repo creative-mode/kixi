@@ -52,6 +52,7 @@ class StudentIsolationPostgresIntegrationTest {
     private static final long ENGINE = 123005L;
     private static final long STATEMENT = 123001L;
     private static final long QUESTION = 123001L;
+    private static final long OPEN_QUESTION = 123002L;
     private static final long WRONG_OPTION = 123001L;
     private static final long RIGHT_OPTION = 123002L;
 
@@ -104,7 +105,7 @@ class StudentIsolationPostgresIntegrationTest {
                 + "(SELECT id FROM simulations WHERE statement_id = " + STATEMENT + ")");
         sql("DELETE FROM simulations WHERE statement_id = " + STATEMENT);
         sql("DELETE FROM question_options WHERE question_id = " + QUESTION);
-        sql("DELETE FROM questions WHERE id = " + QUESTION);
+        sql("DELETE FROM questions WHERE id IN (" + QUESTION + ", " + OPEN_QUESTION + ")");
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM simulation_audit WHERE actor_account_id IN (" + ADMIN + ", " + ENGINE + ", " + STUDENT_A + ", " + STUDENT_B + ")");
         sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT_A + ", " + STUDENT_B + ", " + ADMIN + ", " + ENGINE + ")");
@@ -124,7 +125,8 @@ class StudentIsolationPostgresIntegrationTest {
                 + "created_by, visible, needs_review, source) VALUES (" + STATEMENT
                 + ", 'Prova de isolamento #453', 'TEST', 60, 5, " + TEACHER + ", true, false, 'manual')");
         sql("INSERT INTO questions (id, statement_id, number, text, question_type, max_score, order_index) VALUES "
-                + "(" + QUESTION + ", " + STATEMENT + ", 1, 'Quanto e 2 + 2?', 'multiple_choice', 5, 1)");
+                + "(" + QUESTION + ", " + STATEMENT + ", 1, 'Quanto e 2 + 2?', 'multiple_choice', 5, 1),"
+                + "(" + OPEN_QUESTION + ", " + STATEMENT + ", 2, 'Explique.', 'open', 5, 2)");
         sql("INSERT INTO question_options (id, question_id, option_label, option_text, is_correct, order_index) VALUES "
                 + "(" + WRONG_OPTION + ", " + QUESTION + ", 'A', '3', false, 1),"
                 + "(" + RIGHT_OPTION + ", " + QUESTION + ", 'B', '4', true, 2)");
@@ -270,6 +272,55 @@ class StudentIsolationPostgresIntegrationTest {
                 .exchange().expectStatus().isForbidden();
         bearer(engine).delete().uri("/api/v1/simulations/" + simulation.get() + "?reason=nao+deve+poder")
                 .exchange().expectStatus().isForbidden();
+    }
+
+    /**
+     * O contrato com o motor SchoolOps (schoolops#20): a sequência exata com que o motor entrega uma prova em papel, pela
+     * conta INTEGRATION. Se uma mudança de segurança partir um destes passos, o motor deixa de submeter provas.
+     */
+    @Test
+    void theEngineAccountRunsTheWholePaperExamSequenceOfSchoolOps() {
+        String engine = jwtService.generateToken(ENGINE, List.of("INTEGRATION"));
+        String open = "{\"accountId\":" + STUDENT_A + ",\"statementId\":" + STATEMENT + ",\"status\":\"IN_PROGRESS\"}";
+
+        // 1 e 2: abre e cancela a simulação que o aluno possa ter (o motor recomeça sempre limpo).
+        AtomicLong first = new AtomicLong();
+        bearer(engine).post().uri("/api/v1/simulations").contentType(MediaType.APPLICATION_JSON).bodyValue(open)
+                .exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(value -> first.set(((Number) value).longValue()));
+        bearer(engine).put().uri("/api/v1/simulations/" + first.get()).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT_A + ",\"statementId\":" + STATEMENT + ",\"status\":\"CANCELLED\"}")
+                .exchange().expectStatus().isOk();
+
+        // 3: a simulação a sério, e as respostas lidas da folha (objetiva e aberta).
+        AtomicLong simulation = new AtomicLong();
+        bearer(engine).post().uri("/api/v1/simulations").contentType(MediaType.APPLICATION_JSON).bodyValue(open)
+                .exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(value -> simulation.set(((Number) value).longValue()));
+        bearer(engine).post().uri("/api/v1/simulation-answers").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"simulationId\":" + simulation.get() + ",\"questionId\":" + QUESTION
+                        + ",\"selectedOptionId\":" + RIGHT_OPTION + "}").exchange().expectStatus().isCreated();
+        AtomicLong openAnswer = new AtomicLong();
+        bearer(engine).post().uri("/api/v1/simulation-answers").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"simulationId\":" + simulation.get() + ",\"questionId\":" + OPEN_QUESTION
+                        + ",\"answerText\":\"resposta lida por OCR\"}")
+                .exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(value -> openAnswer.set(((Number) value).longValue()));
+
+        // 4: fecha a submissão e lê o que o Kixi corrigiu.
+        bearer(engine).post().uri("/api/v1/simulations/" + simulation.get() + "/submit").exchange().expectStatus().isOk();
+        bearer(engine).get().uri("/api/v1/simulations/" + simulation.get() + "/result").exchange().expectStatus().isOk();
+        bearer(engine).get().uri("/api/v1/simulations").exchange().expectStatus().isOk();
+        bearer(engine).get().uri("/api/v1/simulation-answers").exchange().expectStatus().isOk();
+
+        // 5: a nota da aberta, e a sua retificação por reclamação.
+        bearer(engine).patch().uri("/api/v1/simulation-answers/" + openAnswer.get() + "/grade").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"scoreObtained\":3}").exchange().expectStatus().isOk();
+        bearer(engine).patch().uri("/api/v1/simulation-answers/" + openAnswer.get() + "/grade?rectify=true").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"scoreObtained\":4}").exchange().expectStatus().isOk();
+
+        // Tudo o que escreveu em nome do aluno ficou no trilho com a conta do motor.
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_audit WHERE actor_account_id = " + ENGINE)).isGreaterThanOrEqualTo(4L);
     }
 
     /** kixi#596: o aluno que responde à sua própria prova também fica no trilho (criar e editar). */
