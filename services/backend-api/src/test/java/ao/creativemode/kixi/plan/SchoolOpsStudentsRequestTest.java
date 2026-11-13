@@ -39,4 +39,11 @@ class SchoolOpsStudentsRequestTest {
         assertThat(alunos).extracting(a -> a.get("numero")).containsExactly(1, 2);
         assertThat(alunos.get(0)).containsEntry("processo", "7");
     }
+
+    @Test
+    void coordenadorLevaOIdDaContaEONomeCaiNoUsername() {
+        assertThat(SchoolOpsPautaOpener.coordinatorOf(row(3, "Maria Fernandes", "coord.maria", null)))
+                .containsEntry("sourcedId", "3").containsEntry("nome", "Maria Fernandes");
+        assertThat(SchoolOpsPautaOpener.coordinatorOf(row(4, "  ", "coord.sem.nome", null))).containsEntry("nome", "coord.sem.nome");
+    }
 }
