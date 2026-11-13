@@ -58,9 +58,26 @@ class SimulationAnswerControllerTest {
                 mock(ao.creativemode.kixi.simulations.service.SimulationDeadlineService.class), null);
         SimulationAnswerController controller = new SimulationAnswerController(service, current, null);
 
-        StepVerifier.create(controller.hardDelete(10L, "duplicada"))
+        StepVerifier.create(controller.hardDelete(10L, "duplicada", "10"))
                 .expectErrorSatisfies(error -> assertThat(error.getMessage()).contains("finished"))
                 .verify();
+    }
+
+    @Test
+    void purgeWithoutTheRightConfirmationIsRejectedBeforeAnyChange() {
+        CurrentAccountService current = mock(CurrentAccountService.class);
+        SimulationAnswerRepository answers = mock(SimulationAnswerRepository.class);
+        SimulationAnswerController controller = new SimulationAnswerController(
+                new SimulationAnswerService(answers, mock(SimulationRepository.class), mock(QuestionRepository.class),
+                        mock(QuestionOptionRepository.class),
+                        mock(ao.creativemode.kixi.simulations.service.SimulationDeadlineService.class), null),
+                current, null);
+
+        for (String confirm : new String[] {null, "", "11", "purge"}) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.hardDelete(10L, "pedido do aluno", confirm))
+                    .hasMessageContaining("confirm=10");
+        }
+        org.mockito.Mockito.verifyNoInteractions(answers);
     }
 
     @Test
@@ -111,9 +128,9 @@ class SimulationAnswerControllerTest {
         when(answers.save(answer)).thenReturn(Mono.just(answer));
         when(simulations.findById(20L)).thenReturn(Mono.just(running));
         when(simulations.lockForAnswerWriteByAnswerId(10L)).thenReturn(Mono.just(running));
-        var audit = mock(ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService.class);
-        when(audit.record(10L, 20L, ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService.Action.SOFT_DELETE,
-                99L, "duplicada")).thenReturn(Mono.empty());
+        var audit = mock(ao.creativemode.kixi.simulations.service.SimulationAuditService.class);
+        when(audit.record(ao.creativemode.kixi.simulations.service.SimulationAuditService.Target.ANSWER, 10L, 20L,
+                ao.creativemode.kixi.simulations.service.SimulationAuditService.Action.SOFT_DELETE, 99L, "duplicada")).thenReturn(Mono.empty());
         var deadline = mock(ao.creativemode.kixi.simulations.service.SimulationDeadlineService.class);
         when(deadline.expired(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Mono.just(false));
@@ -124,8 +141,8 @@ class SimulationAnswerControllerTest {
 
         StepVerifier.create(controller.softDelete(10L, "  duplicada ")).expectNextCount(1).verifyComplete();
 
-        org.mockito.Mockito.verify(audit).record(10L, 20L,
-                ao.creativemode.kixi.simulations.service.SimulationAnswerAuditService.Action.SOFT_DELETE, 99L, "duplicada");
+        org.mockito.Mockito.verify(audit).record(ao.creativemode.kixi.simulations.service.SimulationAuditService.Target.ANSWER,
+                10L, 20L, ao.creativemode.kixi.simulations.service.SimulationAuditService.Action.SOFT_DELETE, 99L, "duplicada");
     }
 
     private SimulationAnswerService realAnswerService() {
