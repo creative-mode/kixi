@@ -2,6 +2,7 @@ package ao.creativemode.kixi.examrooms.service;
 
 import java.time.LocalDateTime;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -21,6 +22,7 @@ import ao.creativemode.kixi.examrooms.dto.ExamRoomQuestionResponse;
 import ao.creativemode.kixi.examrooms.model.ExamRoom;
 import ao.creativemode.kixi.examrooms.model.ExamRoomParticipant;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import ao.creativemode.kixi.examrooms.model.ExamRoomPhase;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
@@ -45,6 +47,7 @@ import reactor.core.publisher.Mono;
 
 @Service
 public class ExamRoomService implements ExamRoomAccess {
+    private static final Duration EXPIRATION_STEP_TIMEOUT = Duration.ofMinutes(5);
     private final ExamRoomRepository rooms;
     private final ExamRoomParticipantRepository participants;
     private final SimulationRepository simulations;
@@ -165,11 +168,11 @@ public class ExamRoomService implements ExamRoomAccess {
                     room.setEndsAt(data.endsAt());
                     room.setDurationMinutes(data.durationMinutes());
                     return rooms.save(room);
-        })).map(ExamRoomService::toResponse);
+        })).map(this::toResponse);
     }
 
     public Flux<ExamRoomResponse> findMine(Long teacherAccountId) {
-        return rooms.findByTeacherAccountIdOrderByCreatedAtDesc(teacherAccountId).map(ExamRoomService::toResponse);
+        return rooms.findByTeacherAccountIdOrderByCreatedAtDesc(teacherAccountId).map(this::toResponse);
     }
 
     /** The same list narrowed to one school; without a school it is the whole list. */
@@ -178,7 +181,7 @@ public class ExamRoomService implements ExamRoomAccess {
             return findMine(teacherAccountId);
         }
         return rooms.findByTeacherAccountIdAndInstitutionId(teacherAccountId, institutionId)
-                .map(ExamRoomService::toResponse);
+                .map(this::toResponse);
     }
 
     /**
@@ -490,38 +493,63 @@ public class ExamRoomService implements ExamRoomAccess {
 
     @Transactional
     public Mono<ExamRoomResponse> transition(Long id, Long caller, boolean admin, ExamRoomStatus next) {
-        return managedRoom(id, caller, admin).then(lockedRoom(id)).flatMap(room -> {
-            boolean valid = (next == ExamRoomStatus.OPEN && room.getStatus() == ExamRoomStatus.DRAFT)
-                    || (next == ExamRoomStatus.RUNNING && room.getStatus() == ExamRoomStatus.OPEN)
-                    || (next == ExamRoomStatus.CLOSED && (room.getStatus() == ExamRoomStatus.OPEN
-                            || room.getStatus() == ExamRoomStatus.RUNNING));
-            if (!valid) return Mono.error(ApiException.conflict("Invalid exam room state transition"));
-            LocalDateTime now = LocalDateTime.now(clock);
-            if (next == ExamRoomStatus.OPEN && !now.isBefore(room.getEndsAt())) {
-                return Mono.error(ApiException.conflict("The exam room has ended"));
-            }
-            if (next == ExamRoomStatus.RUNNING
-                    && (now.isBefore(room.getStartsAt()) || !now.isBefore(room.getEndsAt()))) {
-                return Mono.error(ApiException.conflict("The exam room is outside its active window"));
-            }
-            Mono<Void> statementLock = next == ExamRoomStatus.OPEN
-                    ? lockStatementForRoom(room.getStatementId()) : Mono.empty();
-            Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
-            Mono<Void> finalize = next == ExamRoomStatus.CLOSED ? finalizeRoom(id) : Mono.empty();
-            return statementLock.then(lockSimulations).then(finalize)
-                    .then(Mono.defer(() -> rooms.transition(id, room.getStatus(), next)))
-                    .filter(count -> count == 1)
-                    .switchIfEmpty(Mono.error(ApiException.conflict("Exam room changed concurrently")))
-                    .then(rooms.findById(id)).map(ExamRoomService::toResponse);
-        });
+        return managedRoom(id, caller, admin).then(lockedRoom(id)).flatMap(room -> transitionLocked(room, next, false));
     }
 
-    private Mono<Void> finalizeRoom(Long roomId) {
+    @Transactional
+    public Mono<ExamRoomResponse> closeIfExpired(Long id, LocalDateTime now) {
+        return lockedRoom(id).timeout(EXPIRATION_STEP_TIMEOUT)
+                .filter(room -> (room.getStatus() == ExamRoomStatus.OPEN || room.getStatus() == ExamRoomStatus.RUNNING)
+                        && !room.getEndsAt().isAfter(now))
+                .flatMap(room -> transitionLocked(room, ExamRoomStatus.CLOSED, true));
+    }
+
+    private Mono<ExamRoomResponse> transitionLocked(ExamRoom room, ExamRoomStatus next, boolean expiration) {
+        Long id = room.getId();
+        if (next == ExamRoomStatus.CLOSED && room.getStatus() == ExamRoomStatus.CLOSED) {
+            return Mono.just(toResponse(room));
+        }
+        boolean valid = (next == ExamRoomStatus.OPEN && room.getStatus() == ExamRoomStatus.DRAFT)
+                || (next == ExamRoomStatus.RUNNING && room.getStatus() == ExamRoomStatus.OPEN)
+                || (next == ExamRoomStatus.CLOSED && (room.getStatus() == ExamRoomStatus.OPEN
+                        || room.getStatus() == ExamRoomStatus.RUNNING));
+        if (!valid) return Mono.error(ApiException.conflict("Invalid exam room state transition"));
+        LocalDateTime now = LocalDateTime.now(clock);
+        if (next == ExamRoomStatus.OPEN && !now.isBefore(room.getEndsAt())) {
+            return Mono.error(ApiException.conflict("The exam room has ended"));
+        }
+        if (next == ExamRoomStatus.RUNNING
+                && (now.isBefore(room.getStartsAt()) || !now.isBefore(room.getEndsAt()))) {
+            return Mono.error(ApiException.conflict("The exam room is outside its active window"));
+        }
+        Mono<Void> statementLock = next == ExamRoomStatus.OPEN
+                ? lockStatementForRoom(room.getStatementId()) : Mono.empty();
+        Mono<Void> lockSimulations = next == ExamRoomStatus.CLOSED ? lockRoomSimulations(id) : Mono.empty();
+        if (expiration) lockSimulations = lockSimulations.timeout(EXPIRATION_STEP_TIMEOUT);
+        Mono<Void> finalize = next == ExamRoomStatus.CLOSED ? finalizeRoom(id, expiration) : Mono.empty();
+        return statementLock.then(lockSimulations).then(finalize)
+                .then(Mono.defer(() -> rooms.transition(id, room.getStatus(), next)))
+                .filter(count -> count == 1)
+                .switchIfEmpty(Mono.error(ApiException.conflict("Exam room changed concurrently")))
+                .then(rooms.findById(id)).map(updated -> toResponse(updated, true));
+    }
+
+    private Mono<Void> finalizeRoom(Long roomId, boolean expiration) {
         if (submissionService == null) return Mono.empty();
-        return simulations.findByExamRoomIdAndDeletedAtIsNull(roomId)
-                .filter(simulation -> simulation.getStatus() == SimulationStatus.IN_PROGRESS)
-                .concatMap(simulation -> submissionService.submit(simulation.getId(), null, true))
-                .then();
+        return finalizePage(roomId, 0L, expiration);
+    }
+
+    private Mono<Void> finalizePage(Long roomId, long afterId, boolean expiration) {
+        Mono<List<Long>> page = simulations.findPendingRoomSimulationIds(roomId, afterId).collectList();
+        if (expiration) page = page.timeout(EXPIRATION_STEP_TIMEOUT);
+        return page.flatMap(ids -> {
+            if (ids.isEmpty()) return Mono.empty();
+            Flux<Simulation> completed = Flux.fromIterable(ids)
+                    .concatMap(id -> submissionService.submit(id, null, true));
+            // Bound inactivity per submission, not the duration of the room transaction.
+            if (expiration) completed = completed.timeout(EXPIRATION_STEP_TIMEOUT);
+            return completed.then(Mono.defer(() -> finalizePage(roomId, ids.get(ids.size() - 1), expiration)));
+        });
     }
 
     private Mono<ExamRoom> managedRoom(Long id, Long caller, boolean admin) {
@@ -546,9 +574,14 @@ public class ExamRoomService implements ExamRoomAccess {
         return saved == null ? Mono.just(participant) : saved;
     }
 
-    private static ExamRoomResponse toResponse(ExamRoom room) {
+    private ExamRoomResponse toResponse(ExamRoom room) {
+        return toResponse(room, false);
+    }
+
+    private ExamRoomResponse toResponse(ExamRoom room, boolean transitioned) {
         return new ExamRoomResponse(room.getId(), room.getStatementId(), room.getClassId(), room.getTeacherAccountId(), room.getStartsAt(),
-                room.getEndsAt(), room.getDurationMinutes(), room.getStatus());
+                room.getEndsAt(), room.getDurationMinutes(), room.getStatus(),
+                ExamRoomPhase.at(room.getStatus(), room.getStartsAt(), room.getEndsAt(), LocalDateTime.now(clock)), transitioned);
     }
 
     private static ExamRoomParticipantResponse toParticipantResponse(ExamRoomParticipant participant) {

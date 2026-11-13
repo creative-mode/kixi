@@ -213,7 +213,7 @@ public class ExamRoomController {
                                 "Only teachers or ADMIN can manage exam rooms")))
                 // Já gravado e confirmado: quem trata de planos pode agir logo, sem esperar pela verificação periódica.
                 .doOnSuccess(room -> {
-                    if (status == ExamRoomStatus.CLOSED && room != null && events != null) {
+                    if (status == ExamRoomStatus.CLOSED && room != null && room.transitioned() && events != null) {
                         events.publishEvent(new ao.creativemode.kixi.shared.event.ExamRoomClosed(id));
                     }
                 })

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 
 import java.time.LocalDateTime;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -72,6 +73,29 @@ class ExamRoomServiceTest {
         questions = mock(QuestionRepository.class);
         service = new ExamRoomService(rooms, participants, simulations, accounts, statements, classes, enrollments,
                 null, null, null, questions, options, Clock.systemDefaultZone(), deadlineService);
+    }
+
+    @Test
+    void closingAnAlreadyClosedRoomIsIdempotentAfterAuthorization() {
+        ExamRoom room = room(20L, ExamRoomStatus.CLOSED);
+        when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        StepVerifier.create(service.transition(20L, 7L, false, ExamRoomStatus.CLOSED))
+                .assertNext(response -> assertThat(response.status()).isEqualTo(ExamRoomStatus.CLOSED))
+                .verifyComplete();
+        verify(rooms, never()).transition(anyLong(), any(), any());
+        verifyNoInteractions(simulations);
+    }
+
+    @Test
+    void automaticCloseRechecksDeadlineAfterTakingTheLock() {
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        LocalDateTime now = LocalDateTime.of(2026, 10, 15, 10, 0);
+        room.setEndsAt(now.plusSeconds(1));
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        StepVerifier.create(service.closeIfExpired(20L, now)).verifyComplete();
+        verify(rooms, never()).transition(anyLong(), any(), any());
+        verifyNoInteractions(simulations);
     }
 
     @Test
@@ -348,6 +372,31 @@ class ExamRoomServiceTest {
     }
 
     @Test
+    void automaticCloseAllowsProgressForLongerThanTheInactivityLimit() {
+        SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
+        ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
+                classes, enrollments, null, null, null, questions, options, Clock.systemUTC(), submission);
+        ExamRoom room = room(20L, ExamRoomStatus.RUNNING);
+        LocalDateTime now = LocalDateTime.now().plusDays(1);
+        Simulation first = simulation(81L);
+        Simulation second = simulation(82L);
+        Simulation third = simulation(83L);
+        when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
+        when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(first, second, third));
+        when(simulations.findPendingRoomSimulationIds(20L, 0L)).thenReturn(Flux.just(81L, 82L, 83L));
+        when(simulations.findPendingRoomSimulationIds(20L, 83L)).thenReturn(Flux.empty());
+        when(submission.submit(anyLong(), isNull(), eq(true)))
+                .thenReturn(Mono.defer(() -> Mono.delay(Duration.ofMinutes(4)).thenReturn(first)));
+        when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
+        when(rooms.findById(20L)).thenReturn(Mono.just(room));
+
+        StepVerifier.withVirtualTime(() -> closingService.closeIfExpired(20L, now))
+                .thenAwait(Duration.ofMinutes(12)).expectNextCount(1).verifyComplete();
+        verify(submission, times(3)).submit(anyLong(), isNull(), eq(true));
+        verify(rooms).transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED);
+    }
+
+    @Test
     void closingRoomSubmitsEveryInProgressSimulationBeforeChangingRoomState() {
         SimulationSubmissionService submission = mock(SimulationSubmissionService.class);
         ExamRoomService closingService = new ExamRoomService(rooms, participants, simulations, accounts, statements,
@@ -362,7 +411,8 @@ class ExamRoomServiceTest {
         when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
         when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
         when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(first, second));
-        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(first, second));
+        when(simulations.findPendingRoomSimulationIds(20L, 0L)).thenReturn(Flux.just(81L, 82L));
+        when(simulations.findPendingRoomSimulationIds(20L, 82L)).thenReturn(Flux.empty());
         when(submission.submit(anyLong(), isNull(), eq(true))).thenReturn(Mono.just(first));
         when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
         when(rooms.findById(20L)).thenReturn(Mono.just(room));
@@ -387,7 +437,8 @@ class ExamRoomServiceTest {
         when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
         when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
         when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress, finished));
-        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress, finished));
+        when(simulations.findPendingRoomSimulationIds(20L, 0L)).thenReturn(Flux.just(81L));
+        when(simulations.findPendingRoomSimulationIds(20L, 81L)).thenReturn(Flux.empty());
         when(submission.submit(81L, null, true)).thenReturn(Mono.just(inProgress));
         when(rooms.transition(20L, ExamRoomStatus.RUNNING, ExamRoomStatus.CLOSED)).thenReturn(Mono.just(1));
         when(rooms.findById(20L)).thenReturn(Mono.just(room));
@@ -409,7 +460,7 @@ class ExamRoomServiceTest {
         when(rooms.findByIdAndTeacherAccountId(20L, 7L)).thenReturn(Mono.just(room));
         when(rooms.lockForUpdate(20L)).thenReturn(Mono.just(room));
         when(simulations.lockByExamRoomId(20L)).thenReturn(Flux.just(inProgress));
-        when(simulations.findByExamRoomIdAndDeletedAtIsNull(20L)).thenReturn(Flux.just(inProgress));
+        when(simulations.findPendingRoomSimulationIds(20L, 0L)).thenReturn(Flux.just(81L));
         when(submission.submit(81L, null, true)).thenReturn(Mono.error(new IllegalStateException("submission failed")));
         when(rooms.findById(20L)).thenReturn(Mono.just(room));
 
@@ -710,10 +761,8 @@ class ExamRoomServiceTest {
 
     @Test
     void ownedRoomsNarrowToOneSchoolOnlyWhenAskedTo() {
-        ExamRoom inSchool = new ExamRoom();
-        inSchool.setId(21L);
-        ExamRoom any = new ExamRoom();
-        any.setId(22L);
+        ExamRoom inSchool = room(21L, ExamRoomStatus.OPEN);
+        ExamRoom any = room(22L, ExamRoomStatus.OPEN);
         when(rooms.findByTeacherAccountIdAndInstitutionId(7L, 3L)).thenReturn(Flux.just(inSchool));
         when(rooms.findByTeacherAccountIdOrderByCreatedAtDesc(7L)).thenReturn(Flux.just(inSchool, any));
 
