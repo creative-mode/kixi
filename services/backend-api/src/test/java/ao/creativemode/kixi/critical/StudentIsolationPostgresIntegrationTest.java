@@ -278,6 +278,26 @@ class StudentIsolationPostgresIntegrationTest {
                 + " AND action = 'SOFT_DELETE'")).isEqualTo(1L);
     }
 
+    /**
+     * kixi#596: o purge irreversível tem duas etapas. Só se purga o que já foi apagado (com motivo e trilho): purgar uma
+     * resposta ativa dá 400 e não toca em nada, nem no trilho.
+     */
+    @Test
+    void purgeOnlyWorksAfterASeparateAuditedSoftDelete() {
+        String admin = jwtService.generateToken(ADMIN, List.of("ADMIN"));
+        String uri = "/api/v1/simulation-answers/" + B_ANSWER.get();
+
+        bearer(admin).delete().uri(uri + "/purge?reason=pedido+do+aluno").exchange().expectStatus().isBadRequest();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get()
+                + " AND deleted_at IS NULL")).as("a resposta ativa não se purga").isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answer_audit WHERE answer_id = " + B_ANSWER.get()))
+                .as("nada a registar numa tentativa recusada").isEqualTo(0L);
+
+        bearer(admin).delete().uri(uri + "?reason=resposta+duplicada").exchange().expectStatus().isNoContent();
+        bearer(admin).delete().uri(uri + "/purge?reason=pedido+do+aluno").exchange().expectStatus().isNoContent();
+        assertThat(count("SELECT COUNT(*) AS n FROM simulation_answers WHERE id = " + B_ANSWER.get())).isEqualTo(0L);
+    }
+
     /** kixi#596: o administrador apaga e purga com motivo, e cada acto fica no trilho, que sobrevive ao purge. */
     @Test
     void anAdminDeletesAndPurgesWithAReasonAndLeavesAnAuditTrail() {
