@@ -74,6 +74,20 @@ Uma pauta `ANULADA` não se mostra a ninguém. A turma e a disciplina de uma pau
 
 Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enunciado** (`StatementWriteAccessService`: administrador, o professor da turma e da disciplina, ou a conta `INTEGRATION`) o chama; o aluno recebe 403. A estrutura que o OCR procura (questões, tipos, letras) sai do enunciado e não do pedido. Devolve o contrato v1 do OCR (`sheets`, `warnings`, confiança por campo): o que foi lido, nunca uma nota. Tem o mesmo limite de uploads por conta que o resto do OCR.
 
+## Simulações e respostas dos alunos (kixi#596)
+
+A resposta de um aluno muda o que o recálculo das notas vê, por isso ninguém escreve nela em nome dele:
+
+| Ação | Quem | Regra |
+| --- | --- | --- |
+| Abrir uma simulação, responder, editar a resposta | `STUDENT` | Só a sua: o serviço exige o dono, mesmo para `ADMIN` ou professor (toda a conta registada tem `STUDENT`, por isso bloquear só por papel não bastava). |
+| Abrir a simulação de um aluno e entregar a resposta dele | `INTEGRATION` (o motor SchoolOps) | O `IntegrationScope` já o previa (`POST /simulations`, `PUT /simulations/{id}`, `POST /simulation-answers`). Não edita respostas nem apaga; a nota corrige-se por `PATCH …/grade` e `PUT …/ai-grade`. |
+| Apagar, restaurar | `ADMIN` | Motivo obrigatório (5 a 500 caracteres). |
+| Purgar (irreversível) | `ADMIN` | Em duas etapas: já na lixeira (um apagar auditado, à parte) e `confirm=<id>` no pedido; mais o motivo. |
+| Professor | — | 403 em tudo o que acima não o inclui; corrige a nota, não as respostas. |
+
+Cada criação, edição, apagar, restaurar e purgar grava uma linha em `simulation_audit` (quem, quando, simulação ou resposta, ação e, nos que apagam, restauram ou purgam, o motivo), **na mesma transação** da mutação: se o registo falhar, a mutação desfaz-se. Sem chave estrangeira para a linha auditada, para o registo de um purge sobreviver.
+
 ## Papel `INTEGRATION` (serviços)
 
 Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria.

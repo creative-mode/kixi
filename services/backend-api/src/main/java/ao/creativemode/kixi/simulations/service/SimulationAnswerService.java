@@ -32,6 +32,10 @@ public class SimulationAnswerService {
     private final SimulationService simulationService;
     private final ExamRoomAccess examRooms;
 
+    /** Opcional: sem ele (testes unitários que constroem o serviço à mão) não se grava o trilho. */
+    @Autowired(required = false)
+    private SimulationAuditService audit;
+
     public SimulationAnswerService(
         SimulationAnswerRepository repository,
         SimulationRepository simulationRepository,
@@ -249,7 +253,24 @@ public class SimulationAnswerService {
         Long accountId
     ) {
         return requireSimulationOwner(request.simulationId(), accountId)
-            .then(create(request));
+            .then(create(request))
+            .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, accountId));
+    }
+
+    /**
+     * O motor SchoolOps (conta INTEGRATION) entrega a resposta de um aluno, por exemplo de uma prova em papel (kixi#596):
+     * a autorização é do papel e do IntegrationScope, não da posse da simulação, e fica no trilho com a conta do motor.
+     */
+    @Transactional
+    public Mono<SimulationAnswerResponse> createForIntegration(SimulationAnswerRequest request, Long actorAccountId) {
+        return create(request).flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, actorAccountId));
+    }
+
+    private Mono<SimulationAnswerResponse> audited(SimulationAnswerResponse response, SimulationAuditService.Action action,
+            Long actor) {
+        return audit == null ? Mono.just(response)
+            : audit.record(SimulationAuditService.Target.ANSWER, response.id(), response.simulationId(), action, actor, null)
+                .thenReturn(response);
     }
 
     @Transactional
@@ -292,11 +313,45 @@ public class SimulationAnswerService {
             .flatMap(answer -> requireSimulationOwner(answer.getSimulationId(), accountId)
                 .then(updateExisting(answer, request)))
             .flatMap(this::toResponse)
+            .flatMap(updated -> audited(updated, SimulationAuditService.Action.UPDATE, accountId))
             .onErrorMap(DataIntegrityViolationException.class, e ->
                 ApiException.conflict(
                     "This question has already been answered in this simulation."
                 )
             );
+    }
+
+    /** A simulação a que a resposta pertence (mesmo apagada), para o trilho de auditoria (kixi#596). */
+    public Mono<Long> simulationIdOf(Long answerId) {
+        return repository.findById(answerId)
+            .switchIfEmpty(Mono.error(() -> ApiException.notFound("Simulation answer not found")))
+            .map(SimulationAnswer::getSimulationId);
+    }
+
+    /**
+     * Apagar, restaurar e purgar com o registo da auditoria na MESMA transação da mutação (kixi#596): se o INSERT do trilho
+     * falhar, a mutação desfaz-se, e nunca fica uma resposta apagada ou purgada sem registo.
+     */
+    @Transactional
+    public Mono<Void> softDelete(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAuditService.Action.SOFT_DELETE, actorAccountId, reason, () -> softDelete(id));
+    }
+
+    @Transactional
+    public Mono<Void> restore(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAuditService.Action.RESTORE, actorAccountId, reason, () -> restore(id));
+    }
+
+    @Transactional
+    public Mono<Void> hardDelete(Long id, Long actorAccountId, String reason) {
+        return audited(id, SimulationAuditService.Action.PURGE, actorAccountId, reason, () -> hardDelete(id));
+    }
+
+    private Mono<Void> audited(Long id, SimulationAuditService.Action action, Long actor, String reason,
+            java.util.function.Supplier<Mono<Void>> mutation) {
+        return simulationIdOf(id).flatMap(simulationId -> mutation.get()
+            .then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
+                : audit.record(SimulationAuditService.Target.ANSWER, id, simulationId, action, actor, reason))));
     }
 
     @Transactional

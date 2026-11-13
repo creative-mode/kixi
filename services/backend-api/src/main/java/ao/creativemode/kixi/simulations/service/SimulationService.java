@@ -30,6 +30,10 @@ import reactor.core.publisher.Mono;
 @Service
 public class SimulationService {
 
+    /** Opcional: sem ele (testes unitários que constroem o serviço à mão) não se grava o trilho (kixi#596). */
+    @Autowired(required = false)
+    private SimulationAuditService audit;
+
     private final SimulationRepository repository;
     private final AccountRepository accountRepository;
     private final SchoolYearRepository schoolYearRepository;
@@ -274,7 +278,30 @@ public class SimulationService {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
         }
-        return create(dto, accountId, false, false, true, true);
+        return create(dto, accountId, false, false, true, true)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, accountId));
+    }
+
+    /**
+     * O motor SchoolOps (conta INTEGRATION) abre a simulação de um aluno (kixi#596): a autorização é do papel e do
+     * IntegrationScope, não de a conta ser a do aluno, e o acto fica no trilho com a conta do motor.
+     */
+    @Transactional
+    public Mono<SimulationResponse> createForIntegration(SimulationRequest dto, Long actorAccountId) {
+        return create(dto, actorAccountId, true)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, actorAccountId));
+    }
+
+    @Transactional
+    public Mono<SimulationResponse> updateForIntegration(Long id, SimulationRequest dto, Long actorAccountId) {
+        return update(id, dto)
+                .flatMap(updated -> audited(updated, SimulationAuditService.Action.UPDATE, actorAccountId));
+    }
+
+    private Mono<SimulationResponse> audited(SimulationResponse response, SimulationAuditService.Action action, Long actor) {
+        return audit == null ? Mono.just(response)
+                : audit.record(SimulationAuditService.Target.SIMULATION, response.id(), response.id(), action, actor, null)
+                        .thenReturn(response);
     }
 
     /**
@@ -295,7 +322,8 @@ public class SimulationService {
                     simulation.setTitle(title);
                     return repository.save(simulation);
                 }))
-                .flatMap(this::toResponse);
+                .flatMap(this::toResponse)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, accountId));
     }
 
     @Transactional
@@ -311,7 +339,8 @@ public class SimulationService {
         return repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(simulation -> lockForUpdate(simulation)
-                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)));
+                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)))
+                .flatMap(updated -> audited(updated, SimulationAuditService.Action.UPDATE, accountId));
     }
 
     private Mono<Simulation> lockForUpdate(Simulation simulation) {
@@ -363,6 +392,31 @@ public class SimulationService {
                     return repository.save(simulation);
                 })
                 .flatMap(this::toResponse);
+    }
+
+    /**
+     * Apagar, restaurar e purgar, só pelo administrador (kixi#596), com o registo da auditoria na MESMA transação da
+     * mutação: se o registo falhar, a mutação desfaz-se.
+     */
+    @Transactional
+    public Mono<Void> softDelete(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.SOFT_DELETE, actorAccountId, reason, () -> softDelete(id));
+    }
+
+    @Transactional
+    public Mono<Void> restore(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.RESTORE, actorAccountId, reason, () -> restore(id));
+    }
+
+    @Transactional
+    public Mono<Void> hardDelete(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.PURGE, actorAccountId, reason, () -> hardDelete(id));
+    }
+
+    private Mono<Void> auditedLifecycle(Long id, SimulationAuditService.Action action, Long actor, String reason,
+            java.util.function.Supplier<Mono<Void>> mutation) {
+        return mutation.get().then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
+                : audit.record(SimulationAuditService.Target.SIMULATION, id, id, action, actor, reason)));
     }
 
     public Mono<Void> softDelete(Long id) {

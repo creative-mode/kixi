@@ -50,7 +50,7 @@ Papéis: `ADMIN`, `TEACHER`, `STUDENT`, atribuídos a contas (`account_roles`).
 | `ADMIN` | `accounts`, `users`, `roles`, `sessions`, `teachers`; escrita de instituições; CRUD de `teaching-assignments` |
 | `ADMIN` ou `TEACHER` | Escrita de enunciados, questões, opções e imagens; vistas de revisão/estatísticas de enunciados; escrita de académicos (`school-years`, `terms`, `subjects`, `courses`, `classes`) e do OCR; `GET /teaching-assignments/me` |
 | Autenticado (qualquer papel) | `/me`, `enrollments`, `chat`, leitura de instituições, leitura de enunciados, leitura de académicos, simulações |
-| `ADMIN`, `TEACHER` ou `STUDENT` | `POST` de `simulations` e `simulation-answers` |
+| `STUDENT` (e `INTEGRATION`, no `IntegrationScope`) | `POST` de `simulations` e `simulation-answers`, `PUT` de `simulations/{id}` e `simulation-answers/{id}`, sempre sobre o que é do próprio aluno (kixi#596) |
 
 A decisão por papel é complementada por verificação de posse/afiliação no serviço:
 o catálogo de enunciados fica dentro da escola do chamador, cada sessão de chat

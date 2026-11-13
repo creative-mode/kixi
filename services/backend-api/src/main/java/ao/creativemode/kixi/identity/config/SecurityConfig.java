@@ -260,9 +260,15 @@ public class SecurityConfig {
                                 "/api/simulations",
                                 "/api/simulations/**")
                         .authenticated()
+                        // kixi#596: apagar, restaurar e purgar respostas de alunos muda o que o recálculo das notas vê; só o
+                        // administrador, com motivo e auditoria. O professor corrige pela nota (PATCH .../grade), não apagando.
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers/*/restore")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.DELETE,
+                                "/api/v1/simulation-answers/*",
+                                "/api/v1/simulation-answers/*/purge")
+                        .hasRole("ADMIN")
                         // Social learning (issue #119): revoking is an explicit act
                         // of the simulation's owner, and without its own rule the
                         // DELETE would fall through to the staff-only catch-all
@@ -272,6 +278,13 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.DELETE,
                                 "/api/v1/simulations/*/share")
                         .hasAnyRole("ADMIN", "TEACHER", "STUDENT")
+                        // kixi#596: apagar e purgar simulações, só o administrador, com motivo e auditoria.
+                        .pathMatchers(HttpMethod.DELETE,
+                                "/api/v1/simulations/*",
+                                "/api/v1/simulations/*/permanent",
+                                "/api/simulations/*",
+                                "/api/simulations/*/permanent")
+                        .hasRole("ADMIN")
                         // A correção que a IA fez no fluxo do motor (kixi#542): nunca o professor, que não corrige estas
                         // respostas; sem esta regra o PUT cairia na regra genérica de /simulation-answers/** (ADMIN, TEACHER).
                         .pathMatchers(HttpMethod.PUT,
@@ -280,9 +293,21 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
+                        // kixi#596: a resposta é do aluno; ninguém a cria nem edita em nome dele. O controlador exige o dono
+                        // da simulação a toda a conta, ADMIN e professor incluídos (toda a conta registada tem STUDENT, por isso
+                        // bloquear só por papel não bastava). A exceção é a conta INTEGRATION do motor SchoolOps, que o
+                        // IntegrationScope já prevê e que tem o seu próprio caminho, auditado, no controlador.
                         .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulation-answers",
-                                "/api/v1/simulation-answers/**",
+                                "/api/v1/simulation-answers/**")
+                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        // O mesmo para abrir uma simulação: o aluno (a sua) ou o motor; o resto de POST /simulations/** (submit,
+                        // check, share, treino) mantém os papéis de antes.
+                        .pathMatchers(HttpMethod.POST,
+                                "/api/v1/simulations",
+                                "/api/simulations")
+                        .hasAnyRole("STUDENT", "INTEGRATION")
+                        .pathMatchers(HttpMethod.POST,
                                 "/api/v1/simulations",
                                 "/api/v1/simulations/**",
                                 "/api/simulations",
@@ -291,12 +316,14 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulations/*/restore",
                                 "/api/simulations/*/restore")
-                        .hasAnyRole("ADMIN", "TEACHER")
+                        .hasRole("ADMIN")
                         .pathMatchers(HttpMethod.PUT,
-                                "/api/v1/simulation-answers/*",
+                                "/api/v1/simulation-answers/*")
+                        .hasRole("STUDENT")
+                        .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulations/*",
                                 "/api/simulations/*")
-                        .hasAnyRole("ADMIN", "TEACHER", "STUDENT", "INTEGRATION")
+                        .hasAnyRole("STUDENT", "INTEGRATION")
                         .pathMatchers("/api/v1/simulation-answers", "/api/v1/simulation-answers/**",
                                 "/api/v1/simulations", "/api/v1/simulations/**",
                                 "/api/simulations", "/api/simulations/**")
