@@ -172,6 +172,12 @@ public class ExamRoomService implements ExamRoomAccess {
         return rooms.findByTeacherAccountIdOrderByCreatedAtDesc(teacherAccountId).map(ExamRoomService::toResponse);
     }
 
+    /** Every room, optionally narrowed to one school: the integration account owns none, so it reads them all (#600). */
+    public Flux<ExamRoomResponse> findAllRooms(Long institutionId) {
+        return (institutionId == null ? rooms.findAllByOrderByCreatedAtDesc() : rooms.findAllByInstitutionId(institutionId))
+                .map(ExamRoomService::toResponse);
+    }
+
     /** The same list narrowed to one school; without a school it is the whole list. */
     public Flux<ExamRoomResponse> findMine(Long teacherAccountId, Long institutionId) {
         if (institutionId == null) {

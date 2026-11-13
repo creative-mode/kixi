@@ -76,7 +76,7 @@ Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enun
 
 ## Papel `INTEGRATION` (serviços)
 
-Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria.
+Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `ADMIN`, uma conta `INTEGRATION` só chega à lista fixa de `IntegrationScope`; tudo o resto responde 403 antes de qualquer outra regra, e o papel não se soma a outros (um token com `INTEGRATION` e `ADMIN` vale só `INTEGRATION`). Dentro da lista a conta vê o que um administrador veria. Uma exceção, porque a conta não é dona de sala nenhuma: `GET /exam-rooms/owned` devolve-lhe **todas** as salas (e, com `institutionId`, as da escola), ao passo que o professor e o `ADMIN` continuam a ver só as suas. É por aí que o motor descobre se uma prova é digital ou em papel (kixi#600).
 
 | Pode | Caminhos |
 |---|---|
