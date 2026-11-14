@@ -60,7 +60,8 @@ class ExamRoomMonitoringServiceTest {
         when(accounts.findAllByIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
         when(users.findByAccountIdInAndDeletedAtIsNull(any())).thenReturn(Flux.empty());
         service = new ExamRoomMonitoringService(rooms, participants, simulations, answers, questions,
-                Clock.fixed(Instant.parse("2026-10-11T13:00:00Z"), ZoneOffset.UTC), accounts, users);
+                Clock.fixed(Instant.parse("2026-10-11T13:00:00Z"), ZoneOffset.UTC),
+                new ExamRoomParticipantNames(accounts, users));
     }
 
     @Test
