@@ -1,6 +1,7 @@
 package ao.creativemode.kixi.examrooms.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -10,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,6 +38,7 @@ import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.examrooms.service.ExamRoomMonitoringService;
+import ao.creativemode.kixi.examrooms.service.ExamRoomParticipantNames;
 import ao.creativemode.kixi.examrooms.service.ExamRoomService;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
@@ -157,10 +160,18 @@ class ExamRoomControllerSseTest {
         }
 
         @Bean
+        ExamRoomParticipantNames participantNames() {
+            ExamRoomParticipantNames names = mock(ExamRoomParticipantNames.class);
+            when(names.resolve(anyList())).thenReturn(Mono.just(Map.of()));
+            return names;
+        }
+
+        @Bean
         ExamRoomMonitoringService monitoring(ExamRoomRepository rooms,
                 ExamRoomParticipantRepository participants, SimulationRepository simulations,
-                SimulationAnswerRepository answers, QuestionRepository questions, Clock clock) {
-            return new ExamRoomMonitoringService(rooms, participants, simulations, answers, questions, clock);
+                SimulationAnswerRepository answers, QuestionRepository questions, Clock clock,
+                ExamRoomParticipantNames names) {
+            return new ExamRoomMonitoringService(rooms, participants, simulations, answers, questions, clock, names);
         }
 
         @Bean

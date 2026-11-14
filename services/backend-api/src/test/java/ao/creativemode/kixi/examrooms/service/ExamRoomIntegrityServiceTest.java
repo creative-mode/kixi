@@ -16,6 +16,10 @@ import ao.creativemode.kixi.examrooms.model.ExamRoomParticipant;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
+import ao.creativemode.kixi.identity.model.Account;
+import ao.creativemode.kixi.identity.model.User;
+import ao.creativemode.kixi.identity.repository.AccountRepository;
+import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.simulations.model.SimulationIntegrityEvent;
 import ao.creativemode.kixi.simulations.model.SimulationIntegrityEventKind;
 import ao.creativemode.kixi.simulations.repository.SimulationIntegrityEventRepository;
@@ -27,6 +31,8 @@ class ExamRoomIntegrityServiceTest {
     private ExamRoomRepository rooms;
     private ExamRoomParticipantRepository participants;
     private SimulationIntegrityEventRepository events;
+    private AccountRepository accounts;
+    private UserRepository users;
     private ExamRoomIntegrityService service;
 
     @BeforeEach
@@ -34,7 +40,12 @@ class ExamRoomIntegrityServiceTest {
         rooms = org.mockito.Mockito.mock(ExamRoomRepository.class);
         participants = org.mockito.Mockito.mock(ExamRoomParticipantRepository.class);
         events = org.mockito.Mockito.mock(SimulationIntegrityEventRepository.class);
+        accounts = org.mockito.Mockito.mock(AccountRepository.class);
+        users = org.mockito.Mockito.mock(UserRepository.class);
+        when(accounts.findAllByIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any())).thenReturn(Flux.empty());
+        when(users.findByAccountIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any())).thenReturn(Flux.empty());
         service = new ExamRoomIntegrityService(rooms, participants, events,
+                new ExamRoomParticipantNames(accounts, users),
                 Clock.fixed(Instant.parse("2026-10-21T10:00:00Z"), ZoneOffset.UTC));
     }
 
@@ -109,6 +120,36 @@ class ExamRoomIntegrityServiceTest {
                     assertThat(result.participants().get(1).events()).extracting("id").containsExactly(32L);
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    void resolvesTheDisplayNameOfEachParticipantAndNeverUsesTheAccountIdAsAName() {
+        ExamRoom room = new ExamRoom();
+        room.setId(5L);
+        when(rooms.findById(5L)).thenReturn(Mono.just(room));
+        when(participants.findByExamRoomId(5L))
+                .thenReturn(Flux.just(participant(7L, 12L), participant(8L, 13L), participant(10L, null)));
+        when(events.findRecentBySimulationIdIn(java.util.Set.of(12L, 13L), 1_000)).thenReturn(Flux.empty());
+        when(accounts.findAllByIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Flux.just(account(7L, "ana"), account(8L, "bruno")));
+        when(users.findByAccountIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Flux.just(new User(7L, "Ana", "Silva")));
+
+        StepVerifier.create(service.list(5L, 1L, true))
+                .assertNext(result -> {
+                    assertThat(result.participants()).extracting("displayName")
+                            .containsExactly("Ana Silva", "bruno", ExamRoomParticipantNames.UNKNOWN);
+                    assertThat(result.participants()).extracting("displayName")
+                            .doesNotContain("7", "8", "10");
+                })
+                .verifyComplete();
+    }
+
+    private static Account account(Long id, String username) {
+        Account account = new Account();
+        account.setId(id);
+        account.setUsername(username);
+        return account;
     }
 
     private static ExamRoomParticipant participant(Long accountId, Long simulationId) {
