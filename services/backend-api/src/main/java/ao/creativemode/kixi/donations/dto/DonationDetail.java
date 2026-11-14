@@ -11,6 +11,7 @@ public record DonationDetail(
         String donorName,
         String donorEmail,
         String institutionName,
+        Long institutionId,
         String subjectName,
         String classGrade,
         String schoolYear,

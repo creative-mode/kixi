@@ -72,6 +72,15 @@ public class ApiAbuseRateLimiter {
                 properties.getUploadMaxAttempts(), properties.getUploadWindowSeconds(), "upload");
     }
 
+    /** The public institutions catalogue (kixi#597): read-only and cheap, but anonymous; rate limited so an enumerator cannot map the verified list faster than a human scrolls it. */
+    public Mono<Void> checkInstitutionsPublic(String clientAddress) {
+        // 60 names per minute and 6000 a day platform-wide. Enough for the donation form on a busy site.
+        return check("institutions-public:ip:" + valueOrUnknown(clientAddress),
+                60, 60, "institutions-public")
+                .then(Mono.defer(() -> check("institutions-public-global",
+                        6000, 86400, "institutions-public-global")));
+    }
+
     /**
      * Guards self-enroll (#255): without this, a code with a tight {@code max_uses} is an
      * invitation to brute-force guess a valid one by account, not just by IP.

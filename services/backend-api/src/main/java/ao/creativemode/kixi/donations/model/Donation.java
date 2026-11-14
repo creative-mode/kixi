@@ -37,6 +37,10 @@ public class Donation {
     @Column("institution_name")
     private String institutionName;
 
+    /** A escola do catálogo escolhida pelo doador, quando a doador a escolheu; null se escreveu livre ou «Outra escola». */
+    @Column("institution_id")
+    private Long institutionId;
+
     @Column("subject_name")
     private String subjectName;
 

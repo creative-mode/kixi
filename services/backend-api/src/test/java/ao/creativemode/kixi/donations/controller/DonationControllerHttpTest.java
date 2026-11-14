@@ -179,7 +179,7 @@ class DonationControllerHttpTest {
 
     @Test
     void anAdministratorListsAndReads() {
-        when(service.list(null, 1, 20)).thenReturn(Mono.just(new DonationPage(List.of(), 0, 1, 20, Map.of())));
+        when(service.list(null, null, 1, 20)).thenReturn(Mono.just(new DonationPage(List.of(), 0, 1, 20, Map.of())));
 
         client.mutateWith(jwt("1", "ROLE_ADMIN")).get().uri("/api/v1/donations")
                 .exchange().expectStatus().isOk().expectBody().jsonPath("$.total").isEqualTo(0);

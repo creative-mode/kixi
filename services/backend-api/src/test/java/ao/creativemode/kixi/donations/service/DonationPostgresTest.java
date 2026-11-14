@@ -106,7 +106,7 @@ class DonationPostgresTest {
             list.add(new DonationSubmission.Upload("p" + (i++) + ".png", bytes));
         }
         return new DonationSubmission("Ana", "ana@example.com", MARK, "Matemática", "12ª Classe", "2024/2025",
-                "Exame", "nota", true, null, System.currentTimeMillis() - 60_000, list);
+                "Exame", "nota", true, null, System.currentTimeMillis() - 60_000, list, null);
     }
 
     private DonationDetail donate(byte[]... uploads) {
@@ -150,14 +150,14 @@ class DonationPostgresTest {
         DonationDetail second = donate(png(51, 51, 5));
         service.review(second.id(), REVIEWER, new DonationReviewRequest("rejected", "ilegível")).block(WAIT);
 
-        var all = service.list(null, 1, 50).block(WAIT);
+        var all = service.list(null, null, 1, 50).block(WAIT);
         assertThat(all.counts()).containsKeys("pending", "approved", "rejected", "converted");
         assertThat(all.counts().get("pending")).isGreaterThanOrEqualTo(1);
         assertThat(all.counts().get("rejected")).isGreaterThanOrEqualTo(1);
-        var rejected = service.list("rejected", 1, 50).block(WAIT);
+        var rejected = service.list("rejected", null, 1, 50).block(WAIT);
         assertThat(rejected.items()).extracting(item -> item.id()).contains(second.id());
         assertThat(rejected.items()).allSatisfy(item -> assertThat(item.status()).isEqualTo("rejected"));
-        assertThat(service.list(null, 1, 1).block(WAIT).items()).hasSize(1);
+        assertThat(service.list(null, null, 1, 1).block(WAIT).items()).hasSize(1);
     }
 
     @Test

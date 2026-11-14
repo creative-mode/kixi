@@ -8,6 +8,7 @@ public record DonationSummary(
         String reference,
         String status,
         String institutionName,
+        Long institutionId,
         String subjectName,
         String examType,
         String classGrade,

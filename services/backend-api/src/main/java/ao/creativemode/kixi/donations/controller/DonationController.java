@@ -118,7 +118,7 @@ public class DonationController {
                         field(parts, "subjectName"), field(parts, "classGrade"), field(parts, "schoolYear"),
                         field(parts, "examType"), field(parts, "notes"),
                         "true".equalsIgnoreCase(field(parts, "consent")),
-                        field(parts, "website"), startedAt(parts), files));
+                        field(parts, "website"), startedAt(parts), files, institutionId(parts)));
     }
 
     /** A file read into memory, never past its own limit: the join gives up at the cap. */
@@ -143,6 +143,24 @@ public class DonationController {
         return part instanceof FormFieldPart form ? form.value() : null;
     }
 
+    /** The catalogue id of the chosen school, when present. Anything else is ignored. */
+    private static Long institutionId(MultiValueMap<String, Part> parts) {
+        String raw = field(parts, "institutionId");
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || !trimmed.matches("\\d+")) {
+            return null;
+        }
+        try {
+            long value = Long.parseLong(trimmed);
+            return value > 0 ? value : null;
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
     private static Long startedAt(MultiValueMap<String, Part> parts) {
         String raw = field(parts, "formStartedAt");
         try {
@@ -157,9 +175,10 @@ public class DonationController {
     @GetMapping
     public Mono<ResponseEntity<DonationPage>> list(
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long institutionId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int limit) {
-        return service.list(status, page, limit).map(ResponseEntity::ok);
+        return service.list(status, institutionId, page, limit).map(ResponseEntity::ok);
     }
 
     @GetMapping("/{id}")
