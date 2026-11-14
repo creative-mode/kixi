@@ -133,7 +133,8 @@ class ExamRoomIntegrityServiceTest {
         when(accounts.findAllByIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Flux.just(account(7L, "ana"), account(8L, "bruno")));
         when(users.findByAccountIdInAndDeletedAtIsNull(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(Flux.just(new User(7L, "Ana", "Silva")));
+                // O perfil de 10 sobrevive à conta apagada: não pode virar nome.
+                .thenReturn(Flux.just(new User(7L, "Ana", "Silva"), new User(10L, "Fantasma", "Apagado")));
 
         StepVerifier.create(service.list(5L, 1L, true))
                 .assertNext(result -> {

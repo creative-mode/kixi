@@ -49,8 +49,12 @@ public class ExamRoomParticipantNames {
                     Map<Long, User> profiles = tuple.getT2().stream()
                             .filter(user -> user.getAccountId() != null)
                             .collect(Collectors.toMap(User::getAccountId, Function.identity(), (left, right) -> left));
-                    return ids.stream().collect(Collectors.toMap(Function.identity(),
-                            id -> nameOf(profiles.get(id), usernames.get(id))));
+                    return ids.stream().collect(Collectors.toMap(Function.identity(), id -> {
+                        // A soft-deleted account is not in `usernames`: its profile may still
+                        // exist, but the participant has no account to name any more.
+                        if (!usernames.containsKey(id)) return UNKNOWN;
+                        return nameOf(profiles.get(id), usernames.get(id));
+                    }));
                 });
     }
 
