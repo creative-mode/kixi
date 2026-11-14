@@ -11,6 +11,8 @@ import ao.creativemode.kixi.donations.model.Donation;
 import ao.creativemode.kixi.donations.model.DonationFile;
 import ao.creativemode.kixi.donations.repository.DonationFileRepository;
 import ao.creativemode.kixi.donations.repository.DonationRepository;
+import ao.creativemode.kixi.institutions.model.Institution;
+import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 import ao.creativemode.kixi.exams.repository.StatementRepository;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
@@ -74,6 +76,7 @@ public class DonationService {
 
     private final DonationRepository donations;
     private final DonationFileRepository files;
+    private final InstitutionRepository institutionRepository;
     private final ImageStorage storage;
     private final StatementRepository statements;
     private final OcrServiceClient ocr;
@@ -85,6 +88,7 @@ public class DonationService {
     public DonationService(
             DonationRepository donations,
             DonationFileRepository files,
+            InstitutionRepository institutionRepository,
             ImageStorage storage,
             StatementRepository statements,
             OcrServiceClient ocr,
@@ -94,6 +98,7 @@ public class DonationService {
             @org.springframework.beans.factory.annotation.Value("${app.jwt.secret:}") String jwtSecret) {
         this.donations = donations;
         this.files = files;
+        this.institutionRepository = institutionRepository;
         this.storage = storage;
         this.statements = statements;
         this.ocr = ocr;
@@ -119,12 +124,21 @@ public class DonationService {
                 log.info("Donation taken for a bot and dropped");
                 return Mono.just(new DonationCreatedResponse(newReference()));
             }
-            Fields fields = validatedFields(submission);
-            List<Prepared> prepared = validatedFiles(submission.files());
-            return store(prepared)
-                    .flatMap(keys -> tx.transactional(save(fields, prepared, keys, clientHash))
-                            .onErrorResume(error -> removeStored(keys).then(Mono.error(error))))
-                    .map(donation -> new DonationCreatedResponse(donation.getReference()));
+            // If the donor picked the school from the public catalogue, it must be a verified, non-deleted
+            // school; refuse synchronously, before a file is stored.
+            Mono<Long> verified = submission.institutionId() == null
+                    ? Mono.just(0L)
+                    : institutionRepository.findByIdAndVerifiedIsTrueAndDeletedAtIsNull(submission.institutionId())
+                            .switchIfEmpty(Mono.error(ApiException.badRequest("A escola não está no catálogo: escolha-a da lista ou escreva o nome da escola.")))
+                            .map(Institution::getId);
+            return verified.then(Mono.defer(() -> {
+                Fields fields = validatedFields(submission);
+                List<Prepared> prepared = validatedFiles(submission.files());
+                return store(prepared)
+                        .flatMap(keys -> tx.transactional(save(fields, prepared, submission.institutionId(), keys, clientHash))
+                                .onErrorResume(error -> removeStored(keys).then(Mono.error(error))))
+                        .map(donation -> new DonationCreatedResponse(donation.getReference()));
+            }));
         });
     }
 
@@ -299,7 +313,7 @@ public class DonationService {
     }
 
     /** The donation and its files stand or fall together: the caller wraps it in a transaction. */
-    Mono<Donation> save(Fields f, List<Prepared> prepared, List<String> keys, String clientHash) {
+    Mono<Donation> save(Fields f, List<Prepared> prepared, Long institutionId, List<String> keys, String clientHash) {
         LocalDateTime now = LocalDateTime.now(clock);
         return uniqueReference().flatMap(reference -> {
             Donation donation = Donation.builder()
@@ -315,6 +329,7 @@ public class DonationService {
                     .consentAt(now)
                     .consentVersion(properties.getConsentVersion())
                     .status(Donation.PENDING)
+                    .institutionId(institutionId)
                     .clientHash(clientHash)
                     .createdAt(now)
                     .build();
@@ -355,7 +370,11 @@ public class DonationService {
 
     // ── Administrator ───────────────────────────────────────────────────────
 
-    public Mono<DonationPage> list(String status, int page, int limit) {
+    /**
+     * List donations, newest first. Optionally filtered by status and/or by school (donations linked
+     * to that school, oldest ones first are not affected).
+     */
+    public Mono<DonationPage> list(String status, Long institutionId, int page, int limit) {
         String filter = status == null || status.isBlank() ? null : status.trim().toLowerCase(java.util.Locale.ROOT);
         if (filter != null && !STATUSES.contains(filter)) {
             return Mono.error(ApiException.badRequest("Unknown status: " + status));
@@ -367,8 +386,8 @@ public class DonationService {
             return Mono.error(ApiException.badRequest("limit must be between 1 and 50"));
         }
         return Mono.zip(
-                        donations.findPage(filter, limit, (long) (page - 1) * limit).collectList(),
-                        donations.countMatching(filter),
+                        donations.findPage(filter, institutionId, limit, (long) (page - 1) * limit).collectList(),
+                        donations.countMatching(filter, institutionId),
                         donations.countsByStatus().collectMap(
                                 DonationRepository.StatusCount::status, DonationRepository.StatusCount::total))
                 .flatMap(tuple -> {
@@ -480,12 +499,12 @@ public class DonationService {
 
     private static DonationSummary toSummary(Donation d, int fileCount) {
         return new DonationSummary(d.getId(), d.getReference(), d.getStatus(), d.getInstitutionName(),
-                d.getSubjectName(), d.getExamType(), d.getClassGrade(), d.getSchoolYear(), fileCount, d.getCreatedAt());
+                d.getInstitutionId(), d.getSubjectName(), d.getExamType(), d.getClassGrade(), d.getSchoolYear(), fileCount, d.getCreatedAt());
     }
 
     private static DonationDetail toDetail(Donation d, List<DonationFile> list) {
         return new DonationDetail(d.getId(), d.getReference(), d.getStatus(), d.getDonorName(), d.getDonorEmail(),
-                d.getInstitutionName(), d.getSubjectName(), d.getClassGrade(), d.getSchoolYear(), d.getExamType(),
+                d.getInstitutionName(), d.getInstitutionId(), d.getSubjectName(), d.getClassGrade(), d.getSchoolYear(), d.getExamType(),
                 d.getNotes(), d.getConsentAt(), d.getConsentVersion(), d.getReviewNote(), d.getReviewedAt(),
                 d.getStatementId(), d.getCreatedAt(),
                 list.stream().map(f -> new DonationDetail.DonationFileInfo(

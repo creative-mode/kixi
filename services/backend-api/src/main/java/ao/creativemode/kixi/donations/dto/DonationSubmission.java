@@ -19,7 +19,8 @@ public record DonationSubmission(
         boolean consent,
         String website,
         Long formStartedAt,
-        List<Upload> files
+        List<Upload> files,
+        Long institutionId
 ) {
 
     /** One uploaded file, already read into memory (and already held to the size limits). */
