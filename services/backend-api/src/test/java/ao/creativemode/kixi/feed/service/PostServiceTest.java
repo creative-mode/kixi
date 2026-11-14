@@ -1,6 +1,8 @@
 package ao.creativemode.kixi.feed.service;
 
+import ao.creativemode.kixi.feed.dto.post.PostEditRequest;
 import ao.creativemode.kixi.feed.dto.post.PostRequest;
+import ao.creativemode.kixi.feed.dto.post.PostResponse;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentResponse;
 import ao.creativemode.kixi.feed.dto.postReaction.PostReactionRequest;
@@ -942,4 +944,135 @@ class PostServiceTest {
 
         verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
     }
+
+    // ── Edit and delete (kixi#593) ─────────────────────────────────────────
+
+    @Test
+    void onlyTheAuthorCanEditAPost() {
+        Post post = myPost();
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        StepVerifier.create(postService.editPost(POST_ID, OTHER_ACCOUNT_ID,
+                        new PostEditRequest(null, "Updated content", null)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.FORBIDDEN))
+                .verify();
+        verify(postRepository, never()).save(any());
+    }
+
+    @Test
+    void aSimulationCardCannotBeEditedNotEvenByItsAuthor() {
+        Post post = myPost();
+        post.setType(PostType.SIMULATION.getValue());
+        post.setSimulationId(77L);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        StepVerifier.create(postService.editPost(POST_ID, ACCOUNT_ID,
+                        new PostEditRequest("Title", "Updated content", null)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.CONFLICT))
+                .verify();
+        verify(postRepository, never()).save(any());
+    }
+
+    @Test
+    void theAuthorEditsTheirPostAndTheResponseCarriesTheEditedFlag() {
+        Post post = myPost();
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(postRepository.save(any(Post.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(POST_ID, ACCOUNT_ID)).thenReturn(Mono.just(false));
+
+        PostResponse response = postService.editPost(POST_ID, ACCOUNT_ID,
+                new PostEditRequest(null, "Updated content", null)).block();
+
+        assertThat(response.edited()).isTrue();
+        assertThat(response.content()).isEqualTo("Updated content");
+        verify(postRepository).save(argThat(p -> p.getEditedAt() != null));
+    }
+
+    @Test
+    void aPostThatIsAlreadyDeletedAnswers404OnEditAndDelete() {
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.empty());
+        StepVerifier.create(postService.editPost(POST_ID, ACCOUNT_ID,
+                        new PostEditRequest(null, "Updated content", null)))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        StepVerifier.create(postService.deletePost(POST_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+    }
+
+    @Test
+    void deletingTheAcceptedCommentIsRefusedWith409() {
+        Post post = myPost();
+        PostComment accepted = myComment(false);
+        accepted.setIsAccepted(true);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(accepted));
+        StepVerifier.create(postService.deleteComment(POST_ID, COMMENT_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.CONFLICT))
+                .verify();
+        verify(commentRepository, never()).save(any());
+    }
+
+    @Test
+    void theAuthorDeletesTheirOwnComment() {
+        Post post = myPost();
+        PostComment comment = myComment(false);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(comment));
+        when(commentRepository.save(any(PostComment.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        postService.deleteComment(POST_ID, COMMENT_ID, ACCOUNT_ID, false).block();
+
+        verify(commentRepository).save(argThat(c -> c.getDeletedAt() != null));
+    }
+
+    @Test
+    void aModeratorOfTheClassDeletesAnyPostAndAnUnmoderatedStudentCannot() {
+        Post post = myPost();
+        post.setAuthorAccountId(OTHER_ACCOUNT_ID);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(postRepository.save(any(Post.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(scopeAuthorizer.taughtClassesOf(ACCOUNT_ID)).thenReturn(Mono.just(Set.of(MY_CLASS_ID)));
+
+        postService.deletePost(POST_ID, ACCOUNT_ID, false).block();
+
+        verify(postRepository).save(argThat(p -> p.getDeletedAt() != null));
+    }
+
+    @Test
+    void aStudentWithoutAnyTeachingReachGets404AndCannotDeleteSomeoneElsesPost() {
+        Post post = myPost();
+        post.setAuthorAccountId(OTHER_ACCOUNT_ID);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(scopeAuthorizer.taughtClassesOf(ACCOUNT_ID)).thenReturn(Mono.just(Set.of()));
+        StepVerifier.create(postService.deletePost(POST_ID, ACCOUNT_ID, false))
+                .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verify(postRepository, never()).save(any());
+    }
+
+    @Test
+    void aDeletedCommentIsEditedAndCarriesTheEditedFlag() {
+        Post post = myPost();
+        PostComment comment = myComment(false);
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(post));
+        when(commentRepository.findByIdAndPostIdAndDeletedAtIsNull(COMMENT_ID, POST_ID))
+                .thenReturn(Mono.just(comment));
+        when(commentRepository.save(any(PostComment.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        PostCommentResponse response = postService.editComment(POST_ID, COMMENT_ID, ACCOUNT_ID, false,
+                new PostCommentRequest("Corrigido pelo autor")).block();
+
+        assertThat(response.edited()).isTrue();
+        assertThat(response.content()).isEqualTo("Corrigido pelo autor");
+        verify(commentRepository).save(argThat(c -> c.getEditedAt() != null));
+    }
+
 }

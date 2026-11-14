@@ -47,6 +47,10 @@ public class PostComment {
     @Column("updated_at")
     private LocalDateTime updatedAt;
 
+    /** Set only when the comment is edited (kixi#593); null for a fresh row and for moderation only. */
+    @Column("edited_at")
+    private LocalDateTime editedAt;
+
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 

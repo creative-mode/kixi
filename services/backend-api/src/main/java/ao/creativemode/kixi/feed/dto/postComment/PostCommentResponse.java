@@ -25,5 +25,7 @@ public record PostCommentResponse(
         LocalDateTime updatedAt,
         Boolean mine,
         String displayName,
-        String authorPhoto
+        String authorPhoto,
+        /** True when the comment was edited after its first creation (kixi#593). */
+        Boolean edited
 ) {}
