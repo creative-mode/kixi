@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
+import ao.creativemode.kixi.feed.dto.post.PostEditRequest;
 import ao.creativemode.kixi.feed.dto.post.PostRequest;
 import ao.creativemode.kixi.feed.dto.post.PostResponse;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
@@ -76,6 +77,10 @@ class PostControllerHttpTest {
         client.patch().uri("/api/v1/feed/posts/1/comments/2/hide").exchange().expectStatus().isUnauthorized();
         client.patch().uri("/api/v1/feed/posts/1/comments/2/unhide").exchange().expectStatus().isUnauthorized();
         client.get().uri("/api/v1/feed/posts/reported").exchange().expectStatus().isUnauthorized();
+        client.put().uri("/api/v1/feed/posts/1").exchange().expectStatus().isUnauthorized();
+        client.delete().uri("/api/v1/feed/posts/1").exchange().expectStatus().isUnauthorized();
+        client.put().uri("/api/v1/feed/posts/1/comments/2").exchange().expectStatus().isUnauthorized();
+        client.delete().uri("/api/v1/feed/posts/1/comments/2").exchange().expectStatus().isUnauthorized();
     }
 
     @Test
@@ -106,7 +111,7 @@ class PostControllerHttpTest {
     void readsTheConversationOfAPost() {
         when(service.listComments(9L, 42L, 1, 20)).thenReturn(Flux.just(
                 new PostCommentResponse(3L, 9L, 42L, "A comment", false, false,
-                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg")));
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg", true)));
 
         client.mutateWith(studentJwt()).get()
                 .uri("http://localhost/api/v1/feed/posts/9/comments")
@@ -139,7 +144,7 @@ class PostControllerHttpTest {
         when(service.createPost(42L, postRequest)).thenReturn(Mono.just(post(9L)));
         when(service.addComment(9L, 42L, new PostCommentRequest("A comment")))
                 .thenReturn(Mono.just(new PostCommentResponse(3L, 9L, 42L, "A comment", false, false,
-                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg")));
+                        LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg", false)));
         when(service.toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE)))
                 .thenReturn(Mono.just(new PostReactionToggleResponse(true)));
         when(service.setReaction(9L, 42L, new PostReactionSetRequest(PostReactionType.APPLAUSE, false)))
@@ -169,6 +174,38 @@ class PostControllerHttpTest {
         verify(service).toggleReaction(9L, 42L, new PostReactionRequest(PostReactionType.APPLAUSE));
         verify(service).setReaction(9L, 42L, new PostReactionSetRequest(PostReactionType.APPLAUSE, false));
         verify(service).reportPost(9L, 42L, new PostReportRequest("Not useful"));
+    }
+
+    /** The author or a moderator edits and deletes; the four verbs reach the service, with 204 where nothing to return. */
+    @Test
+    void editsAndDeletesPostsAndCommentsPassThrough() {
+        PostEditRequest edit = new PostEditRequest(null, "A fuller topic", null);
+        when(service.editPost(eq(9L), eq(42L), any(PostEditRequest.class))).thenReturn(Mono.just(post(9L)));
+        when(service.deletePost(eq(9L), eq(42L), eq(false))).thenReturn(Mono.empty());
+        PostCommentResponse comment = new PostCommentResponse(3L, 9L, 42L, "Corrigido", false, false,
+                LocalDateTime.now(), LocalDateTime.now(), true, "Ana N.", "/uploads/images/avatar/ana.jpg", true);
+        when(service.editComment(eq(9L), eq(3L), eq(42L), eq(false), any(PostCommentRequest.class))).thenReturn(Mono.just(comment));
+        when(service.deleteComment(eq(9L), eq(3L), eq(42L), eq(false))).thenReturn(Mono.empty());
+
+        client.mutateWith(studentJwt()).put().uri("/api/v1/feed/posts/9")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"content\":\"A fuller topic\"}")
+                .exchange().expectStatus().isOk();
+        client.mutateWith(studentJwt()).delete().uri("/api/v1/feed/posts/9")
+                .exchange().expectStatus().isNoContent();
+        client.mutateWith(studentJwt()).put().uri("/api/v1/feed/posts/9/comments/3")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"content\":\"Corrigido\"}")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.content").isEqualTo("Corrigido")
+                .jsonPath("$.edited").isEqualTo(true);
+        client.mutateWith(studentJwt()).delete().uri("/api/v1/feed/posts/9/comments/3")
+                .exchange().expectStatus().isNoContent();
+
+        verify(service).editPost(eq(9L), eq(42L), any(PostEditRequest.class));
+        verify(service).deletePost(9L, 42L, false);
+        verify(service).editComment(eq(9L), eq(3L), eq(42L), eq(false), any(PostCommentRequest.class));
+        verify(service).deleteComment(9L, 3L, 42L, false);
     }
 
     @Test
@@ -284,7 +321,7 @@ class PostControllerHttpTest {
     private static PostResponse post(Long id) {
         LocalDateTime now = LocalDateTime.of(2026, 10, 13, 12, 0);
         return new PostResponse(id, 42L, 1L, 2026L, 20L, 10L, "topic", "Title",
-                "A useful topic", false, 0L, false, now, now, null, null);
+                "A useful topic", false, 0L, false, now, now, null, null, true);
     }
 
     private static WebTestClientConfigurer studentJwt() {
