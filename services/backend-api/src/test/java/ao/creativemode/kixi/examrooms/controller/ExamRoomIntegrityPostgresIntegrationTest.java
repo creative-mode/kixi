@@ -104,7 +104,7 @@ class ExamRoomIntegrityPostgresIntegrationTest {
                 + STATEMENT + ", 'Prova it-595', 'TEST', 90, 20, " + TEACHER + ", true, false, 'manual')");
         sql("INSERT INTO exam_rooms (id, statement_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES ("
                 + ROOM + ", " + STATEMENT + ", " + TEACHER + ", now() - interval '2 hours', now() - interval '1 hour', 60, 'CLOSED')");
-        sql("INSERT INTO exam_room_participants (exam_room_id, account_id) VALUES ("
+        sql("INSERT INTO exam_room_participants (exam_room_id, account_id) VALUES "
                 + "(" + ROOM + ", " + NAMED + "), (" + ROOM + ", " + USERNAME_ONLY + "), (" + ROOM + ", " + DELETED + ")");
         sql("INSERT INTO simulations (id, account_id, statement_id, status, exam_room_id) VALUES ("
                 + SIMULATION + ", " + NAMED + ", " + STATEMENT + ", 'FINISHED', " + ROOM + ")");
