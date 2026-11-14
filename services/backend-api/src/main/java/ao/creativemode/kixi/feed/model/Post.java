@@ -119,6 +119,10 @@ public class Post {
     @Column("updated_at")
     private LocalDateTime updatedAt;
 
+    /** Set only when the author edits the post (kixi#593); null for a fresh card, a hide or a soft delete. */
+    @Column("edited_at")
+    private LocalDateTime editedAt;
+
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 

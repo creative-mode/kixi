@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.feed.controller;
 
+import ao.creativemode.kixi.feed.dto.post.PostEditRequest;
 import ao.creativemode.kixi.feed.dto.post.PostRequest;
 import ao.creativemode.kixi.feed.dto.post.PostResponse;
 import ao.creativemode.kixi.feed.dto.postComment.PostCommentRequest;
@@ -162,6 +163,39 @@ public class PostController {
     public Mono<Void> unhideComment(@PathVariable Long postId, @PathVariable Long commentId) {
         return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
                 .flatMap(tuple -> postService.unhideComment(postId, commentId, tuple.getT1(), tuple.getT2()));
+    }
+
+    /**
+     * The author edits their own post (title, text or blocks). The type, the school scope and the simulation
+     * figures never change. A SIMULATION card or an automatic milestone cannot be edited, even by its author.
+     * {@code 204} hides nothing here because the service answers with the updated post.
+     */
+    @PutMapping("/{postId}")
+    public Mono<PostResponse> editPost(@PathVariable Long postId, @RequestBody PostEditRequest request) {
+        return current.requiredAccountId().flatMap(accountId -> postService.editPost(postId, accountId, request));
+    }
+
+    /** The author or a moderator takes the post down. Soft-delete: the row leaves every listing. */
+    @DeleteMapping("/{postId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> deletePost(@PathVariable Long postId) {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> postService.deletePost(postId, tuple.getT1(), tuple.getT2()));
+    }
+
+    /** The author of the comment, or a moderator of the post it sits on, rewrites it. */
+    @PutMapping("/{postId}/comments/{commentId}")
+    public Mono<PostCommentResponse> editComment(@PathVariable Long postId, @PathVariable Long commentId, @Valid @RequestBody PostCommentRequest request) {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> postService.editComment(postId, commentId, tuple.getT1(), tuple.getT2(), request));
+    }
+
+    /** The author deletes their own comment; a moderator of the post may too. An accepted answer is refused with 409. */
+    @DeleteMapping("/{postId}/comments/{commentId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> deleteComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN"))
+                .flatMap(tuple -> postService.deleteComment(postId, commentId, tuple.getT1(), tuple.getT2()));
     }
 
     /** The reported-post queue: a TEACHER's own classes, or every school for an ADMIN. */

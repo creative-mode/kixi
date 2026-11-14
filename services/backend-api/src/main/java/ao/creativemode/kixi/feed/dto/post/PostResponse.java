@@ -19,7 +19,9 @@ public record PostResponse(
         LocalDateTime updatedAt,
         SimulationCard simulation,
         /** The built post's blocks (issue #347); empty for a plain post. */
-        java.util.List<PostBlock> blocks
+        java.util.List<PostBlock> blocks,
+        /** True when the author edited the post (kixi#593). */
+        Boolean edited
 ) {
 
     /** The result card of a SIMULATION post. */
