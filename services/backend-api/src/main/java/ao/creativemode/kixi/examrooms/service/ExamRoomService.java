@@ -174,8 +174,10 @@ public class ExamRoomService implements ExamRoomAccess {
 
     /** Every room, optionally narrowed to one school: the integration account owns none, so it reads them all (#600). */
     public Flux<ExamRoomResponse> findAllRooms(Long institutionId) {
-        return (institutionId == null ? rooms.findAllByOrderByCreatedAtDesc() : rooms.findAllByInstitutionId(institutionId))
-                .map(ExamRoomService::toResponse);
+        // Tipado explicitamente: javac falha a inferir o tipo do método-referência quando o recetor é
+        // o próprio ternário (erro "incompatible types... unbound lookup"), sem isto estar errado.
+        Flux<ExamRoom> all = institutionId == null ? rooms.findAllByOrderByCreatedAtDesc() : rooms.findAllByInstitutionId(institutionId);
+        return all.map(ExamRoomService::toResponse);
     }
 
     /** The same list narrowed to one school; without a school it is the whole list. */
