@@ -38,6 +38,11 @@ class ExamRoomOwnedPostgresIntegrationTest {
     private static final long STATEMENT = 600001L;
     private static final long ROOM_A = 600001L;
     private static final long ROOM_B = 600002L;
+    /** Só usados por {@link #engineFiltersByInstitutionIdThroughTheJoinToClasses}. */
+    private static final long INSTITUTION = 600001L;
+    private static final long SCHOOL_YEAR = 600001L;
+    private static final long COURSE = 600001L;
+    private static final long CLASS = 600001L;
 
     @Autowired
     private ApplicationContext applicationContext;
@@ -77,6 +82,12 @@ class ExamRoomOwnedPostgresIntegrationTest {
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER_A + ", " + TEACHER_B + ", " + ENGINE + ", " + ADMIN + ")");
         sql("DELETE FROM accounts WHERE id IN (" + TEACHER_A + ", " + TEACHER_B + ", " + ENGINE + ", " + ADMIN + ")");
+        // kixi#600: a turma e a escola que engineFiltersByInstitutionIdThroughTheJoinToClasses cria; limpas aqui também,
+        // para uma corrida anterior que tenha falhado a meio não deixar lixo para a próxima.
+        sql("DELETE FROM classes WHERE id = " + CLASS);
+        sql("DELETE FROM courses WHERE id = " + COURSE);
+        sql("DELETE FROM school_years WHERE id = " + SCHOOL_YEAR);
+        sql("DELETE FROM institutions WHERE id = " + INSTITUTION);
         for (long id : new long[] {TEACHER_A, TEACHER_B, ENGINE, ADMIN}) {
             sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES (" + id + ", 'it-owned-" + id
                     + "', 'it-owned-" + id + "@example.com', 'x', true)");
@@ -107,6 +118,24 @@ class ExamRoomOwnedPostgresIntegrationTest {
                 .jsonPath("$[?(@.id==" + ROOM_B + ")]").doesNotExist();
         client.get().uri("/api/v1/exam-rooms/owned").header("Authorization", "Bearer " + token(ADMIN, "ADMIN")).exchange()
                 .expectStatus().isOk().expectBody().jsonPath("$[?(@.id==" + ROOM_A + ")]").doesNotExist()
+                .jsonPath("$[?(@.id==" + ROOM_B + ")]").doesNotExist();
+    }
+
+    /** kixi#600: com `institutionId`, o INTEGRATION vê só as salas cuja turma é da escola, pelo novo JOIN a classes. */
+    @Test
+    void engineFiltersByInstitutionIdThroughTheJoinToClasses() {
+        sql("INSERT INTO institutions (id, code, name) VALUES (" + INSTITUTION + ", 'IT600', 'Escola #600')");
+        // school_years não tem institution_id (é global ao sistema); start_year/end_year têm de ser únicos.
+        sql("INSERT INTO school_years (id, start_year, end_year) VALUES (" + SCHOOL_YEAR + ", 2600, 2601)");
+        sql("INSERT INTO courses (id, code, name, institution_id) VALUES (" + COURSE + ", 'IT600-C', 'Curso #600', " + INSTITUTION + ")");
+        sql("INSERT INTO classes (id, grade, course_id, school_year_id, institution_id) VALUES (" + CLASS + ", 10, " + COURSE + ", "
+                + SCHOOL_YEAR + ", " + INSTITUTION + ")");
+        // Só a ROOM_A fica ligada à turma da escola #600; a ROOM_B fica sem turma, como na fixture base.
+        sql("UPDATE exam_rooms SET class_id = " + CLASS + " WHERE id = " + ROOM_A);
+
+        client.get().uri("/api/v1/exam-rooms/owned?institutionId=" + INSTITUTION)
+                .header("Authorization", "Bearer " + token(ENGINE, "INTEGRATION")).exchange()
+                .expectStatus().isOk().expectBody().jsonPath("$[?(@.id==" + ROOM_A + ")]").exists()
                 .jsonPath("$[?(@.id==" + ROOM_B + ")]").doesNotExist();
     }
 
