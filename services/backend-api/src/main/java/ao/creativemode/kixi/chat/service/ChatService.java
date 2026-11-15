@@ -352,39 +352,43 @@ public class ChatService {
 
     /**
      * The rules each mode adds. They sit with the base rules, before the teacher's
-     * style (see {@link TutorSystemPrompt#compose(String, String)}). GENERAL adds
-     * nothing, so a session of #114 gets the same prompt as before.
+     * style (see {@link TutorSystemPrompt#compose(String, String)}). Every mode repeats
+     * the answer format of issue #594 next to its own rules; GENERAL adds nothing, so a
+     * session of #114 gets the same prompt as before.
      */
     static String instructionsFor(TutorMode mode, Question focus) {
+        String rules;
         if (mode.needsQuestion() && focus == null) {
-            return """
+            rules = """
                     MODO: a questão escolhida para esta sessão já não está disponível.
                     Ajuda o aluno com o enunciado em geral.
                     """;
+        } else {
+            rules = switch (mode) {
+                case GENERAL -> "";
+                case EXPLAIN_QUESTION -> """
+                        MODO: EXPLICAR QUESTÃO. Concentra-te na questão em foco indicada no
+                        material. Explica o que ela pede e o raciocínio passo a passo. Se o
+                        material trouxer a resposta do aluno, mostra onde esse raciocínio pode
+                        ter falhado, sem dizer qual é a opção correcta.
+                        """;
+                case SIMILAR_EXERCISES -> """
+                        MODO: EXERCÍCIOS SEMELHANTES. Propõe exercícios parecidos com a questão
+                        em foco. Usa primeiro as questões semelhantes do catálogo listadas no
+                        material e diz de que enunciado vem cada uma. Só quando não houver
+                        nenhuma, ou o aluno pedir mais, podes criar exercícios novos sobre o
+                        mesmo tema, e tens de dizer que foram criados por ti. Não dês as
+                        soluções logo: deixa o aluno tentar primeiro.
+                        """;
+                case CONCEPT -> """
+                        MODO: DÚVIDAS DE CONCEITO. O aluno quer perceber um conceito. Explica-o
+                        com palavras simples e exemplos curtos, partindo do que aparece no
+                        enunciado (e na questão em foco, se houver). No fim, confirma com uma
+                        pergunta curta se ficou claro.
+                        """;
+            };
         }
-        return switch (mode) {
-            case GENERAL -> "";
-            case EXPLAIN_QUESTION -> """
-                    MODO: EXPLICAR QUESTÃO. Concentra-te na questão em foco indicada no
-                    material. Explica o que ela pede e o raciocínio passo a passo. Se o
-                    material trouxer a resposta do aluno, mostra onde esse raciocínio pode
-                    ter falhado, sem dizer qual é a opção correcta.
-                    """;
-            case SIMILAR_EXERCISES -> """
-                    MODO: EXERCÍCIOS SEMELHANTES. Propõe exercícios parecidos com a questão
-                    em foco. Usa primeiro as questões semelhantes do catálogo listadas no
-                    material e diz de que enunciado vem cada uma. Só quando não houver
-                    nenhuma, ou o aluno pedir mais, podes criar exercícios novos sobre o
-                    mesmo tema, e tens de dizer que foram criados por ti. Não dês as
-                    soluções logo: deixa o aluno tentar primeiro.
-                    """;
-            case CONCEPT -> """
-                    MODO: DÚVIDAS DE CONCEITO. O aluno quer perceber um conceito. Explica-o
-                    com palavras simples e exemplos curtos, partindo do que aparece no
-                    enunciado (e na questão em foco, se houver). No fim, confirma com uma
-                    pergunta curta se ficou claro.
-                    """;
-        };
+        return rules.isEmpty() ? rules : rules + TutorSystemPrompt.FORMAT_RULES;
     }
 
     /** The question in focus and, when given, the student's answer to it. */

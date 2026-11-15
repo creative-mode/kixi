@@ -33,7 +33,17 @@ import ao.creativemode.kixi.identity.service.JwtService;
         "ocr.service.url=http://127.0.0.1:1",
         "ocr.service.api-key=test"
 })
+@org.springframework.context.annotation.Import(EnrollmentExamRoomPostgresIntegrationTest.EventProbe.class)
 class EnrollmentExamRoomPostgresIntegrationTest {
+    @org.springframework.boot.test.context.TestConfiguration
+    static class EventProbe {
+        final java.util.Queue<Long> closed = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+        @org.springframework.context.event.EventListener
+        void onClosed(ao.creativemode.kixi.shared.event.ExamRoomClosed event) {
+            closed.add(event.roomId());
+        }
+    }
     private static final long ADMIN = 122101L;
     private static final long OWNER = 122102L;
     private static final long OTHER_TEACHER = 122103L;
@@ -56,6 +66,18 @@ class EnrollmentExamRoomPostgresIntegrationTest {
     private DatabaseClient database;
     @Autowired
     private JwtService jwtService;
+    @Autowired
+    private java.time.Clock clock;
+    @Autowired
+    private ao.creativemode.kixi.examrooms.service.ExamRoomExpirationJob roomExpirationJob;
+    @Autowired
+    private ao.creativemode.kixi.examrooms.service.ExamRoomService roomService;
+    @Autowired
+    private ao.creativemode.kixi.simulations.repository.SimulationRepository simulationRepository;
+    @Autowired
+    private ao.creativemode.kixi.simulations.service.SimulationDeadlineService simulationDeadlineService;
+    @Autowired
+    private EventProbe events;
 
     private WebTestClient client;
     private String adminToken;
@@ -86,6 +108,7 @@ class EnrollmentExamRoomPostgresIntegrationTest {
 
     @BeforeEach
     void fixture() {
+        events.closed.clear();
         client = WebTestClient.bindToApplicationContext(context).apply(springSecurity())
                 .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
         sql("DELETE FROM simulation_answers WHERE simulation_id IN (SELECT id FROM simulations WHERE account_id IN ("
@@ -131,6 +154,7 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         role(OTHER_TEACHER, "TEACHER");
         role(STUDENT, "STUDENT");
         role(OTHER_STUDENT, "STUDENT");
+        role(OTHER_STUDENT, "INTEGRATION");
         sql("INSERT INTO teachers (id, account_id, first_name, last_name) VALUES "
                 + "(" + OWNER + ", " + OWNER + ", 'Owner', 'Teacher'),"
                 + "(" + OTHER_TEACHER + ", " + OTHER_TEACHER + ", 'Other', 'Teacher')");
@@ -275,7 +299,7 @@ class EnrollmentExamRoomPostgresIntegrationTest {
     void ownerManagesRoomOtherTeacherAndStudentAreForbiddenAndAdminClosesIt() {
         // The student must be enrolled before the real invitation API can validate the class roll.
         sql("INSERT INTO enrollments (account_id, class_id, school_year_id) VALUES (" + STUDENT + ", " + CLASS + ", " + YEAR + ")");
-        LocalDateTime now = LocalDateTime.now().withNano(0);
+        LocalDateTime now = LocalDateTime.now(clock).withNano(0);
         AtomicLong roomId = new AtomicLong();
         bearer(ownerToken).post().uri("/api/v1/exam-rooms").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"statementId\":" + STATEMENT + ",\"classId\":" + CLASS
@@ -301,9 +325,83 @@ class EnrollmentExamRoomPostgresIntegrationTest {
         bearer(studentToken).post().uri("/api/v1/exam-rooms/" + room + "/join").exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.simulationId").value(value -> simulationId.set(((Number) value).longValue()));
 
-        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + room + "/close").exchange().expectStatus().isOk();
+        sql("UPDATE exam_rooms SET starts_at = '" + now.minusHours(2) + "+01:00', ends_at = '" + now.minusHours(1)
+                + "+01:00' WHERE id = " + room);
+        roomExpirationJob.sweep().block(Duration.ofSeconds(20));
+        assertThat(events.closed.stream().filter(id -> id.equals(room)).count()).isEqualTo(1);
+        bearer(adminToken).post().uri("/api/v1/exam-rooms/" + room + "/close").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.status").isEqualTo("CLOSED").jsonPath("$.phase").isEqualTo("ENDED");
+        bearer(jwtService.generateToken(OTHER_STUDENT, List.of("INTEGRATION"))).post()
+                .uri("/api/v1/exam-rooms/" + room + "/close").exchange().expectStatus().isOk();
+        assertThat(events.closed.stream().filter(id -> id.equals(room)).count()).isEqualTo(1);
         assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = " + room + " AND status = 'CLOSED'")).isEqualTo(1L);
         assertThat(one("SELECT count(*) FROM simulations WHERE id = " + simulationId + " AND status = 'FINISHED' AND deleted_at IS NULL")).isEqualTo(1L);
+        assertThat(roomService.answerKeyVisible(room).block(Duration.ofSeconds(5))).isTrue();
+    }
+
+    @Test
+    void expirationClosesPastRoomsButLeavesFutureRoomsOpen() {
+        LocalDateTime now = LocalDateTime.now(clock).withNano(0);
+        sql("INSERT INTO exam_rooms (id, statement_id, class_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES "
+                + "(592001, " + STATEMENT + ", " + CLASS + ", " + OWNER + ", '" + now.minusHours(2) + "+01:00', '" + now.minusHours(1) + "+01:00', 60, 'OPEN'),"
+                + "(592002, " + STATEMENT + ", " + CLASS + ", " + OWNER + ", '" + now.minusMinutes(1) + "+01:00', '" + now.plusHours(1) + "+01:00', 60, 'RUNNING')");
+        roomExpirationJob.sweep().block(Duration.ofSeconds(20));
+        assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = 592001 AND status = 'CLOSED'" )).isEqualTo(1L);
+        assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = 592002 AND status = 'RUNNING'" )).isEqualTo(1L);
+    }
+
+    @Test
+    void expiredRoomSubmitsThreeHundredSimulationsInOneTransaction() {
+        LocalDateTime now = LocalDateTime.now(clock).withNano(0);
+        sql("INSERT INTO exam_rooms (id, statement_id, class_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES "
+                + "(592006, " + STATEMENT + ", " + CLASS + ", " + OWNER + ", '" + now.minusHours(2)
+                + "+01:00', '" + now.minusHours(1) + "+01:00', 60, 'RUNNING')");
+        try {
+            sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active) "
+                    + "SELECT 592100000 + n, 'load592_' || n, 'load592_' || n || '@kixi.test', 'x', true, true FROM generate_series(1, 300) n");
+            sql("INSERT INTO simulations (account_id, statement_id, exam_room_id, started_at, status) "
+                    + "SELECT 592100000 + n, " + STATEMENT + ", 592006, CURRENT_TIMESTAMP - INTERVAL '2 hours', 'IN_PROGRESS' FROM generate_series(1, 300) n");
+            roomExpirationJob.sweep().block(Duration.ofMinutes(3));
+            assertThat(one("SELECT count(*) FROM simulations WHERE exam_room_id = 592006 AND status = 'FINISHED'")).isEqualTo(300);
+            assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = 592006 AND status = 'CLOSED'")).isEqualTo(1);
+            roomExpirationJob.sweep().block(Duration.ofSeconds(20));
+            assertThat(one("SELECT count(*) FROM simulation_xp_awards WHERE account_id BETWEEN 592100001 AND 592100300")).isEqualTo(300);
+        } finally {
+            sql("DELETE FROM simulations WHERE exam_room_id = 592006");
+            sql("DELETE FROM accounts WHERE id BETWEEN 592100001 AND 592100300");
+        }
+    }
+
+    @Test
+    void manualAndAutomaticCloseCanRaceWithoutConflict() {
+        LocalDateTime now = LocalDateTime.now(clock).withNano(0);
+        sql("INSERT INTO exam_rooms (id, statement_id, class_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES "
+                + "(592003, " + STATEMENT + ", " + CLASS + ", " + OWNER + ", '" + now.minusHours(2)
+                + "+01:00', '" + now.minusHours(1) + "+01:00', 60, 'RUNNING')");
+        reactor.core.publisher.Mono.when(
+                roomService.closeIfExpired(592003L, now).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()),
+                roomService.transition(592003L, OWNER, false, ao.creativemode.kixi.examrooms.model.ExamRoomStatus.CLOSED)
+                        .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
+                .block(Duration.ofSeconds(20));
+        assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = 592003 AND status = 'CLOSED'" )).isEqualTo(1L);
+    }
+
+    @Test
+    void aFutureInstantIsNotClosedWhenDatabaseRunsInUtc() {
+        sql("INSERT INTO exam_rooms (id, statement_id, class_id, teacher_account_id, starts_at, ends_at, duration_minutes, status) VALUES "
+                + "(592004, " + STATEMENT + ", " + CLASS + ", " + OWNER
+                + ", CURRENT_TIMESTAMP - INTERVAL '1 hour', CURRENT_TIMESTAMP + INTERVAL '10 minutes', 60, 'RUNNING')");
+        roomExpirationJob.sweep().block(Duration.ofSeconds(20));
+        assertThat(one("SELECT count(*) FROM exam_rooms WHERE id = 592004 AND status = 'RUNNING'" )).isEqualTo(1L);
+    }
+
+    @Test
+    void existingSimulationStartedInUtcKeepsItsRemainingTime() {
+        sql("INSERT INTO simulations (id, account_id, statement_id, started_at, status) VALUES "
+                + "(592005, " + STUDENT + ", " + STATEMENT + ", CURRENT_TIMESTAMP - INTERVAL '10 minutes', 'IN_PROGRESS')");
+        var simulation = simulationRepository.findById(592005L).block(Duration.ofSeconds(5));
+        assertThat(simulationDeadlineService.acceptsAnswers(simulation, LocalDateTime.now(clock))
+                .block(Duration.ofSeconds(5))).isTrue();
     }
 
     private EnrollmentCodeFixture issueEnrollmentCode(long classId, int maxUses) {

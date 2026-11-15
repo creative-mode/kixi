@@ -158,9 +158,11 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         sql("DELETE FROM courses WHERE id = 525001");
         sql("DELETE FROM subjects WHERE id = 525001");
         sql("DELETE FROM school_years WHERE id = 525001");
+        // kixi#602: o coordenador da escola, quando o teste o insere; a FK para accounts exige apagar antes da conta.
+        sql("DELETE FROM institution_coordinators WHERE institution_id = 525001");
         sql("DELETE FROM institutions WHERE id IN (525001, 525002)");
         sql("DELETE FROM account_roles WHERE account_id IN (525001, 525002, 525003)");
-        sql("DELETE FROM accounts WHERE id IN (525001, 525002, 525003)");
+        sql("DELETE FROM accounts WHERE id IN (525001, 525002, 525003, 525099)");
     }
 
     @Test
@@ -188,6 +190,8 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         // kixi#512: `processo` vai para a aluna que o tem na escola da turma, só para ela, e o de outra escola não vaza
         assertThat(CALLS.get(0)).contains("\"processo\":\"P-2026/0042\"").doesNotContain("OUTRA-ESCOLA-999");
         assertThat(CALLS.get(0).split("\"processo\"", -1).length - 1).as("o Bruno segue sem a chave").isEqualTo(1);
+        // kixi#602: a escola 525001 não tem coordenador nesta fixture; a chave fica de fora, não vai vazia nem nula.
+        assertThat(CALLS.get(0)).doesNotContain("\"coordenador\"");
         assertThat(database.sql("SELECT pauta_ref FROM term_plans WHERE id = 525001").map((r, m) -> r.get(0, String.class)).one().block(Duration.ofSeconds(10)))
                 .isEqualTo("PT-TESTE");
 
@@ -208,6 +212,23 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         opener.closeFinishedProvas();
         assertThat(CALLS).hasSize(1);
         assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525002/encerramento");
+    }
+
+    /** kixi#602: com coordenador na escola, o pedido ao motor leva a chave `coordenador`, com o sourcedId certo. */
+    @Test
+    void theSchoolsCoordinatorGoesInThePedidoWithTheirAccountId() {
+        // Sem `users`: o nome cai para o username, o mesmo caminho que um aluno sem nome já cobre noutro teste.
+        sql("INSERT INTO accounts (id, username, email, password_hash, email_verified) VALUES "
+                + "(525099, 'it-525-coordenador', 'it-525-coordenador@example.com', 'x', true)");
+        sql("INSERT INTO institution_coordinators (institution_id, account_id) VALUES (525001, 525099)");
+        sql("UPDATE exam_rooms SET status = 'OPEN' WHERE id = 525002");
+        sql("UPDATE term_plans SET scheduling_concluded_at = now() WHERE id = 525001");
+
+        opener.openReadyPlans();
+
+        assertThat(CALLS).hasSize(1);
+        assertThat(CALLS.get(0)).contains("\"coordenador\":{")
+                .contains("\"sourcedId\":\"525099\"").contains("\"nome\":\"it-525-coordenador\"");
     }
 
     @Test

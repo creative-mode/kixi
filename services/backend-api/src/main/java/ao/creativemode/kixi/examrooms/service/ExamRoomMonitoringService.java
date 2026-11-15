@@ -10,7 +10,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import ao.creativemode.kixi.examrooms.dto.ExamRoomGradeResponse;
 import ao.creativemode.kixi.examrooms.dto.ExamRoomLiveResponse;
@@ -20,10 +19,6 @@ import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomParticipantRepository;
 import ao.creativemode.kixi.examrooms.repository.ExamRoomRepository;
 import ao.creativemode.kixi.exams.repository.QuestionRepository;
-import ao.creativemode.kixi.identity.model.Account;
-import ao.creativemode.kixi.identity.model.User;
-import ao.creativemode.kixi.identity.repository.AccountRepository;
-import ao.creativemode.kixi.identity.repository.UserRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.model.Simulation;
 import ao.creativemode.kixi.simulations.model.SimulationAnswer;
@@ -40,29 +35,20 @@ public class ExamRoomMonitoringService {
     private final SimulationRepository simulations;
     private final SimulationAnswerRepository answers;
     private final QuestionRepository questions;
-    private final AccountRepository accounts;
-    private final UserRepository users;
+    private final ExamRoomParticipantNames names;
     private final Clock clock;
     private final AtomicInteger activeStreams = new AtomicInteger();
 
     public ExamRoomMonitoringService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
             SimulationRepository simulations, SimulationAnswerRepository answers, QuestionRepository questions,
-            Clock clock) {
-        this(rooms, participants, simulations, answers, questions, clock, null, null);
-    }
-
-    @Autowired
-    public ExamRoomMonitoringService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
-            SimulationRepository simulations, SimulationAnswerRepository answers, QuestionRepository questions,
-            Clock clock, AccountRepository accounts, UserRepository users) {
+            Clock clock, ExamRoomParticipantNames names) {
         this.rooms = rooms;
         this.participants = participants;
         this.simulations = simulations;
         this.answers = answers;
         this.questions = questions;
         this.clock = clock;
-        this.accounts = accounts;
-        this.users = users;
+        this.names = names;
     }
 
     public Mono<ExamRoomLiveResponse> live(Long roomId, Long caller, boolean admin) {
@@ -78,7 +64,7 @@ public class ExamRoomMonitoringService {
     public Mono<List<ExamRoomGradeResponse>> grades(Long roomId, Long caller, boolean admin) {
         return managedRoom(roomId, caller, admin)
                 .then(participants.findByExamRoomId(roomId).collectList())
-                .flatMap(rows -> Mono.zip(displayNames(rows), gradingData(rows))
+                .flatMap(rows -> Mono.zip(names.resolve(rows), gradingData(rows))
                         .map(tuple -> rows.stream()
                                 .map(participant -> grade(participant, tuple.getT1(), tuple.getT2()))
                                 .toList()));
@@ -120,7 +106,7 @@ public class ExamRoomMonitoringService {
         return Mono.zip(participants.findByExamRoomId(room.getId()).collectList(),
                 questions.findAllByStatementIdAndDeletedAtIsNull(room.getStatementId()).filter(ao.creativemode.kixi.exams.model.Question::isAnswerable).count(),
                 simulations.findByExamRoomIdAndDeletedAtIsNull(room.getId()).collectList())
-                .flatMap(tuple -> displayNames(tuple.getT1()).flatMap(names -> {
+                .flatMap(tuple -> names.resolve(tuple.getT1()).flatMap(names -> {
                     List<ExamRoomParticipant> roomParticipants = tuple.getT1();
                     List<Simulation> roomSimulations = tuple.getT3();
                     if (roomSimulations.isEmpty()) {
@@ -219,32 +205,6 @@ public class ExamRoomMonitoringService {
                 simulation.getId(),
                 simulation.getStatus().name(), simulation.getFinalScore(), correct,
                 totalQuestions, pending, simulation.getFinishedAt());
-    }
-
-    private Mono<Map<Long, String>> displayNames(List<ExamRoomParticipant> rows) {
-        List<Long> ids = rows.stream().map(ExamRoomParticipant::getAccountId).distinct().toList();
-        if (ids.isEmpty() || accounts == null || users == null) {
-            return Mono.just(rows.stream().collect(Collectors.toMap(ExamRoomParticipant::getAccountId,
-                    participant -> String.valueOf(participant.getAccountId()), (left, right) -> left)));
-        }
-        return Mono.zip(accounts.findAllByIdInAndDeletedAtIsNull(ids).collectList(),
-                users.findByAccountIdInAndDeletedAtIsNull(ids).collectList())
-                .map(tuple -> {
-                    Map<Long, String> usernames = tuple.getT1().stream().collect(Collectors.toMap(Account::getId,
-                            Account::getUsername));
-                    Map<Long, User> profiles = tuple.getT2().stream().collect(Collectors.toMap(User::getAccountId,
-                            Function.identity(), (left, right) -> left));
-                    return ids.stream().collect(Collectors.toMap(id -> id, id -> {
-                        User profile = profiles.get(id);
-                        if (profile != null) {
-                            String name = java.util.stream.Stream.of(profile.getFirstName(), profile.getLastName())
-                                    .filter(value -> value != null && !value.isBlank())
-                                    .collect(Collectors.joining(" "));
-                            if (!name.isBlank()) return name;
-                        }
-                        return usernames.getOrDefault(id, String.valueOf(id));
-                    }));
-                });
     }
 
     private Mono<ExamRoom> managedRoom(Long roomId, Long caller, boolean admin) {

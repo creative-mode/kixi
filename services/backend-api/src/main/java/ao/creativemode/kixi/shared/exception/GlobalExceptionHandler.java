@@ -252,7 +252,7 @@ public class GlobalExceptionHandler {
         ServerWebExchange exchange
     ) {
         log.error("Unhandled exception: type={}, requestId={}",
-            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange));
+            ex.getClass().getSimpleName(), RequestIdWebFilter.requestId(exchange), ex);
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
             500,

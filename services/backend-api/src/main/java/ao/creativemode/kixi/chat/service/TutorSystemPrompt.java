@@ -19,7 +19,50 @@ package ao.creativemode.kixi.chat.service;
  */
 public final class TutorSystemPrompt {
 
-    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph was added later (see the tests, which compare against this constant, not its text). */
+    /**
+     * The answer format, stated once and reused: the base prompt carries it and the
+     * mode instructions repeat it (issue #594). Asking only for "$...$" and "Markdown
+     * simples" was not enough — the model still wrote {@code \( \)} and started list
+     * items with {@code *}, and the screen showed raw LaTeX and stray asterisks.
+     *
+     * <p>About the escapes: a text block still interprets them, so {@code \\(} below
+     * reaches the model as {@code \(} — the single backslash of the form we forbid.
+     * The tests pin the runtime text, not this literal, so a real double backslash
+     * fails there.</p>
+     */
+    static final String FORMAT_RULES = """
+            FORMATO DA RESPOSTA:
+            - Fórmulas: sempre em LaTeX, entre $...$ no meio da frase e entre $$...$$
+              quando ficam sozinhas numa linha. Nunca uses \\( \\) nem \\[ \\], e nunca
+              ponhas fórmulas em blocos de código.
+            - Listas: cada item começa por "- ", um item por linha. Nunca uses "*",
+              "•" nem vários itens na mesma linha.
+            - Asteriscos só existem aos pares, em **negrito**; não uses "*" como marcador.
+            """;
+
+    /**
+     * Two sample answers in the agreed shape, one from Physics and one from Maths
+     * (issue #594). The rules say what to do; the samples show it. They stay out of
+     * {@link #FORMAT_RULES} so the mode instructions do not repeat them a second time.
+     */
+    static final String FORMAT_EXAMPLES = """
+            EXEMPLOS DE RESPOSTA NO FORMATO ACORDADO:
+
+            Física — «Um carro parte do repouso e acelera a $2$ m/s² durante $3$ s. Que
+            distância percorre?»
+            A distância percorrida é $s = \\frac{1}{2} a t^2$. Com $a = 2$ m/s² e $t = 3$ s:
+            $$s = \\frac{1}{2} \\times 2 \\times 3^2 = 9 \\text{ m}$$
+            - Escreve a fórmula da distância no movimento uniformemente acelerado.
+            - Substitui os valores e calcula o resultado.
+
+            Matemática — «Resolve $x^2 - 5x + 6 = 0$.»
+            Os coeficientes são $a = 1$, $b = -5$ e $c = 6$. O discriminante é:
+            $$\\Delta = b^2 - 4ac = 25 - 24 = 1$$
+            - Calcula o discriminante.
+            - Aplica a fórmula resolvente e obtém $x = 2$ ou $x = 3$.
+            """;
+
+    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph came with issue #431 and these rules with #594 (the tests compare against this constant, not its text). */
     static final String BASE = """
             És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
             Responde sempre em português, usando APENAS o enunciado e as questões
@@ -34,8 +77,8 @@ public final class TutorSystemPrompt {
             **negrito** só para os termos-chave, e uma lista só quando a resposta
             for mesmo uma sequência de passos ou de itens que não fazem sentido em
             prosa. Não fragmentes a resposta em itens soltos, não uses títulos nem
-            tabelas, e escreve as fórmulas em LaTeX entre $...$.
-            """;
+            tabelas.
+            """ + FORMAT_RULES + FORMAT_EXAMPLES;
 
     private TutorSystemPrompt() { }
 

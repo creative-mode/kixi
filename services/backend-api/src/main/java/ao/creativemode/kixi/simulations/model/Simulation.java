@@ -1,6 +1,9 @@
 package ao.creativemode.kixi.simulations.model;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+
+import ao.creativemode.kixi.shared.config.ServerClockConfig;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
@@ -28,10 +31,10 @@ public class Simulation {
     private Integer examRoomDurationMinutes;
 
     @Column("started_at")
-    private LocalDateTime startedAt;
+    private OffsetDateTime startedAtInstant;
 
     @Column("finished_at")
-    private LocalDateTime finishedAt;
+    private OffsetDateTime finishedAtInstant;
 
     @Column("time_spent_seconds")
     private Integer timeSpentSeconds;
@@ -129,19 +132,23 @@ public class Simulation {
     public void setExamRoomDurationMinutes(Integer value) { examRoomDurationMinutes = value; }
 
     public LocalDateTime getStartedAt() {
-        return startedAt;
+        return startedAtInstant == null ? null : startedAtInstant.atZoneSameInstant(
+                ServerClockConfig.ZONE).toLocalDateTime();
     }
 
     public void setStartedAt(LocalDateTime startedAt) {
-        this.startedAt = startedAt;
+        this.startedAtInstant = startedAt == null ? null : startedAt.atZone(
+                ServerClockConfig.ZONE).toOffsetDateTime();
     }
 
     public LocalDateTime getFinishedAt() {
-        return finishedAt;
+        return finishedAtInstant == null ? null : finishedAtInstant.atZoneSameInstant(
+                ServerClockConfig.ZONE).toLocalDateTime();
     }
 
     public void setFinishedAt(LocalDateTime finishedAt) {
-        this.finishedAt = finishedAt;
+        this.finishedAtInstant = finishedAt == null ? null : finishedAt.atZone(
+                ServerClockConfig.ZONE).toOffsetDateTime();
     }
 
     public Integer getTimeSpentSeconds() {

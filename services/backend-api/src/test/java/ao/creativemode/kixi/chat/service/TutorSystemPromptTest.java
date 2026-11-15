@@ -24,6 +24,66 @@ class TutorSystemPromptTest {
         }
     }
 
+    /**
+     * Issue #594: the format is pinned where the screen can see it. The model used to
+     * answer with {@code \( \)} and lists marked with {@code *}, and the page showed
+     * both raw. BASE carries the rule; the mode instructions repeat it.
+     */
+    @Test
+    void theAnswerFormatIsPinned() {
+        assertThat(TutorSystemPrompt.FORMAT_RULES)
+                .contains("entre $...$")
+                .contains("$$...$$")
+                .contains("Nunca uses \\( \\)")
+                .contains("\\[ \\]")
+                .contains("\"- \"")
+                .contains("um item por linha")
+                .contains("não uses \"*\" como marcador");
+        assertThat(TutorSystemPrompt.BASE)
+                .contains(TutorSystemPrompt.FORMAT_RULES)
+                .endsWith(TutorSystemPrompt.FORMAT_EXAMPLES);
+    }
+
+    /**
+     * The review of #594 read the {@code \\(} in the literal as two backslashes reaching
+     * the model. It is one: a text block interprets the escape. These assertions pin the
+     * runtime text, so a real double backslash would fail here.
+     */
+    @Test
+    void theForbiddenDelimitersReachTheModelWithOneBackslash() {
+        assertThat(TutorSystemPrompt.FORMAT_RULES)
+                .contains("Nunca uses \\(")
+                .contains("\\)")
+                .contains("\\[")
+                .contains("\\]")
+                .doesNotContain("\\\\(")
+                .doesNotContain("\\\\)")
+                .doesNotContain("\\\\[")
+                .doesNotContain("\\\\]");
+    }
+
+    /**
+     * Issue #594's acceptance criterion is stated over sample answers, so the prompt
+     * carries one Physics and one Maths answer in the agreed shape. These assertions
+     * check the samples as text; the model itself is only exercised by the manual
+     * checklist on {@code qua}, next to the frontend issue #754.
+     */
+    @Test
+    void thePromptShowsPhysicsAndMathsAnswersInTheAgreedShape() {
+        assertThat(TutorSystemPrompt.FORMAT_EXAMPLES)
+                .contains("Física")
+                .contains("Matemática")
+                .contains("$s = ")
+                .contains("$$s = ")
+                .contains("$$\\Delta = ")
+                .contains("\n- Escreve a fórmula")
+                .contains("\n- Calcula o discriminante")
+                .doesNotContain("* ")
+                .doesNotContain("\\(")
+                .doesNotContain("\\[");
+        assertThat(TutorSystemPrompt.BASE).endsWith(TutorSystemPrompt.FORMAT_EXAMPLES);
+    }
+
     /** The acceptance criterion: two teachers, two prompts. */
     @Test
     void twoTeachersWithDifferentStylesProduceDifferentPrompts() {

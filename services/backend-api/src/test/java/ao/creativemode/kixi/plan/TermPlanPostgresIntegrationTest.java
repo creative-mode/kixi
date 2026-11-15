@@ -272,7 +272,10 @@ class TermPlanPostgresIntegrationTest {
                 .jsonPath("$[?(@.id==523001)].className").isEqualTo("A1")
                 .jsonPath("$[?(@.id==523001)].participants").isEqualTo(1)
                 .jsonPath("$[?(@.id==523001)].finished").isEqualTo(1)
-                .jsonPath("$[?(@.id==523001)].status").isEqualTo("RUNNING");
+                .jsonPath("$[?(@.id==523001)].status").isEqualTo("RUNNING")
+                .jsonPath("$[?(@.id==523001)].startsAt").value(value ->
+                        assertThat(value.toString()).matches(".*(Z|[+-]\\d{2}:\\d{2}).*"))
+                .jsonPath("$[?(@.id==523001)].phase").isEqualTo("ONGOING");
         bearer(coordinator).get().uri("/api/v1/coordination/exam-rooms/523001/grades").exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$[0].finalScore").isEqualTo(4.5).jsonPath("$[0].status").isEqualTo("FINISHED");
         // uma sala que não existe dá o mesmo que a de outra instituição: 403

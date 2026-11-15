@@ -26,4 +26,12 @@ public class ModerationReport {
     private String note;
     @Column("created_at")
     private LocalDateTime createdAt;
+    /** OPEN até o administrador decidir; depois IGNORED, HIDDEN ou SUSPENDED (kixi#591). */
+    private String status = "OPEN";
+    @Column("decided_at")
+    private LocalDateTime decidedAt;
+    @Column("decided_by_account_id")
+    private Long decidedByAccountId;
+    @Column("decision_note")
+    private String decisionNote;
 }

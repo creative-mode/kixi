@@ -11,7 +11,9 @@ import ao.creativemode.kixi.simulations.dto.simulationresult.SimulationResultRes
 import ao.creativemode.kixi.simulations.service.SimulationResultService;
 import ao.creativemode.kixi.simulations.service.SimulationSubmissionService;
 import ao.creativemode.kixi.simulations.service.QuestionFeedbackService;
+import ao.creativemode.kixi.simulations.service.SimulationAuditService;
 import ao.creativemode.kixi.simulations.service.SimulationService;
+import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import reactor.core.publisher.Flux;
@@ -123,16 +125,17 @@ public class SimulationController {
                 .map(ResponseEntity::ok);
     }
 
+    /**
+     * Cria uma simulação. Sempre para o dono (kixi#596): ninguém, nem ADMIN nem professor, abre a simulação de um aluno em
+     * nome dele; a conta INTEGRATION do motor SchoolOps (no IntegrationScope) abre a do aluno que indica, e fica no trilho.
+     */
     @PostMapping
     public Mono<ResponseEntity<SimulationResponse>> create(@Valid @RequestBody SimulationRequest dto) {
         return currentAccountService.requiredAccountId()
-                .zipWith(currentAccountService.hasAnyRole("ADMIN"))
-                .zipWith(currentAccountService.hasAnyRole("TEACHER"))
-                .flatMap(tuple -> tuple.getT1().getT2()
-                        ? service.create(dto, tuple.getT1().getT1(), true)
-                        : tuple.getT2()
-                            ? service.create(dto, tuple.getT1().getT1(), false)
-                            : service.createForAccount(dto, tuple.getT1().getT1()))
+                .zipWith(role("INTEGRATION"))
+                .flatMap(tuple -> tuple.getT2()
+                        ? service.createForIntegration(dto, tuple.getT1())
+                        : service.createForAccount(dto, tuple.getT1()))
                 .map(response -> ResponseEntity.status(HttpStatus.CREATED).body(response));
     }
 
@@ -140,38 +143,58 @@ public class SimulationController {
     public Mono<ResponseEntity<SimulationResponse>> update(
             @PathVariable Long id,
             @Valid @RequestBody SimulationRequest dto) {
-        return authorizedContext().flatMap(context -> authorized(id, context)
-                .then(context.admin() || context.teacher() ? service.update(id, dto)
-                        : service.updateForAccount(id, dto, context.accountId())))
+        return authorizedContext().flatMap(context -> context.integration()
+                ? service.updateForIntegration(id, dto, context.accountId())
+                : authorized(id, context)
+                        .then(Mono.defer(() -> service.updateForAccount(id, dto, context.accountId()))))
                 .map(ResponseEntity::ok);
     }
 
+    /**
+     * Apagar, restaurar e purgar uma simulação mudam o que o recálculo das notas vê (kixi#596): só o administrador, com
+     * motivo, e o acto fica no trilho. O purge é em duas etapas: já estar na lixeira e repetir o id em {@code confirm}.
+     */
     @DeleteMapping("/{id}")
-    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id) {
-        return authorizedContext().flatMap(context -> authorized(id, context)
-                .then(service.softDelete(id)))
+    public Mono<ResponseEntity<Void>> softDelete(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        return audited(id, false, reason, (actor, why) -> service.softDelete(id, actor, why))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @PutMapping("/{id}/restore")
-    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id) {
-        return authorizedContext().flatMap(context -> authorized(id, context, true)
-                .then(service.restore(id)))
+    public Mono<ResponseEntity<Void>> restore(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        return audited(id, true, reason, (actor, why) -> service.restore(id, actor, why))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
     @DeleteMapping("/{id}/permanent")
-    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id) {
-        return authorizedContext().flatMap(context -> service.authorize(id, context.accountId(), context.admin(), context.teacher(), true)
-                .then(service.hardDelete(id)))
+    public Mono<ResponseEntity<Void>> hardDelete(@PathVariable Long id, @RequestParam(required = false) String reason,
+            @RequestParam(required = false) String confirm) {
+        SimulationAuditService.requirePurgeConfirmation(id, confirm);
+        return audited(id, true, reason, (actor, why) -> service.hardDelete(id, actor, why))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
+    }
+
+    private Mono<Void> audited(Long id, boolean includeDeleted, String reason,
+            java.util.function.BiFunction<Long, String, Mono<Void>> mutationAndAudit) {
+        return Mono.defer(() -> {
+            String why = SimulationAuditService.requireReason(reason);
+            return authorizedContext().flatMap(context -> {
+                if (!context.admin()) {
+                    return Mono.<Void>error(ApiException.forbidden("Only ADMIN can manage simulations"));
+                }
+                return service.authorize(id, context.accountId(), true, false, includeDeleted)
+                        .then(Mono.defer(() -> mutationAndAudit.apply(context.accountId(), why)));
+            });
+        });
     }
 
     private Mono<Context> authorizedContext() {
         return currentAccountService.requiredAccountId()
                 .zipWith(role("ADMIN"))
                 .zipWith(role("TEACHER"))
-                .map(tuple -> new Context(tuple.getT1().getT1(), tuple.getT1().getT2(), tuple.getT2()));
+                .zipWith(role("INTEGRATION"))
+                .map(tuple -> new Context(tuple.getT1().getT1().getT1(), tuple.getT1().getT1().getT2(),
+                        tuple.getT1().getT2(), tuple.getT2()));
     }
 
     private Mono<Boolean> role(String name) {
@@ -188,5 +211,5 @@ public class SimulationController {
         return (result == null ? Mono.empty() : result).then();
     }
 
-    private record Context(Long accountId, boolean admin, boolean teacher) {}
+    private record Context(Long accountId, boolean admin, boolean teacher, boolean integration) {}
 }
