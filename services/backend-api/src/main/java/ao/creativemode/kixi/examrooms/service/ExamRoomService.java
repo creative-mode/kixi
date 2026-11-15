@@ -174,8 +174,6 @@ public class ExamRoomService implements ExamRoomAccess {
 
     /** Every room, optionally narrowed to one school: the integration account owns none, so it reads them all (#600). */
     public Flux<ExamRoomResponse> findAllRooms(Long institutionId) {
-        // Tipado explicitamente: javac falha a inferir o tipo do método-referência quando o recetor é
-        // o próprio ternário (erro "incompatible types... unbound lookup"), sem isto estar errado.
         Flux<ExamRoom> all = institutionId == null ? rooms.findAllByOrderByCreatedAtDesc() : rooms.findAllByInstitutionId(institutionId);
         return all.map(ExamRoomService::toResponse);
     }
@@ -185,8 +183,13 @@ public class ExamRoomService implements ExamRoomAccess {
         if (institutionId == null) {
             return findMine(teacherAccountId);
         }
-        return rooms.findByTeacherAccountIdAndInstitutionId(teacherAccountId, institutionId)
-                .map(ExamRoomService::toResponse);
+        // O CI (javac, mesmo JDK, mesmo ficheiro) passou a rejeitar aqui um ".map(ExamRoomService::toResponse)"
+        // encadeado directo (erro "incompatible types... unbound lookup") sem nada ter mudado neste ficheiro
+        // entre uma corrida verde e as seguintes a vermelho; o nome `findMine` está sobrecarregado (overload
+        // de um argumento ao lado) e é esse o único lado deste ficheiro onde o padrão muda de comportamento.
+        // Tipar a variável evita a inferência da referência a método no mesmo passo da resolução do overload.
+        Flux<ExamRoom> mine = rooms.findByTeacherAccountIdAndInstitutionId(teacherAccountId, institutionId);
+        return mine.map(ExamRoomService::toResponse);
     }
 
     /**
