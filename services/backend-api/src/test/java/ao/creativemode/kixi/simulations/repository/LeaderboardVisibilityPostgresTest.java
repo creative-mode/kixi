@@ -39,8 +39,8 @@ import org.springframework.test.context.DynamicPropertySource;
 class LeaderboardVisibilityPostgresTest {
 
     private static final Duration WAIT = Duration.ofSeconds(20);
-    private static final long FIRST = 960001L;
-    private static final long SECOND = 960002L;
+    private static final long FIRST = 911001L;
+    private static final long SECOND = 911002L;
 
     @Autowired LeaderboardRepository repository;
     @Autowired DatabaseClient database;
@@ -82,8 +82,19 @@ class LeaderboardVisibilityPostgresTest {
     }
 
     private void clean() {
-        sql("DELETE FROM leaderboard_visibility WHERE account_id BETWEEN 960000 AND 969999");
-        sql("DELETE FROM accounts WHERE id BETWEEN 960000 AND 969999");
+        // A block of its own, away from the 940000/950000/960000 ranges the other
+        // Postgres suites use. Sharing one put a simulation from the room suite in the
+        // way of this delete: its foreign key points at an account this test had not
+        // written, and the cleanup failed before any assertion ran.
+        sql("DELETE FROM leaderboard_visibility WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM simulations WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM users WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM enrollments WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM account_roles WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM friendships WHERE account_low BETWEEN 911000 AND 911999"
+                + " OR account_high BETWEEN 911000 AND 911999");
+        sql("DELETE FROM user_stats WHERE account_id BETWEEN 911000 AND 911999");
+        sql("DELETE FROM accounts WHERE id BETWEEN 911000 AND 911999");
     }
 
     @Test
