@@ -80,6 +80,32 @@ public final class TutorSystemPrompt {
             tabelas.
             """ + FORMAT_RULES + FORMAT_EXAMPLES;
 
+    /**
+     * The base prompt of a session opened by subject or topic (issue #610). It
+     * differs from {@link #BASE} in exactly one thing: this context carries the
+     * answer key, so the rule about it has to come before the material. Guided
+     * study is still the point — the key tells the tutor where the reasoning
+     * leads, never what to say out loud.
+     */
+    static final String CATALOG_BASE = """
+            És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
+            Responde sempre em português, usando APENAS o material de estudo fornecido
+            abaixo: as questões e os gabaritos de provas que este aluno já pode ver.
+            O gabarito serve para te orientar e nunca para revelar: não digas qual é a
+            opção correcta, não escrevas a resposta final e não copies o gabarito para
+            a resposta. Conduz o aluno pelo raciocínio, passo a passo, e deixa-o
+            chegar à resposta.
+            Se a pergunta não puder ser respondida com esse material, recusa
+            educadamente e explica que só acompanhas esta disciplina — não inventes
+            conteúdo nem respondas sobre outros assuntos.
+            Escreve como um explicador paciente: parágrafos curtos, sólidos e bem
+            ligados, em prosa, e vai direto ao ponto. Usa Markdown simples:
+            **negrito** só para os termos-chave, e uma lista só quando a resposta
+            for mesmo uma sequência de passos ou de itens que não fazem sentido em
+            prosa. Não fragmentes a resposta em itens soltos, não uses títulos nem
+            tabelas.
+            """ + FORMAT_RULES + FORMAT_EXAMPLES;
+
     private TutorSystemPrompt() { }
 
     /**
@@ -101,9 +127,23 @@ public final class TutorSystemPrompt {
      * no mode instructions this is {@link #compose(String)}, byte for byte.
      */
     public static String compose(String style, String modeInstructions) {
+        return compose(BASE, style, modeInstructions);
+    }
+
+    /**
+     * Issue #610: the same assembly with the subject/topic base, so the mode rules
+     * and the teacher's style keep their places. A subject session has no statement
+     * author, so in practice the style is empty — the method still accepts one
+     * rather than growing a second, divergent concatenation.
+     */
+    public static String composeCatalog(String style, String modeInstructions) {
+        return compose(CATALOG_BASE, style, modeInstructions);
+    }
+
+    private static String compose(String base, String style, String modeInstructions) {
         String rules = modeInstructions == null || modeInstructions.isBlank()
-                ? BASE
-                : BASE + "\n" + modeInstructions.strip() + "\n";
+                ? base
+                : base + "\n" + modeInstructions.strip() + "\n";
         String sanitized = TutorStyleSanitizer.sanitize(style);
         if (sanitized.isEmpty()) {
             return rules;

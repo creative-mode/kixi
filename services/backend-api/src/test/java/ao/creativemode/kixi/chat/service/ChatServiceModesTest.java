@@ -76,7 +76,7 @@ class ChatServiceModesTest {
             return Mono.just(saved);
         });
         service = new ChatService(sessionRepository, messageRepository, statementService, rateLimiter,
-                groqClient, tutorStyles, similarQuestions);
+                groqClient, tutorStyles, similarQuestions, mock(TutorSubjectCatalog.class), mock(TutorExamGuard.class));
     }
 
     // === opening a session ================================================
@@ -345,7 +345,7 @@ class ChatServiceModesTest {
     }
 
     private static ChatSessionRequest request(TutorMode mode, Long questionId, Long optionId, String answer) {
-        return new ChatSessionRequest(7L, mode, questionId, optionId, answer);
+        return new ChatSessionRequest(7L, null, null, mode, questionId, optionId, answer);
     }
 
     private static ChatSession session(TutorMode mode, Long questionId, Long optionId, String answer) {
