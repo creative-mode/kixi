@@ -123,6 +123,10 @@ public class Post {
     @Column("edited_at")
     private LocalDateTime editedAt;
 
+    /** True por omissão: um cartão guarda sempre a nota. false: a nota e os acertos ficam ocultos a quem não é o autor (kixi#612). */
+    @Column("show_score")
+    private Boolean showScore;
+
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 
