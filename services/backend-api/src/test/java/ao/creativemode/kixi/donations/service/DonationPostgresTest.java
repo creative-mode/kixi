@@ -48,6 +48,9 @@ class DonationPostgresTest {
     private static final String MARK = "Escola de teste 980000";
     private static final long STATEMENT = 980001L;
     private static final long REVIEWER = 980002L;
+    private static final long SCHOOL_A = 980003L;
+    private static final long SCHOOL_B = 980004L;
+    private static final long SCHOOL_UNVERIFIED = 980005L;
     private static final Path STORAGE_ROOT = tempDir();
 
     @Autowired DonationService service;
@@ -91,6 +94,11 @@ class DonationPostgresTest {
     @BeforeEach
     void clean() {
         sql("DELETE FROM statement_donations WHERE institution_name = '" + MARK + "'");
+        sql("DELETE FROM institutions WHERE id IN (" + SCHOOL_A + "," + SCHOOL_B + "," + SCHOOL_UNVERIFIED + ")");
+        sql("INSERT INTO institutions (id, code, name, short_name, verified, created_at, updated_at) VALUES "
+                + "(" + SCHOOL_A + ", 'T980A', 'Torre A 980', 'T980A', true, now(), now()), "
+                + "(" + SCHOOL_B + ", 'T980B', 'Torre B 980', 'T980B', true, now(), now()), "
+                + "(" + SCHOOL_UNVERIFIED + ", 'T980U', 'Torre U 980', 'T980U', false, now(), now())");
         sql("DELETE FROM accounts WHERE id = " + REVIEWER);
         sql("INSERT INTO accounts (id, username, email, password_hash, email_verified, active, created_at, updated_at) "
                 + "VALUES (" + REVIEWER + ", 'donation-reviewer-980002', 'donation-reviewer-980002@example.com', "
@@ -106,13 +114,47 @@ class DonationPostgresTest {
             list.add(new DonationSubmission.Upload("p" + (i++) + ".png", bytes));
         }
         return new DonationSubmission("Ana", "ana@example.com", MARK, "Matemática", "12ª Classe", "2024/2025",
-                "Exame", "nota", true, null, System.currentTimeMillis() - 60_000, list);
+                "Exame", "nota", true, null, System.currentTimeMillis() - 60_000, list, null);
     }
 
     private DonationDetail donate(byte[]... uploads) {
         String reference = service.submit(submission(uploads), "a".repeat(64)).block(WAIT).reference();
         Long id = donations.findAll().filter(d -> d.getReference().equals(reference)).blockFirst(WAIT).getId();
         return service.get(id).block(WAIT);
+    }
+
+    /** O filtro sai mesmo ao ir à base de dados: cada doação para uma escola verificada e uma de «Outra escola». */
+    @Test
+    void theAdminListFiltersByTheChosenInstitution() {
+        DonationSubmission linked = new DonationSubmission("Ana", "ana@example.com", MARK,
+                "Matemática", "12ª Classe", "2024/2025", "Exame", "nota", true, null,
+                System.currentTimeMillis() - 60_000,
+                List.of(new DonationSubmission.Upload("p.png", png(40, 40, 3))),
+                SCHOOL_A);
+        DonationSubmission linkedB = new DonationSubmission("Bruno", "bruno@example.com", MARK,
+                "Matemática", "12ª Classe", "2024/2025", "Exame", "nota", true, null,
+                System.currentTimeMillis() - 60_000,
+                List.of(new DonationSubmission.Upload("q.png", png(41, 41, 4))),
+                SCHOOL_B);
+        DonationSubmission other = new DonationSubmission("Carla", "carla@example.com", MARK,
+                "Matemática", "12ª Classe", "2024/2025", "Exame", "nota", true, null,
+                System.currentTimeMillis() - 60_000,
+                List.of(new DonationSubmission.Upload("r.png", png(42, 42, 5))),
+                null);
+        service.submit(linked, "hash-a".repeat(8)).block(WAIT);
+        service.submit(linkedB, "hash-b".repeat(8)).block(WAIT);
+        service.submit(other, "hash-c".repeat(8)).block(WAIT);
+
+        long matchingA = service.list(null, SCHOOL_A, 1, 50).block(WAIT).items().size();
+        long matchingB = service.list(null, SCHOOL_B, 1, 50).block(WAIT).items().size();
+        long matchingAll = service.list(null, null, 1, 50).block(WAIT).items().size();
+
+        assertThat(matchingA).isEqualTo(1);
+        assertThat(matchingB).isEqualTo(1);
+        assertThat(matchingAll).isGreaterThanOrEqualTo(3);
+        assertThat(service.list(null, SCHOOL_A, 1, 50).block(WAIT).items())
+                .extracting(item -> item.institutionId())
+                .containsExactly(SCHOOL_A);
     }
 
     @Test
@@ -150,14 +192,14 @@ class DonationPostgresTest {
         DonationDetail second = donate(png(51, 51, 5));
         service.review(second.id(), REVIEWER, new DonationReviewRequest("rejected", "ilegível")).block(WAIT);
 
-        var all = service.list(null, 1, 50).block(WAIT);
+        var all = service.list(null, null, 1, 50).block(WAIT);
         assertThat(all.counts()).containsKeys("pending", "approved", "rejected", "converted");
         assertThat(all.counts().get("pending")).isGreaterThanOrEqualTo(1);
         assertThat(all.counts().get("rejected")).isGreaterThanOrEqualTo(1);
-        var rejected = service.list("rejected", 1, 50).block(WAIT);
+        var rejected = service.list("rejected", null, 1, 50).block(WAIT);
         assertThat(rejected.items()).extracting(item -> item.id()).contains(second.id());
         assertThat(rejected.items()).allSatisfy(item -> assertThat(item.status()).isEqualTo("rejected"));
-        assertThat(service.list(null, 1, 1).block(WAIT).items()).hasSize(1);
+        assertThat(service.list(null, null, 1, 1).block(WAIT).items()).hasSize(1);
     }
 
     @Test

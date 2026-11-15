@@ -15,6 +15,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.argThat;
 
 import ao.creativemode.kixi.donations.config.DonationProperties;
 import ao.creativemode.kixi.donations.dto.DonationReviewRequest;
@@ -45,6 +46,7 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
 
 /**
  * The donation service (issue #252). The public half is written against the caller, and so are these
@@ -57,6 +59,7 @@ class DonationServiceTest {
 
     private DonationRepository donations;
     private DonationFileRepository files;
+    private InstitutionRepository institutionRepository;
     private ImageStorage storage;
     private StatementRepository statements;
     private OcrServiceClient ocr;
@@ -69,6 +72,7 @@ class DonationServiceTest {
     void setUp() {
         donations = mock(DonationRepository.class);
         files = mock(DonationFileRepository.class);
+        institutionRepository = mock(InstitutionRepository.class);
         storage = mock(ImageStorage.class);
         statements = mock(StatementRepository.class);
         ocr = mock(OcrServiceClient.class);
@@ -76,9 +80,17 @@ class DonationServiceTest {
         properties = new DonationProperties();
         properties.setMaxFileBytes(200_000);
         properties.setMaxTotalBytes(500_000);
-        service = new DonationService(donations, files, storage, statements, ocr, properties,
+        service = new DonationService(donations, files, institutionRepository, storage, statements, ocr, properties,
                 Clock.fixed(NOW, ZoneOffset.UTC), tx, "jwt-secret-for-tests");
 
+        when(institutionRepository.findByIdAndVerifiedIsTrueAndDeletedAtIsNull(anyLong())).thenAnswer(call -> {
+            ao.creativemode.kixi.institutions.model.Institution i = new ao.creativemode.kixi.institutions.model.Institution();
+            i.setId(call.getArgument(0));
+            i.setName("ITEL");
+            i.setShortName("ITEL");
+            i.setVerified(true);
+            return Mono.just(i);
+        });
         when(tx.transactional(any(Mono.class))).thenAnswer(call -> call.getArgument(0));
         when(donations.existsByReference(anyString())).thenReturn(Mono.just(false));
         when(donations.save(any(Donation.class))).thenAnswer(call -> {
@@ -103,7 +115,7 @@ class DonationServiceTest {
     private DonationSubmission submission(List<DonationSubmission.Upload> uploads) {
         return new DonationSubmission("Ana Silva", "ana@example.com", "Instituto de Telecomunicações",
                 "Matemática", "12ª Classe", "2024/2025", "Exame", "Prova do 1º trimestre",
-                true, null, OPENED_A_MINUTE_AGO, uploads);
+                true, null, OPENED_A_MINUTE_AGO, uploads, null);
     }
 
     private DonationSubmission submission() {
@@ -126,7 +138,7 @@ class DonationServiceTest {
     @Test
     void aFilledHoneypotGetsAConvincingReferenceAndNothingIsStored() {
         DonationSubmission bot = new DonationSubmission("x", "x@x.xx", "Escola", "Disc", null, null, "Exame", null,
-                true, "https://spam.example", OPENED_A_MINUTE_AGO, List.of(upload("a.png", png(8, 8, 1))));
+                true, "https://spam.example", OPENED_A_MINUTE_AGO, List.of(upload("a.png", png(8, 8, 1))), null);
 
         StepVerifier.create(service.submit(bot, "hash"))
                 .assertNext(created -> assertThat(created.reference()).matches("KD-[2-9A-Z]{4}-[2-9A-Z]{4}"))
@@ -140,7 +152,7 @@ class DonationServiceTest {
     void aFormFilledFasterThanAPersonCanIsTreatedTheSameWay() {
         DonationSubmission fast = with(submission(), s -> new DonationSubmission(s.donorName(), s.donorEmail(),
                 s.institutionName(), s.subjectName(), s.classGrade(), s.schoolYear(), s.examType(), s.notes(),
-                true, null, NOW.toEpochMilli() - 800, s.files()));
+                true, null, NOW.toEpochMilli() - 800, s.files(), null));
 
         StepVerifier.create(service.submit(fast, "hash")).expectNextCount(1).verifyComplete();
 
@@ -153,7 +165,7 @@ class DonationServiceTest {
         for (Long startedAt : new Long[]{null, NOW.toEpochMilli() + 3_600_000}) {
             DonationSubmission odd = with(submission(), s -> new DonationSubmission(s.donorName(), s.donorEmail(),
                     s.institutionName(), s.subjectName(), s.classGrade(), s.schoolYear(), s.examType(), s.notes(),
-                    true, null, startedAt, s.files()));
+                    true, null, startedAt, s.files(), null));
             StepVerifier.create(service.submit(odd, "hash")).expectNextCount(1).verifyComplete();
         }
         verify(donations, never()).save(any());
@@ -163,7 +175,7 @@ class DonationServiceTest {
     void aBotIsAnsweredBeforeItsFieldsAreChecked() {
         // Probing the rules with a bad field must not tell a script which ones exist.
         DonationSubmission probe = new DonationSubmission(null, "not-an-email", "x", "x", null, null, "Nada", null,
-                false, "bot", OPENED_A_MINUTE_AGO, List.of());
+                false, "bot", OPENED_A_MINUTE_AGO, List.of(), null);
 
         StepVerifier.create(service.submit(probe, "hash")).expectNextCount(1).verifyComplete();
     }
@@ -174,26 +186,26 @@ class DonationServiceTest {
     void consentIsRequired() {
         assertRefused(with(submission(), s -> new DonationSubmission(s.donorName(), s.donorEmail(), s.institutionName(),
                 s.subjectName(), s.classGrade(), s.schoolYear(), s.examType(), s.notes(), false, null,
-                OPENED_A_MINUTE_AGO, s.files())), HttpStatus.BAD_REQUEST);
+                OPENED_A_MINUTE_AGO, s.files(), null)), HttpStatus.BAD_REQUEST);
     }
 
     @Test
     void theFieldsAreHeldToTheirRules() {
         List<DonationSubmission> bad = List.of(
                 field(s -> new DonationSubmission(s.donorName(), s.donorEmail(), "<script>alert(1)</script>", s.subjectName(),
-                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission(s.donorName(), s.donorEmail(), s.institutionName(), "x",
-                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission(s.donorName(), "ana@", s.institutionName(), s.subjectName(),
-                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission(s.donorName(), s.donorEmail(), s.institutionName(), s.subjectName(),
-                        s.classGrade(), "ontem", s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), "ontem", s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission(s.donorName(), s.donorEmail(), s.institutionName(), s.subjectName(),
-                        s.classGrade(), s.schoolYear(), "Teste de choque", s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), s.schoolYear(), "Teste de choque", s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission(s.donorName(), s.donorEmail(), s.institutionName(), s.subjectName(),
-                        s.classGrade(), s.schoolYear(), s.examType(), "a".repeat(1001), true, null, OPENED_A_MINUTE_AGO, s.files())),
+                        s.classGrade(), s.schoolYear(), s.examType(), "a".repeat(1001), true, null, OPENED_A_MINUTE_AGO, s.files(), null)),
                 field(s -> new DonationSubmission("n".repeat(101), s.donorEmail(), s.institutionName(), s.subjectName(),
-                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files())));
+                        s.classGrade(), s.schoolYear(), s.examType(), s.notes(), true, null, OPENED_A_MINUTE_AGO, s.files(), null)));
         for (DonationSubmission submission : bad) {
             assertRefused(submission, HttpStatus.BAD_REQUEST);
         }
@@ -206,7 +218,7 @@ class DonationServiceTest {
     @Test
     void theNameAndTheEmailAreOptionalAndBlankMeansAbsent() {
         DonationSubmission anonymous = with(submission(), s -> new DonationSubmission("  ", "", s.institutionName(),
-                s.subjectName(), "", "", s.examType(), " ", true, null, OPENED_A_MINUTE_AGO, s.files()));
+                s.subjectName(), "", "", s.examType(), " ", true, null, OPENED_A_MINUTE_AGO, s.files(), null));
 
         StepVerifier.create(service.submit(anonymous, "hash")).expectNextCount(1).verifyComplete();
 
@@ -367,7 +379,7 @@ class DonationServiceTest {
 
         DonationProperties other = new DonationProperties();
         other.setPepper("another-pepper");
-        DonationService peppered = new DonationService(donations, files, storage, statements, ocr, other,
+        DonationService peppered = new DonationService(donations, files, institutionRepository, storage, statements, ocr, other,
                 Clock.fixed(NOW, ZoneOffset.UTC), tx, "jwt-secret-for-tests");
         assertThat(peppered.clientHash("41.223.10.9")).isNotEqualTo(hash);
     }
@@ -446,9 +458,9 @@ class DonationServiceTest {
     @Test
     void theListIsValidatedBeforeItAsksTheDatabase() {
         for (StepVerifier.FirstStep<?> step : List.of(
-                StepVerifier.create(service.list("weird", 1, 20)),
-                StepVerifier.create(service.list(null, 0, 20)),
-                StepVerifier.create(service.list(null, 1, 500)))) {
+                StepVerifier.create(service.list("weird", null, 1, 20)),
+                StepVerifier.create(service.list(null, null, 0, 20)),
+                StepVerifier.create(service.list(null, null, 1, 500)))) {
             step.expectError(ApiException.class).verify();
         }
         verifyNoInteractions(donations);
@@ -495,4 +507,27 @@ class DonationServiceTest {
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
     }
+
+    // ── Institution link (kixi#597) ─────────────────────────────────────────
+
+    @Test
+    void donationLinkedToAVerifiedInstitutionIsStoredWithTheLink() {
+        DonationSubmission linked = with(submission(), s -> new DonationSubmission(s.donorName(), s.donorEmail(),
+                s.institutionName(), s.subjectName(), s.classGrade(), s.schoolYear(), s.examType(), s.notes(),
+                true, null, OPENED_A_MINUTE_AGO, s.files(), 7L));
+        StepVerifier.create(service.submit(linked, "hash")).expectNextCount(1).verifyComplete();
+
+        verify(donations).save(argThat(d -> Long.valueOf(7L).equals(d.getInstitutionId())));
+    }
+
+    @Test
+    void donationLinkedToAnUnknownOrUnverifiedInstitutionIsRefused() {
+        when(institutionRepository.findByIdAndVerifiedIsTrueAndDeletedAtIsNull(999L))
+                .thenReturn(Mono.empty());
+        DonationSubmission linked = with(submission(), s -> new DonationSubmission(s.donorName(), s.donorEmail(),
+                s.institutionName(), s.subjectName(), s.classGrade(), s.schoolYear(), s.examType(), s.notes(),
+                true, null, OPENED_A_MINUTE_AGO, s.files(), 999L));
+        assertRefused(linked, HttpStatus.BAD_REQUEST);
+    }
+
 }

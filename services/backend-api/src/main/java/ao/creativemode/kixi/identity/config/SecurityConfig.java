@@ -69,6 +69,10 @@ public class SecurityConfig {
                         // /teachers route stays ADMIN-only below.
                         // kixi#515: a conta do motor (INTEGRATION) também a pergunta ao montar o contexto da prova; sem registo de professor
                         // recebe 404, que o motor lê como "sem professor".
+                        // #597: o catálogo público de escolas. Listagem anónima e limitada ao nome e sigla de
+                        // escolas verificadas — o suficiente para o combobox da doação não inventar variantes.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/institutions/public")
+                        .permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/teachers/me")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")
                         // #253: where the signed-in teacher teaches; the overview of any
