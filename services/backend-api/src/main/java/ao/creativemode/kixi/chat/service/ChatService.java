@@ -37,15 +37,18 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * The AI tutor of issue #114: a session bound to one statement, answers
- * streamed to the client, everything persisted.
+ * The AI tutor of issue #114: a session bound to one statement or, since issue
+ * #610, to one subject or topic of its exam matrix. Answers stream to the
+ * client, everything persisted.
  *
  * Three rules shape this class:
  * <ol>
  *   <li><b>Scoped material.</b> The prompt only ever contains the session's
- *       own statement (ADR-0010: validated domain data, never raw OCR), and
- *       the answer key is never read at all — the model cannot leak what it
- *       was never given (issue #106).</li>
+ *       own material (ADR-0010: validated domain data, never raw OCR). A
+ *       statement session never reads the answer key at all — the model cannot
+ *       leak what it was never given (issue #106). The subject/topic session of
+ *       issue #610 does carry the key, because guiding the student from the
+ *       right answer is the point; the prompt forbids revealing it.</li>
  *   <li><b>Status codes before the stream.</b> Every precondition (unknown or
  *       foreign session, exhausted window, missing API key, vanished
  *       statement) fails inside the {@code Mono}, so the global handler turns
@@ -69,6 +72,8 @@ public class ChatService {
     private final GroqClient groqClient;
     private final TutorStyleService tutorStyles;
     private final SimilarQuestionService similarQuestions;
+    private final TutorSubjectCatalog subjectCatalog;
+    private final TutorExamGuard examGuard;
 
     /** Real catalog questions offered per answer in "exercícios semelhantes" (#115). */
     static final int SIMILAR_LIMIT = 3;
@@ -83,7 +88,9 @@ public class ChatService {
                        ChatRateLimiter rateLimiter,
                        GroqClient groqClient,
                        TutorStyleService tutorStyles,
-                       SimilarQuestionService similarQuestions) {
+                       SimilarQuestionService similarQuestions,
+                       TutorSubjectCatalog subjectCatalog,
+                       TutorExamGuard examGuard) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.statementService = statementService;
@@ -91,6 +98,8 @@ public class ChatService {
         this.groqClient = groqClient;
         this.tutorStyles = tutorStyles;
         this.similarQuestions = similarQuestions;
+        this.subjectCatalog = subjectCatalog;
+        this.examGuard = examGuard;
     }
 
     /**
@@ -111,6 +120,16 @@ public class ChatService {
      */
     public Mono<ChatSessionResponse> createSession(Long accountId, ChatSessionRequest request) {
         TutorMode mode = request.mode() == null ? TutorMode.GENERAL : request.mode();
+        if (request.hasStatementContext() && request.hasSubjectContext()) {
+            return Mono.error(ApiException.badRequest(
+                    "Uma sessão tem um contexto só: statementId ou subjectId/topicId, não os dois."));
+        }
+        if (request.hasSubjectContext()) {
+            return createSubjectSession(accountId, request, mode);
+        }
+        if (!request.hasStatementContext()) {
+            return Mono.error(ApiException.badRequest("Indique subjectId, topicId ou statementId."));
+        }
         boolean answered = request.selectedOptionId() != null || hasText(request.studentAnswer());
         if (mode.needsQuestion() && request.questionId() == null) {
             return Mono.error(ApiException.badRequest("questionId is required for mode " + mode));
@@ -135,6 +154,32 @@ public class ChatService {
                     }
                     return save(accountId, withQuestions.statement(), mode, focus, request);
                 });
+    }
+
+    /**
+     * Issue #610: the tutor outside one paper. The subject or topic must exist,
+     * and a topic carries its subject — sending both is only a consistency check.
+     * The "Simular" brake applies before the session exists: while a simulation
+     * of this subject is live, its tutor stays closed.
+     *
+     * <p>Only {@link TutorMode#GENERAL} and {@link TutorMode#CONCEPT} fit here.
+     * "Explicar questão" and "exercícios semelhantes" are about one question of
+     * one statement; without a statement there is no question to point at.</p>
+     */
+    private Mono<ChatSessionResponse> createSubjectSession(
+            Long accountId, ChatSessionRequest request, TutorMode mode) {
+        if (mode.needsQuestion() || request.questionId() != null) {
+            return Mono.error(ApiException.badRequest(
+                    "O modo " + mode + " precisa de um enunciado e de uma questão; "
+                            + "para a disciplina usa GENERAL ou CONCEPT."));
+        }
+        if (request.selectedOptionId() != null || hasText(request.studentAnswer())) {
+            return Mono.error(ApiException.badRequest("The student's answer needs a questionId"));
+        }
+        return subjectCatalog.read(request.subjectId(), request.topicId())
+                .flatMap(material -> examGuard.requireNoLiveExamInSubject(accountId, material.subjectId())
+                        .thenReturn(material))
+                .flatMap(material -> saveSubject(accountId, material, mode));
     }
 
     /**
@@ -166,9 +211,23 @@ public class ChatService {
         }
         return sessionRepository.save(session)
                 .map(saved -> new ChatSessionResponse(
-                        saved.getId(), saved.getStatementId(), saved.getCreatedAt(),
+                        saved.getId(), saved.getStatementId(), null, null, saved.getCreatedAt(),
                         saved.getMode(), saved.getQuestionId(),
                         sourcesOf(statement, focus, List.of())));
+    }
+
+    /** The session of a subject or topic: no statement, the catalog papers as its sources. */
+    private Mono<ChatSessionResponse> saveSubject(Long accountId, TutorSubjectCatalog.Material material,
+            TutorMode mode) {
+        ChatSession session = new ChatSession();
+        session.setAccountId(accountId);
+        session.setSubjectId(material.subjectId());
+        session.setTopicId(material.topicId());
+        session.setMode(mode);
+        return sessionRepository.save(session)
+                .map(saved -> new ChatSessionResponse(
+                        saved.getId(), null, saved.getSubjectId(), saved.getTopicId(), saved.getCreatedAt(),
+                        saved.getMode(), null, material.sources()));
     }
 
     /**
@@ -197,6 +256,9 @@ public class ChatService {
      */
     private Mono<Flux<ServerSentEvent<ChatStreamEvent>>> answer(
             Long accountId, ChatSession session, String content) {
+        if (session.getStatementId() == null) {
+            return answerSubject(accountId, session, content);
+        }
         return messageRepository.save(new ChatMessage(session.getId(), ChatRole.USER, content))
                 .then(Mono.defer(() -> readableMaterial(accountId, session.getStatementId())))
                 .flatMap(withQuestions -> {
@@ -226,6 +288,29 @@ public class ChatService {
                                     history,
                                     sourcesOf(withQuestions.statement(), focus, found.getT2()))));
                 });
+    }
+
+    /**
+     * Issue #610: answer from the subject/topic catalog. The material is re-read
+     * on every turn — a paper that became visible since the session opened then
+     * counts, and a session whose subject disappeared fails like a missing
+     * statement does. The brake is re-checked here too: a simulation that started
+     * after the session opened closes the tutor on the very next message.
+     */
+    private Mono<Flux<ServerSentEvent<ChatStreamEvent>>> answerSubject(
+            Long accountId, ChatSession session, String content) {
+        return subjectCatalog.read(session.getSubjectId(), session.getTopicId())
+                .flatMap(material -> examGuard.requireNoLiveExamInSubject(accountId, material.subjectId())
+                        .thenReturn(material))
+                .flatMap(material -> messageRepository
+                        .save(new ChatMessage(session.getId(), ChatRole.USER, content))
+                        .then(Mono.defer(() -> historyOf(session)))
+                        .map(history -> stream(
+                                session,
+                                TutorSystemPrompt.composeCatalog("", catalogInstructionsFor(session.getMode())),
+                                material.context(),
+                                history,
+                                material.sources())));
     }
 
     private Mono<List<GroqMessage>> historyOf(ChatSession session) {
@@ -389,6 +474,23 @@ public class ChatService {
             };
         }
         return rules.isEmpty() ? rules : rules + TutorSystemPrompt.FORMAT_RULES;
+    }
+
+    /**
+     * The mode rules of a subject/topic session (issue #610). GENERAL adds nothing;
+     * CONCEPT is the only other mode that context accepts. It points at the
+     * material instead of "the statement", which is the one wording difference.
+     */
+    static String catalogInstructionsFor(TutorMode mode) {
+        if (mode != TutorMode.CONCEPT) {
+            return "";
+        }
+        return """
+                MODO: DÚVIDAS DE CONCEITO. O aluno quer perceber um conceito desta
+                disciplina. Explica-o com palavras simples e exemplos curtos, partindo
+                das questões e dos gabaritos do material, quando existirem. No fim,
+                confirma com uma pergunta curta se ficou claro.
+                """ + TutorSystemPrompt.FORMAT_RULES;
     }
 
     /** The question in focus and, when given, the student's answer to it. */

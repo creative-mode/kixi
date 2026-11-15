@@ -26,12 +26,20 @@ public record PostRequest(
         Long simulationId,
 
         /** A built post (issue #347): optional on a DOUBT or TOPIC, required on a STUDY_CARD, SOLUTION or CHALLENGE. */
-        java.util.List<PostBlock> blocks
+        java.util.List<PostBlock> blocks,
+
+        /** Only for a SIMULATION post: whether the class sees the score. Absent or true keeps the old behaviour; false hides the figures from everyone but the author (kixi#612). */
+        Boolean showScore
 ) {
 
     /** The request as it was before the blocks existed. */
     public PostRequest(PostType type, Long classId, String title, String content, Long simulationId) {
-        this(type, classId, title, content, simulationId, null);
+        this(type, classId, title, content, simulationId, null, null);
+    }
+
+    /** The request as it was before showScore existed. */
+    public PostRequest(PostType type, Long classId, String title, String content, Long simulationId, java.util.List<PostBlock> blocks) {
+        this(type, classId, title, content, simulationId, blocks, null);
     }
 
     private static final int MAX_CONTENT = 2000;

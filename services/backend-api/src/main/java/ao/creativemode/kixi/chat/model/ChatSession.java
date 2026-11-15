@@ -7,12 +7,17 @@ import org.springframework.data.relational.core.mapping.Table;
 import java.time.LocalDateTime;
 
 /**
- * A tutor conversation bound to one account and one statement.
+ * A tutor conversation bound to one account and one context.
  *
  * The binding is the whole point of the tutor (ADR-0010 / issue #114): the
- * model only ever sees the material of this session's statement, so a session
+ * model only ever sees the material of this session's context, so a session
  * that belongs to another account must not be reachable — the service looks
  * sessions up by (id, account_id) and reports a plain 404 otherwise.
+ *
+ * <p>The context is one of: a statement (issues #114/#115), a subject, or a
+ * topic of that subject's exam matrix (issue #610). {@code topicId} always
+ * comes with its {@code subjectId}; a subject-wide session has only the
+ * subject.</p>
  */
 @Table("chat_sessions")
 public class ChatSession {
@@ -25,6 +30,12 @@ public class ChatSession {
 
     @Column("statement_id")
     private Long statementId;
+
+    @Column("subject_id")
+    private Long subjectId;
+
+    @Column("topic_id")
+    private Long topicId;
 
     @Column("created_at")
     private LocalDateTime createdAt;
@@ -68,6 +79,22 @@ public class ChatSession {
 
     public void setStatementId(Long statementId) {
         this.statementId = statementId;
+    }
+
+    public Long getSubjectId() {
+        return subjectId;
+    }
+
+    public void setSubjectId(Long subjectId) {
+        this.subjectId = subjectId;
+    }
+
+    public Long getTopicId() {
+        return topicId;
+    }
+
+    public void setTopicId(Long topicId) {
+        this.topicId = topicId;
     }
 
     public LocalDateTime getCreatedAt() {

@@ -49,8 +49,9 @@ public class ChatController {
     }
 
     /**
-     * Open a session bound to a statement the caller may read, optionally in one of
-     * the tutor modes of issue #115 (see {@link ChatSessionRequest}).
+     * Open a session bound to a statement, a subject or a topic the caller may read,
+     * optionally in one of the tutor modes of issue #115 (see
+     * {@link ChatSessionRequest}).
      */
     @PostMapping
     public Mono<ResponseEntity<ChatSessionResponse>> createSession(
