@@ -74,9 +74,15 @@ public class ExamRoomController {
     @GetMapping("/owned")
     public Mono<ResponseEntity<List<ExamRoomResponse>>> owned(
             @org.springframework.web.bind.annotation.RequestParam(required = false) Long institutionId) {
-        return current.requiredAccountId().zipWith(current.hasAnyRole("ADMIN", "TEACHER"))
-                .flatMapMany(tuple -> tuple.getT2() ? service.findMine(tuple.getT1(), institutionId) : reactor.core.publisher.Flux.empty())
-                .collectList().map(ResponseEntity::ok);
+        // The integration account (the SchoolOps engine) owns no room: it reads them all, or it would take every
+        // digital exam for a paper one (#600). The role is asked for itself, not through the ADMIN alias.
+        return current.requiredAccountId().zipWith(current.hasAnyRole("INTEGRATION"))
+                .flatMap(tuple -> tuple.getT2()
+                        ? service.findAllRooms(institutionId).collectList()
+                        : current.hasAnyRole("ADMIN", "TEACHER").flatMap(staff -> staff
+                                ? service.findMine(tuple.getT1(), institutionId).collectList()
+                                : Mono.just(java.util.List.<ExamRoomResponse>of())))
+                .map(ResponseEntity::ok);
     }
 
     @PostMapping("/{id}/participants")
