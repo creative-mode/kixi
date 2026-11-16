@@ -250,6 +250,39 @@ class FeedPostgresIntegrationTest {
         assertThat(cardOf(464002L)).isEqualTo(new Card(4.0, 2, true));
     }
 
+    /** Um cartão de simulação com a nota escondida: o autor vê, a turma não (kixi#612). */
+    @Test
+    void aPublishedSimulationHidesTheScoreFromEveryoneButTheAuthor() {
+        sql("INSERT INTO subjects (id, code, name) VALUES (587001, 'F587', 'Matemática')");
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, variant, total_max_score, subject_id, class_id,"
+                + " school_year_id, visible, needs_review, source) VALUES (587001, 'Exame de Matemática', 'Exame', 90, 'A', 20, 587001, "
+                + CLASS + ", " + YEAR + ", true, false, 'manual')");
+        sql("INSERT INTO simulations (id, account_id, statement_id, status, final_score, finished_at) VALUES"
+                + " (587001, " + STUDENT + ", 587001, 'FINISHED', 14, now())");
+        AtomicLong postId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"SIMULATION\",\"classId\":" + CLASS + ",\"simulationId\":587001,\"content\":\"Correu bem\",\"showScore\":false}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.simulation.finalScore").isEqualTo(14.0)
+                .jsonPath("$.simulation.paperKind").isEqualTo("Exame")
+                .jsonPath("$.id").value(value -> postId.set(((Number) value).longValue()));
+        long id = postId.get();
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].id").isEqualTo((int) id)
+                .jsonPath("$[0].simulation.finalScore").isEqualTo(14.0)
+                .jsonPath("$[0].simulation.maxScore").isEqualTo(20.0);
+
+        bearer(classmateToken).get().uri("/api/v1/feed/posts").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].id").isEqualTo((int) id)
+                .jsonPath("$[0].simulation.finalScore").doesNotExist()
+                .jsonPath("$[0].simulation.maxScore").doesNotExist()
+                .jsonPath("$[0].simulation.correctAnswers").doesNotExist()
+                .jsonPath("$[0].simulation.totalQuestions").doesNotExist()
+                .jsonPath("$[0].simulation.pendingReviewCount").doesNotExist()
+                .jsonPath("$[0].simulation.statementTitle").isEqualTo("Exame de Matemática");
+    }
+
     /**
      * kixi#587: o cartão publicado traz o cabeçalho da folha, lido do enunciado no servidor (nunca do pedido), e
      * um cartão antigo, publicado antes das colunas existirem, é preenchido pelo backfill da migração.

@@ -82,7 +82,7 @@ por isso uma dependência indevida falha o build.
 | `simulations` | Simulados e respostas submetidas | `/api/v1/simulations`, `/simulation-answers` |
 | `gamification` | Ranking, XP e consentimento de comparação | `/api/v1/leaderboard` |
 | `feed` | Publicações e interacções | `/api/v1/feed/posts` |
-| `chat` | Tutor com IA, por enunciado | `/api/v1/chat/sessions` |
+| `chat` | Tutor com IA, por enunciado, disciplina ou tema | `/api/v1/chat/sessions` |
 | `analytics` | Indicadores de desempenho para professores | `/api/v1/analytics` |
 | `donations` | Apoio ao projecto | `/api/v1/donations` |
 | `ocr` | Ponte para o serviço de OCR | `/api/v1/ocr` |

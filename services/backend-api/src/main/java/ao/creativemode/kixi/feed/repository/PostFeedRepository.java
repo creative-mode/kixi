@@ -226,6 +226,7 @@ public class PostFeedRepository {
                 .createdAt(row.get("created_at", java.time.LocalDateTime.class))
                 .updatedAt(row.get("updated_at", java.time.LocalDateTime.class))
                 .editedAt(row.get("edited_at", java.time.LocalDateTime.class))
+                .showScore(row.get("show_score", Boolean.class))
                 .deletedAt(row.get("deleted_at", java.time.LocalDateTime.class))
                 .build();
     }

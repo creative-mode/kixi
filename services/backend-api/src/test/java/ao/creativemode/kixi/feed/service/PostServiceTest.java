@@ -152,6 +152,23 @@ class PostServiceTest {
         return post;
     }
 
+    /** A SIMULATION post whose score is hidden from every reader but the author. */
+    private Post mySimulationPost(boolean showScore) {
+        Post post = myPost();
+        post.setType(PostType.SIMULATION.getValue());
+        post.setSimulationId(9001L);
+        post.setStatementTitle("Exame de Matemática");
+        post.setSchoolName("Colégio Kixi");
+        post.setFinalScore(14.5);
+        post.setMaxScore(20.0);
+        post.setCorrectAnswers(12);
+        post.setTotalQuestions(15);
+        post.setTimeSpentSeconds(1800);
+        post.setPendingReviewCount(3);
+        post.setShowScore(showScore);
+        return post;
+    }
+
     private Post otherSchoolPost() {
         Post post = myPost();
         post.setInstitutionId(OTHER_INSTITUTION_ID);
@@ -320,6 +337,54 @@ class PostServiceTest {
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
         verifyNoInteractions(scopeAuthorizer);
+    }
+
+    @Test
+    void aSimulationPostStoresShowScoreFalseAndDefaultsTrueWhenAbsent() {
+        ClassScope mine = new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID);
+        when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(mine));
+        when(showcaseReader.showcaseOf(77L, ACCOUNT_ID)).thenReturn(Mono.just(
+                new SimulationShowcaseReader.Showcase(77L, "Exame de Matemática", 14.5, 20.0, 12, 15, 1800, 3,
+                        "Exame", "12ª Classe", "Matemática", 90, "2025/2026", "A")));
+        when(institutionNames.nameOf(MY_INSTITUTION_ID)).thenReturn(Mono.just("Colégio Kixi"));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(any(), eq(ACCOUNT_ID))).thenReturn(Mono.just(false));
+
+        postService.createPost(ACCOUNT_ID, new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null,
+                "Correu bem", 77L, null, Boolean.FALSE)).block();
+
+        verify(postRepository).save(argThat(post -> Boolean.FALSE.equals(post.getShowScore())));
+
+        postService.createPost(ACCOUNT_ID, new PostRequest(PostType.SIMULATION, MY_CLASS_ID, null,
+                "Sem flag", 77L)).block();
+
+        verify(postRepository).save(argThat(post -> Boolean.TRUE.equals(post.getShowScore())));
+    }
+
+    @Test
+    void aHiddenSimulationScoreIsInvisibleToAClassmateButNotToTheAuthor() {
+        Post post = mySimulationPost(false);
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(scopeAuthorizer.scopeOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(feedRepository.findFeed(eq(myScope()), isNull(), isNull(), isNull(), anyInt(), anyLong()))
+                .thenReturn(Flux.just(post));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(anyLong(), anyLong())).thenReturn(Mono.just(false));
+
+        var forClassmate = postService.getFeed(OTHER_ACCOUNT_ID, null, null, null, 1, 10)
+                .collectList().block(java.time.Duration.ofSeconds(2)).get(0).simulation();
+        var forAuthor = postService.getFeed(ACCOUNT_ID, null, null, null, 1, 10)
+                .collectList().block(java.time.Duration.ofSeconds(2)).get(0).simulation();
+
+        assertThat(forClassmate.finalScore()).isNull();
+        assertThat(forClassmate.maxScore()).isNull();
+        assertThat(forClassmate.correctAnswers()).isNull();
+        assertThat(forClassmate.totalQuestions()).isNull();
+        assertThat(forClassmate.pendingReviewCount()).isNull();
+        assertThat(forClassmate.statementTitle()).isEqualTo("Exame de Matemática");
+        assertThat(forAuthor.finalScore()).isEqualTo(14.5);
+        assertThat(forAuthor.correctAnswers()).isEqualTo(12);
     }
 
     @Test
