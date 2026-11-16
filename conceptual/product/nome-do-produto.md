@@ -77,3 +77,6 @@ Registar na #615, por sessão:
 - [ ] Registar os resultados por sessão, com o **n** de cada linha.
 - [ ] Levar a decisão (manter ou mudar) à #615; se houver mudança, abrir uma issue
   própria com os dados que a suportam.
+
+A #613 só fecha quando a pergunta estiver de facto no formulário da próxima demo. Este documento
+regista a pergunta e a forma de a ler; não substitui a inclusão no formulário.
