@@ -299,6 +299,10 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.PUT,
                                 "/api/v1/simulation-answers/*/ai-grade")
                         .hasAnyRole("ADMIN", "INTEGRATION")
+                        // kixi#609: o motor avisa quando não consegue corrigir uma simulação; o estado da correção passa a FAILED.
+                        .pathMatchers(HttpMethod.PUT,
+                                "/api/v1/simulations/*/correction-failure")
+                        .hasAnyRole("ADMIN", "INTEGRATION")
                         .pathMatchers(HttpMethod.PATCH,
                                 "/api/v1/simulation-answers/*/grade")
                         .hasAnyRole("ADMIN", "TEACHER", "INTEGRATION")

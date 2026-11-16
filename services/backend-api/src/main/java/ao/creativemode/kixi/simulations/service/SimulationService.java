@@ -35,6 +35,10 @@ public class SimulationService {
     @Autowired(required = false)
     private SimulationAuditService audit;
 
+    /** kixi#609: para dizer em que ponto está a correção das abertas; opcional como as outras portas (nulo = sem estado). */
+    @Autowired(required = false)
+    private ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository answerRepository;
+
     private final SimulationRepository repository;
     private final AccountRepository accountRepository;
     private final SchoolYearRepository schoolYearRepository;
@@ -499,7 +503,35 @@ public class SimulationService {
                                 ? simulation.getExamRoomDurationMinutes() : tuple.getT2().getDurationMinutes(),
                         Boolean.TRUE.equals(tuple.getT1().getAccessibilityExtraTime()))))
                     .map(deadline -> toResponse(simulation, tuple, deadline, tuple.getT4()))
-                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null, tuple.getT4()))));
+                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null, tuple.getT4()))))
+                .flatMap(response -> correctionOf(simulation)
+                        .map(summary -> response.withCorrection(summary.status(), summary.correctedAt())));
+    }
+
+    /**
+     * O motor avisa que não conseguiu corrigir as abertas (kixi#609): guarda-se quando e porquê, e o estado da correção passa a
+     * FAILED até a IA voltar a corrigir (a correção seguinte limpa o aviso). Só faz sentido numa simulação entregue.
+     */
+    public Mono<Void> markCorrectionFailed(Long id, String reason) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                .flatMap(simulation -> {
+                    if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.FINISHED) {
+                        return Mono.<Simulation>error(ApiException.conflict("Only a finished simulation has a correction that can fail"));
+                    }
+                    simulation.setCorrectionFailedAt(LocalDateTime.now());
+                    simulation.setCorrectionFailureReason(reason);
+                    return repository.save(simulation);
+                }).then();
+    }
+
+    /** O estado da correção das abertas de uma simulação entregue (kixi#609); sem ele numa simulação por entregar. */
+    private Mono<CorrectionSummary> correctionOf(Simulation simulation) {
+        if (answerRepository == null || simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.FINISHED) {
+            return Mono.just(CorrectionSummary.NONE);
+        }
+        return answerRepository.findAllBySimulationIdInAndDeletedAtIsNull(java.util.List.of(simulation.getId())).collectList()
+                .map(answers -> CorrectionSummary.of(simulation, answers));
     }
 
     private SimulationResponse toResponse(Simulation simulation,
@@ -521,7 +553,9 @@ public class SimulationService {
                         simulation.getCreatedAt(),
                         simulation.getUpdatedAt(),
                         simulation.getDeletedAt(),
-                        simulation.selectedQuestionIdSet() == null ? null : java.util.List.copyOf(simulation.selectedQuestionIdSet())
+                        simulation.selectedQuestionIdSet() == null ? null : java.util.List.copyOf(simulation.selectedQuestionIdSet()),
+                        null,
+                        null
                     );
     }
 

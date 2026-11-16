@@ -42,6 +42,13 @@ public class Simulation {
     @Column("final_score")
     private Double finalScore;
 
+    /** Quando o motor avisou que não conseguiu corrigir as respostas abertas (kixi#609); limpa-se quando a correção volta a chegar. */
+    @Column("correction_failed_at")
+    private java.time.LocalDateTime correctionFailedAt;
+
+    @Column("correction_failure_reason")
+    private String correctionFailureReason;
+
     @Column("status")
     private SimulationStatus status;
 
@@ -165,6 +172,22 @@ public class Simulation {
 
     public void setFinalScore(Double finalScore) {
         this.finalScore = finalScore;
+    }
+
+    public java.time.LocalDateTime getCorrectionFailedAt() {
+        return correctionFailedAt;
+    }
+
+    public void setCorrectionFailedAt(java.time.LocalDateTime correctionFailedAt) {
+        this.correctionFailedAt = correctionFailedAt;
+    }
+
+    public String getCorrectionFailureReason() {
+        return correctionFailureReason;
+    }
+
+    public void setCorrectionFailureReason(String correctionFailureReason) {
+        this.correctionFailureReason = correctionFailureReason;
     }
 
     public SimulationStatus getStatus() {
