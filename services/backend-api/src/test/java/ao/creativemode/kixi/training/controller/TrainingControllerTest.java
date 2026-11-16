@@ -95,7 +95,7 @@ class TrainingControllerTest {
     @Test
     void buildingAPracticeReturns201WithTheAllocation() {
         SimulationResponse simulation = new SimulationResponse(90L, null, null, null, null, null, null, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null, null);
         when(practice.start(eq(STUDENT), any(MatrixPracticeRequest.class))).thenReturn(Mono.just(new MatrixPracticeResponse(
                 simulation, List.of(new MatrixPracticeResponse.Allocation(5L, 4, 3)))));
 

@@ -376,6 +376,9 @@ public class SimulationSubmissionService {
                         .filter(answer -> answer.getReviewStatus() == SimulationAnswerStatus.PENDING_REVIEW)
                         .count();
                 simulation.setFinalScore(score);
+                // Uma correção que chega (da IA ou de uma pessoa) desfaz o aviso de que a correção tinha falhado (kixi#609).
+                simulation.setCorrectionFailedAt(null);
+                simulation.setCorrectionFailureReason(null);
                 if (gamification == null) {
                     return simulations.save(simulation)
                             .then(refreshPublishedCard(simulationId, score, pendingReviewCount));

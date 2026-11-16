@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.simulations.dto.simulationresult;
 
+import ao.creativemode.kixi.simulations.model.CorrectionStatus;
 import ao.creativemode.kixi.simulations.model.SimulationStatus;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,6 +26,10 @@ public record SimulationResultResponse(
         Integer correctAnswers,
         Integer totalQuestions,
         Integer pendingReviewCount,
+        /** kixi#609: o estado da correção das abertas (PENDING, IN_PROGRESS, DONE, FAILED), o mesmo do histórico e do cartão do feed. */
+        CorrectionStatus correctionStatus,
+        /** kixi#609: quando a última aberta ficou corrigida; só com {@code DONE} e pelo menos uma aberta. */
+        LocalDateTime correctedAt,
         Integer timeSpentSeconds,
         LocalDateTime finishedAt,
         List<QuestionResult> questions
