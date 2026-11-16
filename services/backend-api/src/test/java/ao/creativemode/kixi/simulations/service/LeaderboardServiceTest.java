@@ -78,6 +78,11 @@ class LeaderboardServiceTest {
         // @BeforeEach because the order two of those run in is not the order they are
         // written in, and a stub that lands before the mocks is a null repository.
         consented();
+
+        // A visibility read the tests do not stub would return null and NPE inside the
+        // response builder; absence of a preference means visible (#611).
+        when(repository.findVisibility(any(Collection.class), any(Scope.class)))
+                .thenReturn(Mono.just(Map.of()));
     }
     /** The caller agreed to be ranked across institutions, unless a test takes it away. */
     private void consented() {
@@ -1120,6 +1125,113 @@ class LeaderboardServiceTest {
 
         assertThat(response.metric()).isEqualTo("average");
         assertThat(response.myPosition()).isEqualTo(1);
+    }
+
+    // ── Visibility (#611) ───────────────────────────────────────────────────
+
+    @Test
+    void aHiddenStudentIsOutOfTheTableForEverybodyElse() {
+        cohortOf(descending(12), 12);
+        when(repository.findVisibility(any(Collection.class), any(Scope.class)))
+                .thenReturn(Mono.just(Map.of(101L, "hidden")));
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(response.rankedStudents()).isEqualTo(11);
+        assertThat(positions(response)).doesNotContain(1);
+    }
+
+    @Test
+    void aHiddenStudentStillCountsInTheTableForTheOwnView() {
+        cohortOf(withCaller(descending(12), 0), 12); // caller is the hidden row
+        when(repository.findVisibility(any(Collection.class), any(Scope.class)))
+                .thenReturn(Mono.just(Map.of(ACCOUNT_ID, "hidden")));
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        // The one account this is true for: they stand where they stand, and nobody
+        // ever hands their row to a colleague.
+        assertThat(response.myPosition()).isEqualTo(1);
+        assertThat(response.entries())
+                .filteredOn(entry -> entry.me())
+                .singleElement()
+                .satisfies(entry -> assertThat(entry.position()).isEqualTo(1));
+        assertThat(response.rankedStudents()).isEqualTo(11);
+    }
+
+    @Test
+    void anAnonymousStudentIsListedAsUmColega() {
+        cohortOf(descending(12), 12);
+        when(repository.findVisibility(any(Collection.class), any(Scope.class)))
+                .thenReturn(Mono.just(Map.of(101L, "anonymous")));
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(response.entries()).anySatisfy(entry -> {
+            assertThat(entry.position()).isEqualTo(1);
+            assertThat(entry.displayName()).isEqualTo("Um colega");
+        });
+        assertThat(response.entries()).noneSatisfy(entry -> {
+            assertThat(entry.position()).isEqualTo(2);
+            assertThat(entry.displayName()).isEqualTo("Um colega");
+        });
+    }
+
+    @Test
+    void leavingTheTableAlsoDecidesTheSmallGroupFloor() {
+        cohortOf(descending(12), 12);
+        // Hiding three of the twelve leaves nine — the floor is counted over the rows
+        // still in the table, not over who enrolled or who was ranked last week.
+        when(repository.findVisibility(any(Collection.class), any(Scope.class)))
+                .thenReturn(Mono.just(Map.of(101L, "hidden", 102L, "hidden", 103L, "hidden")));
+
+        LeaderboardResponse response =
+                one(service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(response.smallGroup()).isTrue();
+        assertThat(response.rankedStudents()).isEqualTo(9);
+    }
+
+    @Test
+    void anUnsupportedVisibilityIsABadRequest() {
+        StepVerifier.create(service.setVisibility(ACCOUNT_ID,
+                        new ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityRequest(
+                                "class", "sometimes")))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(repository, never()).setVisibility(any(), any(), any());
+    }
+
+    @Test
+    void anUnsupportedScopeIsABadRequest() {
+        StepVerifier.create(service.setVisibility(ACCOUNT_ID,
+                        new ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityRequest(
+                                "galaxy", "hidden")))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus())
+                                .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
+
+        verify(repository, never()).setVisibility(any(), any(), any());
+    }
+
+    @Test
+    void onlyTheCallersVisibilityCanMove() {
+        when(repository.setVisibility(any(), any(), any())).thenReturn(Mono.just(true));
+        when(repository.findVisibility(anyLong(), any(Scope.class)))
+                .thenReturn(Mono.just("anonymous"));
+
+        service.setVisibility(ACCOUNT_ID,
+                new ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityRequest(
+                        "class", "anonymous")).block();
+
+        verify(repository).setVisibility(ACCOUNT_ID, Scope.CLASS, "anonymous");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

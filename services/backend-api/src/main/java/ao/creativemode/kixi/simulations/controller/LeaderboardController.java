@@ -5,6 +5,8 @@ import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentRequest;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityRequest;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityResponse;
 import ao.creativemode.kixi.simulations.service.LeaderboardService;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -73,6 +75,40 @@ public class LeaderboardController {
      * otherwise be a {@code null} Boolean unboxed on the way into the database, and the
      * student would be told they had answered a question they were never asked.</p>
      */
+    /**
+     * The caller's visibility answers, both reading and writing, so a client can render
+     * the switch on reload instead of trusting an optimistic local state that a failed
+     * write could strand (#611).
+     */
+    @GetMapping("/visibility")
+    @Operation(summary = "Read how the caller appears inside one scope of the ranking")
+    public Mono<ResponseEntity<LeaderboardVisibilityResponse>> visibility(
+            @RequestParam(defaultValue = "class") String scope) {
+        return currentAccountService.requiredAccountId()
+                .flatMap(accountId -> leaderboardService.visibility(accountId, scope))
+                .map(ResponseEntity::ok);
+    }
+
+    /**
+     * Sets how the caller appears inside one scope — visible, anonymous («Um colega»),
+     * or out of the table entirely. Only the caller's own row can move, by construction:
+     * the account id is resolved from the session.
+     */
+    @PutMapping("/visibility")
+    @Operation(summary = "Set how the caller appears inside one scope of the ranking")
+    public Mono<ResponseEntity<LeaderboardVisibilityResponse>> setVisibility(
+            @RequestBody(required = false) LeaderboardVisibilityRequest request) {
+        if (request == null
+                || request.scope() == null || request.scope().isBlank()
+                || request.preference() == null || request.preference().isBlank()) {
+            return Mono.error(ApiException.badRequest(
+                    "scope and preference are required: visible, anonymous or hidden"));
+        }
+        return currentAccountService.requiredAccountId()
+                .flatMap(accountId -> leaderboardService.setVisibility(accountId, request))
+                .map(ResponseEntity::ok);
+    }
+
     @PutMapping("/consent")
     @Operation(summary = "Allow or forbid being ranked across institutions")
     public Mono<ResponseEntity<LeaderboardConsentResponse>> consent(

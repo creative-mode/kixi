@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -266,6 +267,86 @@ public class LeaderboardRepository {
                 .bind("consented", consented)
                 // rowsUpdated, not a returning row: the consent is not data anybody reads,
                 // and the count is the answer to "did it land" without fetching it back.
+                .fetch()
+                .rowsUpdated()
+                .map(rows -> rows > 0)
+                .defaultIfEmpty(false);
+    }
+
+    /**
+     * The caller's visibility choice for one scope, if they were ever asked.
+     *
+     * <p>Absence means visible — the table defaults to the state it always answered in,
+     * and the preference row only ever narrows what is published for the person who
+     * made it.</p>
+     */
+    public Mono<String> findVisibility(Long accountId, Scope scope) {
+        return databaseClient.sql("""
+                        SELECT preference
+                          FROM leaderboard_visibility
+                         WHERE account_id = :accountId
+                           AND scope = :scope
+                        """)
+                .bind("accountId", accountId)
+                .bind("scope", scope.name().toLowerCase(Locale.ROOT))
+                .map((row, metadata) -> (String) row.get("preference"))
+                .one()
+                .defaultIfEmpty("visible");
+    }
+
+    /**
+     * Every visibility preference in {@code accountIds} for {@code scope}.
+     *
+     * <p>One query for the rows that can belong to the window, so building the response
+     * does not become one round trip per classmate. Accounts without a preference are
+     * absent from the map, which callers read as visible.</p>
+     */
+    public Mono<Map<Long, String>> findVisibility(Collection<Long> accountIds, Scope scope) {
+        if (accountIds.isEmpty()) {
+            return Mono.just(Map.of());
+        }
+        return databaseClient.sql("""
+                        SELECT account_id, preference
+                          FROM leaderboard_visibility
+                         WHERE scope = :scope
+                           AND account_id = ANY(:accountIds)
+                        """)
+                .bind("accountIds", accountIds.toArray(Long[]::new))
+                .bind("scope", scope.name().toLowerCase(Locale.ROOT))
+                .map((row, metadata) -> Map.entry(
+                        ((Number) row.get("account_id")).longValue(),
+                        (String) row.get("preference")))
+                .all()
+                .collectList()
+                .map(entries -> {
+                    Map<Long, String> map = new LinkedHashMap<>();
+                    for (Map.Entry<Long, String> entry : entries) {
+                        map.put(entry.getKey(), entry.getValue());
+                    }
+                    return map;
+                })
+                .defaultIfEmpty(Map.of());
+    }
+
+    /**
+     * Sets the visibility for one scope, in one statement.
+     *
+     * <p>An upsert rather than insert-then-update: the unique (account, scope) index
+     * makes two answers to the same question impossible, and this makes a repeated
+     * click a non-event instead of an error.</p>
+     */
+    public Mono<Boolean> setVisibility(Long accountId, Scope scope, String preference) {
+        return databaseClient.sql("""
+                        INSERT INTO leaderboard_visibility
+                               (account_id, scope, preference)
+                        VALUES (:accountId, :scope, :preference)
+                        ON CONFLICT (account_id, scope) DO UPDATE
+                           SET preference = EXCLUDED.preference,
+                               updated_at = now()
+                        """)
+                .bind("accountId", accountId)
+                .bind("scope", scope.name().toLowerCase(Locale.ROOT))
+                .bind("preference", preference)
                 .fetch()
                 .rowsUpdated()
                 .map(rows -> rows > 0)

@@ -6,6 +6,8 @@ import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityRequest;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardVisibilityResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.DisplayName;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.GroupScore;
@@ -92,6 +94,9 @@ public class LeaderboardService {
     /** Under this many students a group is too small to publish a podium. */
     static final int SMALL_GROUP_LIMIT = 10;
 
+    /** The three answers a student can pick for one scope (#611). */
+    static final Set<String> PREFERENCES = Set.of("visible", "anonymous", "hidden");
+
     /**
      * What a peer is called in {@code scope=global}.
      *
@@ -100,6 +105,8 @@ public class LeaderboardService {
      * at all and the label stands in their place.</p>
      */
     static final String OUTSIDE_LABEL = "Aluno de outra escola";
+    /** Anonymous but present, inside the caller's own scope (#611). */
+    static final String COLLEAGUE_LABEL = "Um colega";
 
     /** For a row with no name behind it, whichever scope it came from. */
     private static final String FALLBACK_LABEL = "Aluno";
@@ -157,6 +164,53 @@ public class LeaderboardService {
         return repository.setCrossInstitutionConsent(accountId, crossInstitution)
                 .flatMap(written -> repository.consentedToCrossInstitution(accountId)
                         .map(current -> new LeaderboardConsentResponse(current)));
+    }
+
+
+    /**
+     * The caller's visibility answers, one per scope.
+     *
+     * <p>The cohort is never a parameter — scope is the only input — so there is no way
+     * to read another student's preference: the caller is the account, and the scope is
+     * validated like any other value the ranking takes (#611, IDOR by construction).</p>
+     */
+    public Mono<LeaderboardVisibilityResponse> visibility(Long accountId, String scope) {
+        Scope resolved;
+        try {
+            resolved = Scope.of(scope);
+        } catch (IllegalArgumentException e) {
+            return Mono.error(ApiException.badRequest(e.getMessage()));
+        }
+        return repository.findVisibility(accountId, resolved)
+                .map(preference -> new LeaderboardVisibilityResponse(
+                        resolved.name().toLowerCase(Locale.ROOT), preference));
+    }
+
+    /** Sets the caller's visibility for one scope; only the caller's row can move. */
+    public Mono<LeaderboardVisibilityResponse> setVisibility(Long accountId, LeaderboardVisibilityRequest request) {
+        if (request == null || request.scope() == null || request.scope().isBlank()) {
+            return Mono.error(ApiException.badRequest(
+                    "scope is required: class, school, friends or global"));
+        }
+        if (request.preference() == null || request.preference().isBlank()) {
+            return Mono.error(ApiException.badRequest(
+                    "preference is required: visible, anonymous or hidden"));
+        }
+        Scope resolved;
+        try {
+            resolved = Scope.of(request.scope());
+        } catch (IllegalArgumentException e) {
+            return Mono.error(ApiException.badRequest(e.getMessage()));
+        }
+        String preference = request.preference().trim().toLowerCase(Locale.ROOT);
+        if (!PREFERENCES.contains(preference)) {
+            return Mono.error(ApiException.badRequest(
+                    "Unsupported visibility: " + preference + " (expected visible, anonymous or hidden)"));
+        }
+        return repository.setVisibility(accountId, resolved, preference)
+                .flatMap(written -> repository.findVisibility(accountId, resolved))
+                .map(current -> new LeaderboardVisibilityResponse(
+                        resolved.name().toLowerCase(Locale.ROOT), current));
     }
 
     /**
@@ -399,70 +453,82 @@ public class LeaderboardService {
             Period period,
             Metric metric) {
         List<Ranked> ranked = ranking.ranked();
-        // Both numbers matter. Too few enrolled, or too few with a score to rank, and the
-        // table is short enough that naming its bottom says something about real people.
-        //
-        // Friends are the exception, and the acceptance criterion of issue #121 is the
-        // reason: "two students become friends and appear in each other's ranking" cannot
-        // hold if the floor hides every row of a two-person table. The floor exists because
-        // a student is ranked beside people they were placed with, and the teacher can see
-        // the table. A friend was asked and answered — that is the consent the floor was
-        // standing in for, and here it has actually been given.
-        boolean smallGroup = scope != Scope.FRIENDS
-                && Math.min(ranking.totalStudents(), ranked.size()) < SMALL_GROUP_LIMIT;
+        Set<Long> rankedIds = new LinkedHashSet<>();
+        ranked.forEach(entry -> rankedIds.add(entry.accountId()));
 
-        int mine = -1;
-        for (int i = 0; i < ranked.size(); i++) {
-            if (ranked.get(i).accountId().equals(accountId)) {
-                mine = i;
-                break;
-            }
-        }
+        // Visibility is a per-scope preference outside the ranking's shared cache: the
+        // cache holds the same cohort for everyone, and who is hidden is a fact only
+        // the response of each viewer may fold in (#611).
+        return repository.findVisibility(rankedIds, scope)
+                .flatMap(visibility -> {
+                    List<Ranked> rankable = ranked.stream()
+                            .filter(entry -> !"hidden".equals(visibility.getOrDefault(entry.accountId(), "visible")))
+                            .toList();
+                    boolean smallGroup = scope != Scope.FRIENDS
+                            && Math.min(ranking.totalStudents(), rankable.size()) < SMALL_GROUP_LIMIT;
 
-        Set<Integer> indexes = new LinkedHashSet<>();
-        if (mine >= 0) {
-            int last = Math.min(ranked.size() - 1, mine + NEIGHBOURS);
-            for (int i = Math.max(0, mine - NEIGHBOURS); i <= last; i++) {
-                indexes.add(i);
-            }
-            // The window walks into the bottom of the table otherwise: sixth of eight would
-            // show seventh and eighth. Those places are withheld from the other rows.
-            // The caller's own place stays: they already know where they stand, and
-            // learning it from somebody else's ranking is the part that hurts.
-            if (smallGroup) {
-                // Drawn from the rows actually ranked, not from the enrolment count: with
-                // five of eight marked, a floor of six protects nothing.
-                int floor = ranked.size() - NEIGHBOURS;
-                int myPosition = mine;
-                indexes.removeIf(index ->
-                        ranked.get(index).position() > floor && index != myPosition);
-            }
-        }
-        if (!smallGroup) {
-            for (int i = 0; i < Math.min(PODIUM_SIZE, ranked.size()); i++) {
-                indexes.add(i);
-            }
-        }
+                    int mine = -1;
+                    for (int i = 0; i < ranked.size(); i++) {
+                        if (ranked.get(i).accountId().equals(accountId)) {
+                            mine = i;
+                            break;
+                        }
+                    }
 
-        List<Ranked> visible = indexes.stream().sorted().map(ranked::get).toList();
+                    Set<Integer> indexes = new LinkedHashSet<>();
+                    if (mine >= 0) {
+                        int last = Math.min(ranked.size() - 1, mine + NEIGHBOURS);
+                        for (int i = Math.max(0, mine - NEIGHBOURS); i <= last; i++) {
+                            indexes.add(i);
+                        }
+                        // The window walks into the bottom of the table otherwise: sixth of
+                        // eight would show seventh and eighth. Those places are withheld
+                        // from the other rows. The caller's own place stays: they already
+                        // know where they stand.
+                        if (smallGroup) {
+                            int floor = rankable.size() - NEIGHBOURS;
+                            int myPosition = mine;
+                            indexes.removeIf(index ->
+                                    ranked.get(index).position() > floor && index != myPosition);
+                        }
+                    }
+                    if (!smallGroup) {
+                        // The podium is drawn from the rows actually left in view: a hidden
+                        // student cannot be printed as "first" just because the two students
+                        // above them chose not to be seen.
+                        List<Ranked> podium = rankable.stream().limit(PODIUM_SIZE).toList();
+                        for (Ranked winner : podium) {
+                            for (int i = 0; i < ranked.size(); i++) {
+                                if (ranked.get(i).accountId().equals(winner.accountId())) {
+                                    indexes.add(i);
+                                    break;
+                                }
+                            }
+                        }
+                    }
 
-        // Across institutions this is the caller's name and nothing else. The peers' names
-        // are not read from the database and then shortened — they are never asked for,
-        // which is the difference between not publishing a name and publishing half of one
-        // (ADR-0013, decision 3).
-        Set<Long> accounts = new LinkedHashSet<>();
-        if (scope == Scope.GLOBAL) {
-            accounts.add(accountId);
-        } else {
-            visible.forEach(entry -> accounts.add(entry.accountId()));
-        }
+                    List<Ranked> visible = indexes.stream().sorted().map(ranked::get).toList();
 
-        int myIndex = mine;
-        return repository.findDisplayNames(accounts)
-                .collectList()
-                .map(names -> response(
-                        accountId, scope, groupId, statementId, period, metric, ranking,
-                        ranked, myIndex, visible, names, smallGroup));
+                    Set<Long> accounts = new LinkedHashSet<>();
+                    if (scope == Scope.GLOBAL) {
+                        accounts.add(accountId);
+                    } else {
+                        visible.forEach(entry -> {
+                            boolean caller = entry.accountId().equals(accountId);
+                            boolean hidden = "hidden".equals(visibility.getOrDefault(entry.accountId(), "visible"));
+                            if (!hidden || caller) {
+                                accounts.add(entry.accountId());
+                            }
+                        });
+                    }
+
+                    int myIndex = mine;
+                    return repository.findDisplayNames(accounts)
+                            .collectList()
+                            .map(names -> response(
+                                    accountId, scope, groupId, statementId, period, metric, ranking,
+                                    ranked, myIndex, visible, names, smallGroup, visibility));
+                });
     }
 
     private static LeaderboardResponse response(
@@ -477,7 +543,20 @@ public class LeaderboardService {
             int mine,
             List<Ranked> visible,
             List<DisplayName> names,
-            boolean smallGroup) {
+            boolean smallGroup,
+            Map<Long, String> visibility) {
+        int rankableCount = (int) ranked.stream()
+                .filter(entry -> !"hidden".
+                        equals(visibility.getOrDefault(entry.accountId(), "visible")))
+                .count();
+
+        // A hidden classmate is out of the table for everyone; the caller's own row
+        // stays, because they know where they stand and hiding it would break the
+        // one fact #611 is explicit about (#611).
+        List<Ranked> shown = visible.stream()
+                .filter(entry -> entry.accountId().equals(accountId)
+                        || !"hidden".equals(visibility.getOrDefault(entry.accountId(), "visible")))
+                .toList();
         Map<Long, String> labels = new LinkedHashMap<>();
         names.forEach(name -> labels.put(name.accountId(), mask(name.firstName(), name.lastName())));
 
@@ -485,18 +564,27 @@ public class LeaderboardService {
         // than looked up: there is no name in `labels` for them to find.
         boolean anonymous = scope == Scope.GLOBAL;
 
-        List<LeaderboardResponse.Entry> entries = visible.stream()
+        List<LeaderboardResponse.Entry> entries = shown.stream()
                 .map(entry -> {
                     boolean caller = entry.accountId().equals(accountId);
+                    String displayName;
+                    if (caller) {
+                        displayName = labels.getOrDefault(entry.accountId(), FALLBACK_LABEL);
+                    } else if (anonymous) {
+                        displayName = OUTSIDE_LABEL;
+                    } else if ("anonymous".equals(visibility.getOrDefault(entry.accountId(), "visible"))) {
+                        // Anonymous is not a hidden row: the rank stays, the name does not.
+                        displayName = COLLEAGUE_LABEL;
+                    } else {
+                        displayName = labels.getOrDefault(entry.accountId(), FALLBACK_LABEL);
+                    }
                     return new LeaderboardResponse.Entry(
                             entry.position(),
                             // The caller's own id is their own. A colleague's would turn a
                             // masked label back into a person, since the same id answers
                             // half a dozen other endpoints.
                             caller ? accountId : null,
-                            caller ? labels.getOrDefault(entry.accountId(), FALLBACK_LABEL)
-                                    : anonymous ? OUTSIDE_LABEL
-                                            : labels.getOrDefault(entry.accountId(), FALLBACK_LABEL),
+                            displayName,
                             entry.average(),
                             entry.percentile(),
                             entry.xp(),
@@ -513,7 +601,7 @@ public class LeaderboardService {
                 period.label(),
                 metric.name().toLowerCase(Locale.ROOT),
                 ranking.totalStudents(),
-                ranked.size(),
+                rankableCount,
                 // How many schools the comparison drew from, for the reader to be told
                 // where their place came from. Zero in the scopes that are inside a single
                 // school already, where the question does not arise.

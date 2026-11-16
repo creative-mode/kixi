@@ -151,6 +151,67 @@ class LeaderboardControllerTest {
         verify(service, never()).consent(eq(42L), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
+    // ── Visibility (#611) ────────────────────────────────────────────────
+
+    @Test
+    void anonymousCannotReadTheCallersVisibility() {
+        client.get()
+                .uri("http://localhost/api/v1/leaderboard/visibility?scope=class")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void theVisibilityIsTheCallersAndNotWhicheverAccountTheBodyNames() {
+        when(service.setVisibility(eq(42L), any()))
+                .thenReturn(Mono.just(new ao.creativemode.kixi.simulations.dto.leaderboard.
+                        LeaderboardVisibilityResponse("class", "anonymous")));
+
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/visibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("scope", "class", "preference", "anonymous", "accountId", 99))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.preference").isEqualTo("anonymous");
+
+        verify(service).setVisibility(eq(42L), any());
+        verify(service, never()).setVisibility(eq(99L), any());
+    }
+
+    @Test
+    void readingCarriesNoAccountOfAnybody() {
+        when(service.visibility(eq(42L), eq("school")))
+                .thenReturn(Mono.just(new ao.creativemode.kixi.simulations.dto.leaderboard.
+                        LeaderboardVisibilityResponse("school", "hidden")));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard/visibility?scope=school")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.scope").isEqualTo("school")
+                .jsonPath("$.preference").isEqualTo("hidden");
+
+        verify(service).visibility(42L, "school");
+    }
+
+    @Test
+    void aNullBodyCannotMoveTheSwitch() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/visibility")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"scope\": null}")
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(service, never()).setVisibility(any(), any());
+    }
+
     // ── The ranking itself ───────────────────────────────────────────────
 
     @Test
