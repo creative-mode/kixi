@@ -126,6 +126,18 @@ class LeaderboardVisibilityPostgresTest {
     }
 
     @Test
+    void deletingAnAccountCascadesToItsVisibility() {
+        repository.setVisibility(FIRST, Scope.CLASS, "OUT").block(WAIT);
+        assertThat(repository.findVisibilities(FIRST).collectList().block(WAIT)).hasSize(1);
+
+        // AccountService.hardDelete removes the account row; the preference is
+        // account-scoped and must not block the purge (review of #619).
+        sql("DELETE FROM accounts WHERE id = " + FIRST);
+
+        assertThat(repository.findVisibilities(FIRST).collectList().block(WAIT)).isEmpty();
+    }
+
+    @Test
     void globalVisibilityIsRefusedByTheRepositoryToo() {
         assertThatThrownBy(() -> repository.setVisibility(FIRST, Scope.GLOBAL, "OUT"))
                 .isInstanceOf(IllegalArgumentException.class)
