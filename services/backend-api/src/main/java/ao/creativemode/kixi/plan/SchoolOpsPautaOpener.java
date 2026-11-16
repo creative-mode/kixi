@@ -93,7 +93,10 @@ public class SchoolOpsPautaOpener {
         Schedulers.boundedElastic().schedule(this::closeFinishedProvas, 1, TimeUnit.SECONDS);
     }
 
-    /** Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. */
+    /**
+     * Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. As avaliações de
+     * MAC com enunciado são provas como a P1 e a P2 (kixi#623); as sem enunciado não têm nada para encerrar.
+     */
     @Scheduled(fixedDelayString = "${schoolops.poll-ms:60000}", initialDelayString = "${schoolops.poll-ms:60000}")
     public void closeFinishedProvas() {
         if (!properties.isEnabled()) return;
@@ -101,7 +104,7 @@ public class SchoolOpsPautaOpener {
             db.sql("""
                     SELECT a.id, a.statement_id, p.pauta_ref
                     FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id LEFT JOIN exam_rooms r ON r.id = a.room_id
-                    WHERE a.kind IN ('P1', 'P2') AND a.closed_notified_at IS NULL AND a.dispensed_at IS NULL AND a.statement_id IS NOT NULL
+                    WHERE a.kind IN ('P1', 'P2', 'MAC') AND a.closed_notified_at IS NULL AND a.dispensed_at IS NULL AND a.statement_id IS NOT NULL
                       AND p.pauta_opened_at IS NOT NULL AND p.pauta_ref IS NOT NULL
                       AND ((a.room_id IS NOT NULL AND r.status = 'CLOSED') OR (a.room_id IS NULL AND a.planned_date < CURRENT_DATE))
                     ORDER BY a.id
@@ -163,14 +166,33 @@ public class SchoolOpsPautaOpener {
                 ts.getT3().ifPresent(c -> pedido.put("coordenador", c));
                 pedido.put("alunos", ts.getT2());
                 pedido.put("provas", List.of(prova(p1, "P1"), prova(p2, "P2")));
-                // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44).
-                List<Map<String, Object>> mac = assessments.stream().filter(x -> x.kind().equals("MAC") && !x.status().equals("DISPENSED"))
-                        .map(x -> Map.<String, Object>of("titulo", x.title(), "data", x.plannedDate().toString())).toList();
+                // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44). Cada uma com
+                // enunciado é uma prova como a P1 e a P2 (sourcedId e modalidade): corre o mesmo processo e a MAC é a média (schoolops#65).
+                List<Map<String, Object>> mac = macAssessments(assessments);
                 if (!mac.isEmpty()) pedido.put("avaliacoesContinuas", mac);
                 pedido.put("callback", Map.of("url", properties.getCallbackUrl()));
-                return new Built(pedido, List.of(String.valueOf(p1.statementId()), String.valueOf(p2.statementId())));
+                List<String> provas = new java.util.ArrayList<>(List.of(String.valueOf(p1.statementId()), String.valueOf(p2.statementId())));
+                mac.stream().filter(m -> m.containsKey("sourcedId")).forEach(m -> provas.add(String.valueOf(m.get("sourcedId"))));
+                return new Built(pedido, provas);
             }));
         });
+    }
+
+    /**
+     * As avaliações de MAC não dispensadas, como o motor as recebe: título e data e, com enunciado, a prova ({@code sourcedId} e
+     * {@code modalidade}: sala = digital, sem sala = papel). Sem enunciado seguem o caminho antigo (o professor lança as notas).
+     */
+    static List<Map<String, Object>> macAssessments(List<Assessment> assessments) {
+        return assessments.stream().filter(x -> x.kind().equals("MAC") && !x.status().equals("DISPENSED")).map(x -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("titulo", x.title());
+            item.put("data", x.plannedDate().toString());
+            if (x.statementId() != null) {
+                item.put("sourcedId", String.valueOf(x.statementId()));
+                item.put("modalidade", x.roomId() != null ? "DIGITAL" : "PAPEL");
+            }
+            return item;
+        }).toList();
     }
 
     private static Map<String, Object> prova(Assessment a, String componente) {
