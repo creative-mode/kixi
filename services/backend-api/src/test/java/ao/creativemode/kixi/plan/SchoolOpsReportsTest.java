@@ -54,7 +54,8 @@ class SchoolOpsReportsTest {
         plans = mock(TermPlanService.class);
         auditoria = mock(AuditoriaRelatorios.class);
         when(auditoria.registar(any(), any(), any(), any())).thenReturn(Mono.empty());
-        reports = new SchoolOpsReports(properties, plans, auditoria, WebClient.builder());
+        reports = new SchoolOpsReports(properties, plans, auditoria, WebClient.builder(),
+                mock(org.springframework.r2dbc.core.DatabaseClient.class), new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
     @AfterEach

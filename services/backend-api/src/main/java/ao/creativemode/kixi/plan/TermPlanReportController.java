@@ -36,6 +36,12 @@ public class TermPlanReportController {
         return reports.resultado(id, assessmentId).map(pdf -> responder(pdf, "resultado-" + id + "-" + assessmentId + ".pdf"));
     }
 
+    /** A pauta da turma: o motor gera-a a pedido, sem estado, a partir do registo escolar; o PDF vem na resposta. */
+    @GetMapping(value = "/{id}/reports/class", produces = MediaType.APPLICATION_PDF_VALUE)
+    public Mono<ResponseEntity<byte[]>> pautaDaTurma(@PathVariable Long id) {
+        return reports.pautaDaTurma(id).map(pdf -> responder(pdf, "pauta-turma-" + id + ".pdf"));
+    }
+
     private static ResponseEntity<byte[]> responder(byte[] pdf, String nome) {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
