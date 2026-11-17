@@ -160,6 +160,16 @@ public class SimulationController {
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
+    /**
+     * O motor avisa que não conseguiu corrigir as abertas desta simulação (kixi#609): o estado da correção passa a
+     * {@code FAILED} até a IA voltar a corrigir. Só ADMIN e INTEGRATION (a regra está no SecurityConfig e no IntegrationScope).
+     */
+    @PutMapping("/{id}/correction-failure")
+    public Mono<ResponseEntity<Void>> correctionFailure(@PathVariable Long id,
+            @Valid @RequestBody ao.creativemode.kixi.simulations.dto.simulation.CorrectionFailureRequest request) {
+        return service.markCorrectionFailed(id, request.reason()).then(Mono.just(ResponseEntity.noContent().<Void>build()));
+    }
+
     @PutMapping("/{id}/restore")
     public Mono<ResponseEntity<Void>> restore(@PathVariable Long id, @RequestParam(required = false) String reason) {
         return audited(id, true, reason, (actor, why) -> service.restore(id, actor, why))

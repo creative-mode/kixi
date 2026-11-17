@@ -49,7 +49,7 @@ class SimulationShowcaseTest {
 
     private void given(Statement statement) {
         when(results.findResult(SIMULATION, ACCOUNT, false)).thenReturn(Mono.just(new SimulationResultResponse(
-                SIMULATION, SimulationStatus.FINISHED, 14.0, 12, 15, 1, 1800, null, List.of())));
+                SIMULATION, SimulationStatus.FINISHED, 14.0, 12, 15, 1, null, null, 1800, null, List.of())));
         Simulation simulation = new Simulation();
         simulation.setId(SIMULATION);
         simulation.setStatementId(5L);

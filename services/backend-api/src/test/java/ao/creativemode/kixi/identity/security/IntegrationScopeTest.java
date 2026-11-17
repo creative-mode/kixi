@@ -31,6 +31,7 @@ class IntegrationScopeTest {
             {"POST", "/api/v1/simulations"}, {"PUT", "/api/v1/simulations/4"}, {"POST", "/api/v1/simulations/4/submit"},
             {"GET", "/api/v1/simulation-answers"}, {"POST", "/api/v1/simulation-answers"}, {"PATCH", "/api/v1/simulation-answers/7/grade"},
             {"PUT", "/api/v1/simulation-answers/7/ai-grade"},
+            {"PUT", "/api/v1/simulations/7/correction-failure"},
             {"POST", "/api/v1/ocr/answer-sheets"},
             {"PUT", "/api/v1/school-register/exams/9/grades"}, {"GET", "/api/v1/school-register/exams/9/grades"},
             {"POST", "/api/v1/school-register/exams/9/appeals/R-1"}, {"GET", "/api/v1/school-register/exams/9/appeals/pending-count"},

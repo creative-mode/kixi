@@ -169,6 +169,8 @@ public class SimulationResultService {
                 question.getParentId() == null ? null : parentText.get(question.getParentId())))
             .toList();
 
+        // O estado da correção só se mostra a quem já vê o gabarito, como a nota e as pendentes.
+        CorrectionSummary correction = answerKeyVisible ? CorrectionSummary.of(simulation, answers) : CorrectionSummary.NONE;
         return new SimulationResultResponse(
             simulation.getId(),
             simulation.getStatus(),
@@ -177,6 +179,8 @@ public class SimulationResultService {
             rendered.size(),
             answerKeyVisible ? (int) rendered.stream().filter(question -> question.reviewStatus()
                     == ao.creativemode.kixi.simulations.model.SimulationAnswerStatus.PENDING_REVIEW).count() : null,
+            correction.status(),
+            correction.correctedAt(),
             simulation.getTimeSpentSeconds(),
             simulation.getFinishedAt(),
             rendered
