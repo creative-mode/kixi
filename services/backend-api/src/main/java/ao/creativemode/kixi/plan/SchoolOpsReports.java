@@ -35,6 +35,12 @@ public class SchoolOpsReports {
     private static final Logger log = LoggerFactory.getLogger(SchoolOpsReports.class);
     private static final Duration RESPONSE = Duration.ofSeconds(15);
     private static final List<String> LOCAL = List.of("localhost", "127.0.0.1");
+    /**
+     * Tecto do PDF em memória. O codec do WebClient traz 256 KB por omissão: uma pauta da disciplina com uma turma grande
+     * passa disso e o motor respondia 200 com o Kixi a rebentar com 500. O {@code OcrServiceClient} e o {@code GroqClient}
+     * já fixam o seu por isto mesmo. 5 MB cobre uma pauta de uma centena de alunos em várias disciplinas.
+     */
+    private static final int MAX_PDF_BYTES = 5 * 1024 * 1024;
 
     private final SchoolOpsProperties properties;
     private final TermPlanService plans;
@@ -83,12 +89,22 @@ public class SchoolOpsReports {
             pedido.put("provaId", provaId);
         }
         return ligacao(pedido).flatMap(this::descarregar)
-                .flatMap(pdf -> auditoria.registar(who.accountId(), plan.id(), kind, assessmentId).thenReturn(pdf));
+                // Sem auditoria não há exportação: se o registo falhar, o PDF não sai e o erro é 503,
+                // não um 500 de base de dados a chegar ao professor.
+                .flatMap(pdf -> auditoria.registar(who.accountId(), plan.id(), kind, assessmentId)
+                        .onErrorMap(erro -> new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                                "Não foi possível registar a exportação; tente de novo."))
+                        .thenReturn(pdf));
+    }
+
+    /** Um cliente com o tecto do PDF (o codec traz 256 KB) para os pedidos e para o download. */
+    private WebClient.Builder cliente() {
+        return webClients.clone().codecs(c -> c.defaultCodecs().maxInMemorySize(MAX_PDF_BYTES));
     }
 
     /** Pede ao motor uma ligação nova e curta, e devolve o endereço assinado. */
     private Mono<String> ligacao(Map<String, Object> pedido) {
-        WebClient http = webClients.baseUrl(properties.getBaseUrl())
+        WebClient http = cliente().baseUrl(properties.getBaseUrl())
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getToken())
                 .build();
         return http.post().uri("/v1/relatorios").contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON)
@@ -103,7 +119,7 @@ public class SchoolOpsReports {
     /** Abre a ligação assinada e devolve o PDF. O motor recusa-a depois do prazo (403): isso é um 502 para o cliente. */
     private Mono<byte[]> descarregar(String url) {
         URI uri = validar(url);
-        return webClients.build().get().uri(uri).accept(MediaType.APPLICATION_PDF).retrieve().toEntity(byte[].class)
+        return cliente().build().get().uri(uri).accept(MediaType.APPLICATION_PDF).retrieve().toEntity(byte[].class)
                 .timeout(RESPONSE)
                 .onErrorMap(this::erroDaLigacao)
                 .flatMap(resposta -> {

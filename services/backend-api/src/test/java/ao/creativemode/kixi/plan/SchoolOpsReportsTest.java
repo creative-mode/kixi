@@ -16,9 +16,11 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
+import java.util.Arrays;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okio.Buffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -206,5 +208,20 @@ class SchoolOpsReportsTest {
                 .expectErrorSatisfies(e -> assertThat(((ApiException) e).getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE))
                 .verify();
         assertThat(motor.getRequestCount()).isZero();
+    }
+
+    @Test
+    void umPdfGrandePassaDoLimiteDoCodecPorOmissao() throws Exception {
+        // O codec do WebClient traz 256 KB por omissão; uma pauta real de uma turma grande passa disso.
+        byte[] grande = new byte[1_500_000];
+        Arrays.fill(grande, (byte) 'x');
+        System.arraycopy("%PDF-1.7 ".getBytes(), 0, grande, 0, 9);
+        ligacao(motor.url("/relatorios/pauta-grande.pdf?exp=1&sig=abc").toString());
+        motor.enqueue(new MockResponse().setHeader("Content-Type", "application/pdf").setBody(new Buffer().write(grande)));
+
+        StepVerifier.create(comPlano(plano("PT-1")).miniPauta(1L))
+                .expectNextMatches(bytes -> bytes.length == grande.length && bytes[0] == '%')
+                .verifyComplete();
+        verify(auditoria).registar(7L, 1L, "MINI_PAUTA", null);
     }
 }

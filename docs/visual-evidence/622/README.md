@@ -50,3 +50,17 @@ exportação verificada
 
 A **pauta da turma** (o terceiro documento da issue) precisa de juntar, por disciplina do curso, as notas de todos os
 alunos num pedido `POST /v1/pautas-turma`; fica para uma issue de seguimento, com o endpoint do motor já pronto.
+
+## Revisão (Noé) — o que ficou resolvido
+
+- **Buffer do PDF**: o codec do `WebClient` traz **256 KB** por omissão e uma pauta real de turma grande passa disso; o
+  cliente passou a fixar **5 MB** (`ExchangeStrategies`, como o `OcrServiceClient` e o `GroqClient`). O ensaio agora serve
+  uma pauta de **1,5 MB** (`mini-pauta.pdf` abaixo, o PDF real do #64 com preenchimento) e o Kixi devolve os **mesmos
+  bytes** — antes do limite isto acabava em 500. Há também um teste unitário com 1,5 MB.
+- **`Cache-Control: no-store`** na resposta do PDF (dado pessoal; um proxy partilhado da escola não o guarda).
+- **`report_exports` sem FK para `accounts`**, agora documentado na migração: o registo é a prova do acesso e sobrevive
+  à eliminação da conta.
+- **Auditoria com falha fechada**: se o registo falhar, a resposta é **503** com «Não foi possível registar a exportação;
+  tente de novo.» em vez de um 500 de base de dados.
+
+A auditoria do ensaio (`auditoria.txt`) e os pedidos ao motor (`pedidos-ao-motor.json`) são os da corrida com o PDF grande.

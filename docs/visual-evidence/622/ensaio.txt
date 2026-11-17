@@ -1,4 +1,4 @@
-ok    professor da turma: 200 com PDF real
+ok    professor da turma: 200 com o PDF grande (>1 MB) e os mesmos bytes
 ok    professor da turma: nome do ficheiro inline
 ok    professor da turma: resultado da prova 200 com PDF
 ok    coordenador da instituição: 200

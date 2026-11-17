@@ -39,6 +39,8 @@ public class TermPlanReportController {
     private static ResponseEntity<byte[]> responder(byte[] pdf, String nome) {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
+                // Pauta de disciplina é dado pessoal: o browser do professor pode vê-la, um proxy partilhado da escola não a guarda.
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + nome + "\"")
                 .body(pdf);
     }
