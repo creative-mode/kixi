@@ -1,0 +1,17 @@
+ok    professor da turma: 200 com PDF real
+ok    professor da turma: nome do ficheiro inline
+ok    professor da turma: resultado da prova 200 com PDF
+ok    coordenador da instituição: 200
+ok    administrador: 200
+ok    aluno: 403
+ok    professor de outra escola: 403
+ok    o motor recebeu MINI_PAUTA da pauta do plano
+ok    o motor recebeu RESULTADO_PROVA com o enunciado da avaliação
+ok    plano sem pauta no motor: 409
+ok    motor sem PDF gerado: 409
+ok    ligação do motor para outro anfitrião: 502
+ok    avaliação sem enunciado: 409
+ok    motor em baixo: 503 com mensagem
+ok    motor de volta: 200
+ok    auditoria regista as exportações com quem, plano e documento
+exportação verificada
