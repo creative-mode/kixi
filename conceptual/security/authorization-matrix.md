@@ -74,6 +74,10 @@ Uma pauta `ANULADA` não se mostra a ninguém. A turma e a disciplina de uma pau
 
 Multipart com `statementId` e `files` (até 10). Só quem pode **escrever o enunciado** (`StatementWriteAccessService`: administrador, o professor da turma e da disciplina, ou a conta `INTEGRATION`) o chama; o aluno recebe 403. A estrutura que o OCR procura (questões, tipos, letras) sai do enunciado e não do pedido. Devolve o contrato v1 do OCR (`sheets`, `warnings`, confiança por campo): o que foi lido, nunca uma nota. Tem o mesmo limite de uploads por conta que o resto do OCR.
 
+## Visibilidade no ranking por âmbito (kixi#611)
+
+`GET /api/v1/leaderboard/preferences` e `PUT /api/v1/leaderboard/preferences/{scope}` são `authenticated()` e operam **só sobre a conta do token**: o âmbito vem no caminho (`class`, `school` ou `friends`) e não há `accountId` no corpo. O corpo aceita `rankingVisibility` igual a `visible`, `anonymous` ou `out`; qualquer outro valor é 400. `scope=global` é recusado com 400 porque essa pergunta é o consentimento de `PUT /api/v1/leaderboard/consent`. Quem escolhe `out` continua a ler a sua própria posição; os colegas deixam de receber a linha. O aluno anónimo é publicado como «Um colega» e o nome dele não é lido da base de dados.
+
 ## Simulações e respostas dos alunos (kixi#596)
 
 A resposta de um aluno muda o que o recálculo das notas vê, por isso ninguém escreve nela em nome dele:

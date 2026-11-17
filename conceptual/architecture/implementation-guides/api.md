@@ -324,6 +324,16 @@ curl -s -X PUT $HOST/api/v1/leaderboard/consent \
 # Só depois de autorizado, e com matrícula ativa numa escola
 curl -s "$HOST/api/v1/leaderboard?scope=global" \
   -H "Authorization: Bearer $TOKEN"
+
+# Ver como apareço na turma, na escola e entre amigos
+curl -s "$HOST/api/v1/leaderboard/preferences" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Aparecer como «Um colega» na turma (visible, anonymous ou out)
+curl -s -X PUT "$HOST/api/v1/leaderboard/preferences/class" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"rankingVisibility":"anonymous"}'
 ```
 
 `period` é `all` (por omissão) ou `month`; `statementId` opcional isola um
@@ -348,6 +358,15 @@ privacidade estão em [ADR-0013](../../adr/ADR-0013-cross-institution-leaderboar
 - **Escolas pequenas não entram.** Uma instituição só contribui com dez ou mais
   alunos consentidos com nota no ano letivo; abaixo disso é descartada inteira.
   Uma escola de três seria identificável por eliminação.
+
+`GET/PUT /api/v1/leaderboard/preferences` é a visibilidade por âmbito. Os valores
+são `visible` (o nome mascarado de hoje), `anonymous` (a etiqueta «Um colega») e
+`out` (não aparece aos colegas). O âmbito vem no caminho — `class`, `school` ou
+`friends` — e a conta vem sempre do token: não há corpo nem parâmetro que nomeie
+outro aluno. Quem escolhe `out` continua a ver a sua própria posição; o que
+desaparece é a linha vista pelos outros. `global` não entra nesta rota: continua
+a ser o consentimento de `PUT /leaderboard/consent`, e os pares de outra escola
+já são sempre anónimos.
 
 `institutionsCounted` diz de quantas escolas veio a comparação — é o que torna
 uma tabela anónima legível em vez de sinistra.

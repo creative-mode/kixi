@@ -18,8 +18,10 @@ import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader.Seat;
 import ao.creativemode.kixi.shared.service.ExamRoomAccess;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardPreferencesResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository;
+import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.AccountVisibility;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.DisplayName;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.GroupScore;
 import ao.creativemode.kixi.simulations.repository.LeaderboardRepository.Scope;
@@ -1122,12 +1124,154 @@ class LeaderboardServiceTest {
         assertThat(response.myPosition()).isEqualTo(1);
     }
 
+    // ── Visibility per scope (issue #611) ───────────────────────────────────
+
+    @Test
+    void anAnonymousPeerIsLabelledUmColegaAndTheirNameIsNeverRead() {
+        cohortOf(withCaller(descending(12), 4), 12); // caller is fifth
+        when(repository.findVisibilities(any(), eq(Scope.CLASS)))
+                .thenReturn(Flux.just(new AccountVisibility(101L, "CLASS", "ANONYMOUS")));
+
+        LeaderboardResponse response = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(response.entries())
+                .filteredOn(entry -> !entry.me() && entry.position() == 1)
+                .singleElement()
+                .satisfies(entry -> {
+                    assertThat(entry.displayName()).isEqualTo("Um colega");
+                    assertThat(entry.accountId()).isNull();
+                });
+        // The name behind the anonymous row was never asked for. Reading it and then
+        // replacing it would leave it in a query log and make privacy depend on the label.
+        assertThat(namedAccounts()).doesNotContain(101L);
+    }
+
+    @Test
+    void aPeerWhoChoseOutIsNotInTheTable() {
+        cohortOf(withCaller(descending(12), 4), 12);
+        when(repository.findVisibilities(any(), eq(Scope.CLASS)))
+                .thenReturn(Flux.just(new AccountVisibility(101L, "CLASS", "OUT")));
+
+        LeaderboardResponse response = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        // The hidden account still occupies first place in the private ranking, so the
+        // rows that remain keep their real positions rather than being renumbered.
+        assertThat(positions(response)).containsExactly(2, 3, 4, 5, 6, 7).doesNotContain(1);
+    }
+
+    @Test
+    void theStudentWhoChoseOutStillSeesTheirOwnPosition() {
+        cohortOf(withCaller(descending(8), 7), 8); // last of a small class
+        when(repository.findVisibilities(any(), eq(Scope.CLASS)))
+                .thenReturn(Flux.just(new AccountVisibility(ACCOUNT_ID, "CLASS", "OUT")));
+
+        LeaderboardResponse response = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(response.myPosition()).isEqualTo(8);
+        assertThat(response.entries())
+                .filteredOn(LeaderboardResponse.Entry::me)
+                .singleElement()
+                .satisfies(entry -> assertThat(entry.position()).isEqualTo(8));
+    }
+
+    @Test
+    void hidingFromTheClassDoesNotHideFromTheSchool() {
+        cohortOf(withCaller(descending(12), 4), 12);
+        when(repository.findVisibilities(any(), eq(Scope.CLASS)))
+                .thenReturn(Flux.just(new AccountVisibility(101L, "CLASS", "OUT")));
+        when(repository.findVisibilities(any(), eq(Scope.SCHOOL)))
+                .thenReturn(Flux.empty());
+
+        LeaderboardResponse inClass = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        LeaderboardResponse inSchool = one(
+                service.leaderboard(ACCOUNT_ID, "school", null, "all", "average"));
+
+        assertThat(positions(inClass)).doesNotContain(1);
+        assertThat(positions(inSchool)).contains(1);
+    }
+
+    @Test
+    void aVisibilityChangeIsNotHeldByTheCachedCohort() {
+        cohortOf(withCaller(descending(12), 4), 12);
+
+        LeaderboardResponse before = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+        when(repository.findVisibilities(any(), eq(Scope.CLASS)))
+                .thenReturn(Flux.just(new AccountVisibility(101L, "CLASS", "OUT")));
+        LeaderboardResponse after = one(
+                service.leaderboard(ACCOUNT_ID, "class", null, "all", "average"));
+
+        assertThat(positions(before)).contains(1);
+        assertThat(positions(after)).doesNotContain(1);
+        // The cohort itself was read once; only the visibility was read again.
+        verify(repository, times(1)).findAverages(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void thePreferencesDefaultToVisibleAndCarryEveryScope() {
+        when(repository.findVisibilities(ACCOUNT_ID)).thenReturn(Flux.empty());
+
+        LeaderboardPreferencesResponse response = onePreferences(service.preferences(ACCOUNT_ID));
+
+        assertThat(response.preferences())
+                .extracting(LeaderboardPreferencesResponse.LeaderboardPreference::scope)
+                .containsExactly("class", "school", "friends");
+        assertThat(response.preferences())
+                .extracting(LeaderboardPreferencesResponse.LeaderboardPreference::rankingVisibility)
+                .containsOnly("visible");
+    }
+
+    @Test
+    void settingAVisibilityWritesOnlyTheCallersAccountAndReadsItBack() {
+        when(repository.setVisibility(anyLong(), any(), any())).thenReturn(Mono.just(true));
+        when(repository.findVisibilities(ACCOUNT_ID)).thenReturn(Flux.just(
+                new AccountVisibility(ACCOUNT_ID, "CLASS", "ANONYMOUS")));
+
+        LeaderboardPreferencesResponse response =
+                onePreferences(service.setVisibility(ACCOUNT_ID, "class", "anonymous"));
+
+        verify(repository).setVisibility(ACCOUNT_ID, Scope.CLASS, "ANONYMOUS");
+        assertThat(response.preferences())
+                .filteredOn(preference -> preference.scope().equals("class"))
+                .singleElement()
+                .satisfies(preference ->
+                        assertThat(preference.rankingVisibility()).isEqualTo("anonymous"));
+    }
+
+    @Test
+    void globalVisibilityIsRefusedBecauseConsentOwnsThatQuestion() {
+        assertThatThrownBy(() -> onePreferences(
+                service.setVisibility(ACCOUNT_ID, "global", "out")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(repository, never()).setVisibility(anyLong(), any(), any());
+    }
+
+    @Test
+    void anUnknownVisibilityIsRejected() {
+        assertThatThrownBy(() -> onePreferences(
+                service.setVisibility(ACCOUNT_ID, "class", "transparent")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(thrown -> assertThat(((ApiException) thrown).getStatus())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(repository, never()).setVisibility(anyLong(), any(), any());
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private void cohortOf(List<GroupScore> scores, long totalStudents) {
         when(repository.findAverages(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Flux.fromIterable(scores));
         when(repository.countMembers(any(), any(), any(), any())).thenReturn(Mono.just(totalStudents));
+        // No visibility row means visible, which is the default every existing test had.
+        when(repository.findVisibilities(any(), any())).thenReturn(Flux.empty());
         when(repository.findDisplayNames(any())).thenAnswer(call -> {
             Collection<Long> accounts = call.getArgument(0);
             if (accounts == null) {
@@ -1216,6 +1360,22 @@ class LeaderboardServiceTest {
 
     private static LeaderboardResponse one(Mono<LeaderboardResponse> mono) {
         return mono.block();
+    }
+
+    private static LeaderboardPreferencesResponse onePreferences(
+            Mono<LeaderboardPreferencesResponse> mono) {
+        return mono.block();
+    }
+
+    /** The account ids the repository was actually asked to name, in the last request. */
+    @SuppressWarnings("unchecked")
+    private Collection<Long> namedAccounts() {
+        return (Collection<Long>) org.mockito.Mockito.mockingDetails(repository).getInvocations()
+                .stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("findDisplayNames"))
+                .map(invocation -> invocation.getArgument(0))
+                .reduce((first, second) -> second)
+                .orElseThrow();
     }
 
     private static LeaderboardConsentResponse oneConsent(Mono<LeaderboardConsentResponse> mono) {

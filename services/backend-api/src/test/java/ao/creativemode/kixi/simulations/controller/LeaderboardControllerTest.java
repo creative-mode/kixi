@@ -32,6 +32,7 @@ import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.security.RequestIdWebFilter;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardConsentResponse;
+import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardPreferencesResponse;
 import ao.creativemode.kixi.simulations.dto.leaderboard.LeaderboardResponse;
 import ao.creativemode.kixi.simulations.service.LeaderboardService;
 
@@ -149,6 +150,104 @@ class LeaderboardControllerTest {
                 .expectStatus().isBadRequest();
 
         verify(service, never()).consent(eq(42L), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    // ── Visibility preferences (issue #611) ─────────────────────────────
+
+    @Test
+    void anonymousCannotReadOrChangeVisibility() {
+        client.get()
+                .uri("http://localhost/api/v1/leaderboard/preferences")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        client.put()
+                .uri("http://localhost/api/v1/leaderboard/preferences/class")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("rankingVisibility", "out"))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        verify(service, never()).preferences(any());
+        verify(service, never()).setVisibility(any(), any(), any());
+    }
+
+    @Test
+    void aVisibilityIsTheCallersAndNotWhicheverAccountTheBodyNames() {
+        when(service.setVisibility(eq(42L), eq("class"), eq("anonymous")))
+                .thenReturn(Mono.just(preferences()));
+
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/preferences/class")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("rankingVisibility", "anonymous", "accountId", 99))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.preferences[0].scope").isEqualTo("class")
+                .jsonPath("$.preferences[0].rankingVisibility").isEqualTo("anonymous");
+
+        verify(service).setVisibility(42L, "class", "anonymous");
+        verify(service, never()).setVisibility(eq(99L), any(), any());
+    }
+
+    @Test
+    void aVisibilityWithoutAValueIsRefusedRatherThanGuessedAt() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/preferences/class")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of())
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(service, never()).setVisibility(any(), any(), any());
+    }
+
+    @Test
+    void aVisibilityOutsideTheThreeAnswersIsRefused() {
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/preferences/class")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("rankingVisibility", "transparent"))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(service, never()).setVisibility(any(), any(), any());
+    }
+
+    @Test
+    void anUnknownScopeReachesTheServiceAsABadRequest() {
+        when(service.setVisibility(eq(42L), eq("global"), eq("out")))
+                .thenReturn(Mono.error(ApiException.badRequest(
+                        "scope=global is governed by PUT /api/v1/leaderboard/consent")));
+
+        client.mutateWith(studentJwt())
+                .put()
+                .uri("http://localhost/api/v1/leaderboard/preferences/global")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("rankingVisibility", "out"))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(service).setVisibility(42L, "global", "out");
+    }
+
+    @Test
+    void thePreferencesComeBackForTheCaller() {
+        when(service.preferences(42L)).thenReturn(Mono.just(preferences()));
+
+        client.mutateWith(studentJwt())
+                .get()
+                .uri("http://localhost/api/v1/leaderboard/preferences")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.preferences.length()").isEqualTo(3)
+                .jsonPath("$.preferences[0].scope").isEqualTo("class")
+                .jsonPath("$.preferences[0].rankingVisibility").isEqualTo("anonymous");
     }
 
     // ── The ranking itself ───────────────────────────────────────────────
@@ -321,6 +420,13 @@ class LeaderboardControllerTest {
     private static LeaderboardResponse globalRanking() {
         return new LeaderboardResponse("global", null, null, "all", "average", 21, 11, 2, false,
                 1, 75.0, 75.0, List.of());
+    }
+
+    private static LeaderboardPreferencesResponse preferences() {
+        return new LeaderboardPreferencesResponse(List.of(
+                new LeaderboardPreferencesResponse.LeaderboardPreference("class", "anonymous"),
+                new LeaderboardPreferencesResponse.LeaderboardPreference("school", "visible"),
+                new LeaderboardPreferencesResponse.LeaderboardPreference("friends", "visible")));
     }
 
     private static WebTestClientConfigurer studentJwt() {
