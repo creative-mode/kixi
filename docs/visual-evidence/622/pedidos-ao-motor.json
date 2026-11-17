@@ -1,0 +1,19 @@
+[
+  {
+    "pautaId": "PT-TESTE",
+    "tipo": "MINI_PAUTA"
+  },
+  {
+    "pautaId": "PT-TESTE",
+    "tipo": "RESULTADO_PROVA",
+    "provaId": "9001"
+  },
+  {
+    "pautaId": "PT-TESTE",
+    "tipo": "MINI_PAUTA"
+  },
+  {
+    "pautaId": "PT-TESTE",
+    "tipo": "MINI_PAUTA"
+  }
+]
