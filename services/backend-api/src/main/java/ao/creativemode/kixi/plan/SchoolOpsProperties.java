@@ -17,8 +17,17 @@ public class SchoolOpsProperties {
     private String eventsSecret = "";
     private String callbackUrl = "";
 
+    /**
+     * O motor configurado para pedidos: base e token. Não exige o callback dos eventos — há instalações que só
+     * exportam relatórios e não recebem eventos.
+     */
+    public boolean isConfigured() {
+        return enabled && !baseUrl.isBlank() && !token.isBlank();
+    }
+
+    /** O fluxo das pautas, que precisa também do callback para onde o motor envia os eventos. */
     public boolean isEnabled() {
-        return enabled && !baseUrl.isBlank() && !token.isBlank() && !callbackUrl.isBlank();
+        return isConfigured() && !callbackUrl.isBlank();
     }
 
     public boolean isEventsConfigured() {
