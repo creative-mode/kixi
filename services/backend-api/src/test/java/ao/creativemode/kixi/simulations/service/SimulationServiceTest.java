@@ -107,7 +107,7 @@ class SimulationServiceTest {
     @Test
     void findByIdExposesEffectiveDeadlineForAccountWithoutExtraTime() {
         LocalDateTime startedAt = LocalDateTime.of(2026, 3, 1, 10, 0);
-        LocalDateTime deadline = startedAt.plusMinutes(30).plusSeconds(10);
+        LocalDateTime deadline = startedAt.plusMinutes(30).plusSeconds(120);
         Account account = account(1L);
         account.setAccessibilityExtraTime(false);
         Statement statement = new Statement();

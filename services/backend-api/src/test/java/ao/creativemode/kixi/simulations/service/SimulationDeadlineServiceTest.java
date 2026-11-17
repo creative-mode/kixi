@@ -92,7 +92,7 @@ class SimulationDeadlineServiceTest {
         givenAccount(null);
 
         StepVerifier.create(service.deadline(simulation))
-                .expectNext(now.minusMinutes(29).plusMinutes(30).plusSeconds(10))
+                .expectNext(now.minusMinutes(29).plusMinutes(30).plusSeconds(120))
                 .verifyComplete();
     }
 
@@ -123,7 +123,7 @@ class SimulationDeadlineServiceTest {
         givenStatement(30);
         givenAccount(null);
         when(examRooms.roomClosed(77L)).thenReturn(Mono.just(true));
-        when(examRooms.effectiveRoomDeadline(77L, now.plusMinutes(25).plusSeconds(10)))
+        when(examRooms.effectiveRoomDeadline(77L, now.plusMinutes(25).plusSeconds(120)))
                 .thenReturn(Mono.just(roomEndsAt));
 
         StepVerifier.create(service.deadline(simulation)).expectNext(roomEndsAt).verifyComplete();
@@ -132,7 +132,7 @@ class SimulationDeadlineServiceTest {
 
     @Test
     void toleranceKeepsTheSimulationOpenRightAfterTheDeadline() {
-        Simulation simulation = started(now.minusSeconds(30 * 60L + 5));
+        Simulation simulation = started(now.minusSeconds(30 * 60L + 119));
         givenStatement(30);
         givenAccount(null);
 
@@ -141,7 +141,7 @@ class SimulationDeadlineServiceTest {
 
     @Test
     void simulationExpiresOnceTheToleranceIsUsedUp() {
-        Simulation simulation = started(now.minusSeconds(30 * 60L + 11));
+        Simulation simulation = started(now.minusSeconds(30 * 60L + 121));
         givenStatement(30);
         givenAccount(null);
 
@@ -168,7 +168,7 @@ class SimulationDeadlineServiceTest {
         givenAccount(Boolean.TRUE);
 
         StepVerifier.create(service.deadline(simulation))
-                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(30 * 60L / 4 + 10))
+                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(30 * 60L / 4 + 120))
                 .verifyComplete();
         StepVerifier.create(service.expired(simulation, now)).expectNext(false).verifyComplete();
     }
@@ -189,7 +189,7 @@ class SimulationDeadlineServiceTest {
         givenAccount(Boolean.FALSE);
 
         StepVerifier.create(service.deadline(simulation))
-                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(10))
+                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(120))
                 .verifyComplete();
     }
 
@@ -211,7 +211,7 @@ class SimulationDeadlineServiceTest {
         when(accounts.findById(ACCOUNT_ID)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.deadline(simulation))
-                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(10))
+                .expectNext(now.minusMinutes(35).plusMinutes(30).plusSeconds(120))
                 .verifyComplete();
     }
 
@@ -230,9 +230,9 @@ class SimulationDeadlineServiceTest {
         LocalDateTime start = LocalDateTime.of(2026, 3, 1, 9, 0, 0);
 
         assertThat(service.effectiveDeadlineFor(start, 30, false))
-                .isEqualTo(start.plusMinutes(30).plusSeconds(10));
+                .isEqualTo(start.plusMinutes(30).plusSeconds(120));
         assertThat(service.effectiveDeadlineFor(start, 30, true))
-                .isEqualTo(start.plusSeconds(30 * 75 + 10));
+                .isEqualTo(start.plusSeconds(30 * 75 + 120));
         assertThat(service.effectiveDeadlineFor(null, 30, false)).isNull();
         assertThat(service.effectiveDeadlineFor(start, null, true)).isNull();
     }

@@ -57,7 +57,7 @@ public class TutorExamGuard {
     private final int toleranceSeconds;
 
     public TutorExamGuard(DatabaseClient db, Clock clock,
-            @Value("${app.simulations.tolerance-seconds:10}") int toleranceSeconds) {
+            @Value("${app.simulations.tolerance-seconds:120}") int toleranceSeconds) {
         this.db = db;
         this.clock = clock;
         this.toleranceSeconds = toleranceSeconds;
