@@ -4,8 +4,13 @@ import ao.creativemode.kixi.plan.TermPlanService.Access;
 import ao.creativemode.kixi.plan.TermPlanService.Assessment;
 import ao.creativemode.kixi.plan.TermPlanService.Plan;
 import ao.creativemode.kixi.shared.exception.ApiException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +20,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -46,13 +53,17 @@ public class SchoolOpsReports {
     private final TermPlanService plans;
     private final AuditoriaRelatorios auditoria;
     private final WebClient.Builder webClients;
+    private final DatabaseClient db;
+    private final ObjectMapper json;
 
     public SchoolOpsReports(SchoolOpsProperties properties, TermPlanService plans, AuditoriaRelatorios auditoria,
-            WebClient.Builder webClients) {
+            WebClient.Builder webClients, DatabaseClient db, ObjectMapper json) {
         this.properties = properties;
         this.plans = plans;
         this.auditoria = auditoria;
         this.webClients = webClients;
+        this.db = db;
+        this.json = json;
     }
 
     /** A pauta da disciplina (mini-pauta homologada): o último PDF que o motor gerou para a pauta do plano. */
@@ -72,6 +83,161 @@ public class SchoolOpsReports {
             }
             return exportar(who, plan, "RESULTADO_PROVA", String.valueOf(assessment.statementId()), assessmentId);
         }));
+    }
+
+    /**
+     * A pauta da turma: o motor gera-a a pedido, sem estado, a partir do pedido que o Kixi monta com o registo escolar
+     * (turma, curso, alunos e as notas por disciplina). Não há ligação pelo meio: o PDF vem na resposta.
+     */
+    public Mono<byte[]> pautaDaTurma(Long planId) {
+        return plans.access().flatMap(who -> plans.get(who, planId).flatMap(plan -> {
+            if (!properties.isConfigured()) {
+                return Mono.error(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "Reports are unavailable: the school ops motor is not configured."));
+            }
+            if (plan.institutionId() == null) {
+                return Mono.error(ApiException.conflict("This plan has no institution, so there is no class sheet to export."));
+            }
+            return pedidoDaTurma(plan)
+                    .flatMap(pedido -> pedirPautaDaTurma(pedido)
+                            .flatMap(pdf -> auditoria.registar(who.accountId(), plan.id(), "PAUTA_TURMA", null)
+                                    .onErrorMap(erro -> new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                                            "Não foi possível registar a exportação; tente de novo."))
+                                    .thenReturn(pdf)));
+        }));
+    }
+
+    /** Turma, curso, alunos e as notas de cada disciplina, a partir do registo escolar que o motor já escreveu. */
+    private Mono<Map<String, Object>> pedidoDaTurma(Plan plan) {
+        return db.sql("SELECT code, name FROM institutions WHERE id = :i AND deleted_at IS NULL").bind("i", plan.institutionId())
+                .map((r, m) -> new Instituicao(r.get("code", String.class), r.get("name", String.class))).one()
+                .switchIfEmpty(Mono.error(ApiException.notFound("Institution not found: " + plan.institutionId())))
+                .flatMap(instituicao -> db.sql("SELECT code, grade, course_id, school_year_id FROM classes WHERE id = :c AND deleted_at IS NULL")
+                        .bind("c", plan.classId())
+                        .map((r, m) -> new Turma(r.get("code", String.class), r.get("grade", Integer.class),
+                                r.get("course_id", Long.class), r.get("school_year_id", Long.class))).one()
+                        .switchIfEmpty(Mono.error(ApiException.notFound("Class not found: " + plan.classId())))
+                        .flatMap(turma -> db.sql("SELECT code, name FROM courses WHERE id = :id").bind("id", turma.courseId())
+                                .map((r, m) -> new Curso(r.get("code", String.class), r.get("name", String.class))).one()
+                                .switchIfEmpty(Mono.error(ApiException.notFound("Course not found: " + turma.courseId())))
+                                .flatMap(curso -> folhasDaTurma(plan).flatMap(folhas -> {
+                                    if (folhas.folhas().isEmpty()) {
+                                        return Mono.error(ApiException.conflict(
+                                                "Ainda não há pautas desta turma e trimestre: exporta depois de o professor fechar as provas."));
+                                    }
+                                    Map<Long, PautaDaTurma.Aluno> alunos = alunos(folhas.entradas());
+                                    if (alunos.isEmpty()) {
+                                        return Mono.error(ApiException.conflict("As pautas desta turma ainda não têm alunos com número."));
+                                    }
+                                    String anoLectivo = folhas.anoLectivo() == null ? plan.termNumber() + "º trimestre" : folhas.anoLectivo();
+                                    return Mono.just(PautaDaTurma.montar(plan.institutionId(), instituicao.nome(), instituicao.sigla(),
+                                            plan.classId(), turma.nome(), turma.classe(), turma.anoId(), anoLectivo, plan.termNumber(),
+                                            turma.courseId(), curso.sigla(), curso.nome(),
+                                            new ArrayList<>(alunos.values()), folhas.disciplinas()));
+                                }))));
+    }
+
+    private record Instituicao(String sigla, String nome) {
+    }
+
+    private record Turma(String nome, Integer classe, Long courseId, Long anoId) {
+    }
+
+    private record Curso(String sigla, String nome) {
+    }
+
+    private record Folha(String sheetId, JsonNode contexto) {
+    }
+
+    private record Linha(String sheetId, String componente, Long accountId, BigDecimal nota, String situacao, JsonNode payload) {
+    }
+
+    private record FolhasDaTurma(List<Folha> folhas, List<Linha> entradas, String anoLectivo,
+            List<PautaDaTurma.Disciplina> disciplinas) {
+    }
+
+    /** As folhas do registo desta turma e trimestre, com as entradas de cada uma. */
+    private Mono<FolhasDaTurma> folhasDaTurma(Plan plan) {
+        return db.sql("SELECT sheet_id, CAST(context AS text) AS c FROM register_term_sheets WHERE status IN ('REGISTADA', 'FECHADA')")
+                .map((r, m) -> new Folha(r.get("sheet_id", String.class), ler(r.get("c", String.class)))).all().collectList()
+                .flatMap(todas -> {
+                    List<Folha> daTurma = todas.stream().filter(f -> daTurma(f.contexto(), plan)).toList();
+                    if (daTurma.isEmpty()) {
+                        return Mono.just(new FolhasDaTurma(List.of(), List.of(), null, List.of()));
+                    }
+                    String anoLectivo = daTurma.stream().map(f -> f.contexto().path("anoLectivo").asText("")).filter(a -> !a.isBlank())
+                            .findFirst().orElse(null);
+                    return db.sql("SELECT sheet_id, component, account_id, score, status, CAST(payload AS text) AS p"
+                                    + " FROM register_term_entries WHERE sheet_id IN (:ids)")
+                            .bind("ids", daTurma.stream().map(Folha::sheetId).toList())
+                            .map((r, m) -> new Linha(r.get("sheet_id", String.class), r.get("component", String.class),
+                                    r.get("account_id", Long.class), r.get("score", BigDecimal.class), r.get("status", String.class),
+                                    ler(r.get("p", String.class)))).all().collectList()
+                            .map(entradas -> new FolhasDaTurma(daTurma, entradas, anoLectivo, disciplinas(daTurma, entradas)));
+                });
+    }
+
+    private boolean daTurma(JsonNode contexto, Plan plan) {
+        String turmaId = contexto.path("turmaId").asText("");
+        String raiz = turmaId.split("-", 2)[0];
+        return String.valueOf(plan.classId()).equals(raiz) && contexto.path("trimestre").asInt() == plan.termNumber();
+    }
+
+    /** O número e o nome vieram do motor no payload de cada entrada; o aluno é a conta. */
+    private static Map<Long, PautaDaTurma.Aluno> alunos(List<Linha> entradas) {
+        Map<Long, PautaDaTurma.Aluno> alunos = new LinkedHashMap<>();
+        for (Linha linha : entradas) {
+            JsonNode payload = linha.payload();
+            Integer numero = payload.path("numero").isNumber() ? payload.path("numero").asInt() : null;
+            String nome = payload.path("nome").asText("");
+            alunos.putIfAbsent(linha.accountId(), new PautaDaTurma.Aluno(linha.accountId(), numero, nome, null));
+        }
+        return alunos;
+    }
+
+    private static List<PautaDaTurma.Disciplina> disciplinas(List<Folha> folhas, List<Linha> entradas) {
+        List<PautaDaTurma.Disciplina> disciplinas = new ArrayList<>();
+        for (Folha folha : folhas) {
+            JsonNode contexto = folha.contexto();
+            Map<String, List<PautaDaTurma.Entrada>> porComponente = new LinkedHashMap<>();
+            entradas.stream().filter(l -> l.sheetId().equals(folha.sheetId()))
+                    .sorted(Comparator.comparing(Linha::accountId))
+                    .forEach(l -> porComponente.computeIfAbsent(l.componente(), k -> new ArrayList<>())
+                            .add(new PautaDaTurma.Entrada(l.accountId(), l.nota(), l.situacao())));
+            if (porComponente.isEmpty()) {
+                continue;
+            }
+            disciplinas.add(new PautaDaTurma.Disciplina(contexto.path("disciplinaId").asLong(),
+                    contexto.path("disciplinaSigla").asText(""), contexto.path("disciplina").asText(""), porComponente));
+        }
+        return disciplinas;
+    }
+
+    private JsonNode ler(String jsonTexto) {
+        try {
+            return jsonTexto == null || jsonTexto.isBlank() ? json.createObjectNode() : json.readTree(jsonTexto);
+        } catch (Exception e) {
+            return json.createObjectNode();
+        }
+    }
+
+    /** Pede ao motor a folha da turma: o PDF vem na própria resposta, não há ligação. */
+    private Mono<byte[]> pedirPautaDaTurma(Map<String, Object> pedido) {
+        return cliente().baseUrl(properties.getBaseUrl())
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getToken())
+                .build().post().uri("/v1/pautas-turma").contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_PDF)
+                .bodyValue(pedido).retrieve().toEntity(byte[].class)
+                .timeout(RESPONSE)
+                .onErrorMap(this::erroDoPedido)
+                .flatMap(this::comoPdf);
+    }
+
+    private Mono<byte[]> comoPdf(ResponseEntity<byte[]> resposta) {
+        MediaType tipo = resposta.getHeaders().getContentType();
+        byte[] corpo = resposta.getBody();
+        if (corpo == null || corpo.length == 0 || tipo == null || !MediaType.APPLICATION_PDF.isCompatibleWith(tipo)) {
+            return Mono.error(new ApiException(HttpStatus.BAD_GATEWAY, "The report did not come back as a PDF."));
+        }
+        return Mono.just(corpo);
     }
 
     private Mono<byte[]> exportar(Access who, Plan plan, String kind, String provaId, Long assessmentId) {
@@ -122,14 +288,7 @@ public class SchoolOpsReports {
         return cliente().build().get().uri(uri).accept(MediaType.APPLICATION_PDF).retrieve().toEntity(byte[].class)
                 .timeout(RESPONSE)
                 .onErrorMap(this::erroDaLigacao)
-                .flatMap(resposta -> {
-                    MediaType tipo = resposta.getHeaders().getContentType();
-                    byte[] corpo = resposta.getBody();
-                    if (corpo == null || corpo.length == 0 || tipo == null || !MediaType.APPLICATION_PDF.isCompatibleWith(tipo)) {
-                        return Mono.error(new ApiException(HttpStatus.BAD_GATEWAY, "The report link did not return a PDF."));
-                    }
-                    return Mono.just(corpo);
-                });
+                .flatMap(this::comoPdf);
     }
 
     /**

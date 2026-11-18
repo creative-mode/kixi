@@ -1,0 +1,13 @@
+{
+  "pdf": {
+    "status": 200,
+    "bytes": 22152,
+    "tipo": "application/pdf",
+    "cache": "no-store"
+  },
+  "aluno": 403,
+  "semPautas": 409,
+  "auditoria": [
+    "9601|9501|PAUTA_TURMA|0"
+  ]
+}
