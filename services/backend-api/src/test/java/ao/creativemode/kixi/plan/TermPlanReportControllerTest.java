@@ -39,4 +39,17 @@ class TermPlanReportControllerTest {
         assertThat(resposta.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION)).isEqualTo("inline; filename=\"resultado-1-5.pdf\"");
         assertThat(resposta.getBody()).isNotEmpty();
     }
+
+    @Test
+    void aPautaDaTurmaVoltaComoPdfInlineESemCache() {
+        when(reports.pautaDaTurma(1L)).thenReturn(Mono.just("%PDF-1.4".getBytes(StandardCharsets.UTF_8)));
+
+        ResponseEntity<byte[]> resposta = controller.pautaDaTurma(1L).block();
+
+        assertThat(resposta.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resposta.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+        assertThat(resposta.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
+        assertThat(resposta.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION)).isEqualTo("inline; filename=\"pauta-turma-1.pdf\"");
+        assertThat(resposta.getBody()).isNotEmpty();
+    }
 }
