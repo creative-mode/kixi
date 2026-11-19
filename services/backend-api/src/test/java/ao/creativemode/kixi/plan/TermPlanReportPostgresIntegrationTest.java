@@ -105,8 +105,14 @@ class TermPlanReportPostgresIntegrationTest {
     }
 
     @AfterAll
-    static void pararMotor() throws IOException {
-        MOTOR.shutdown();
+    static void pararMotor() {
+        try {
+            MOTOR.shutdown();
+        } catch (IOException e) {
+            // Um teste que falhe a meio pode deixar um pedido em voo e o MockWebServer
+            // desiste da fila. Não se transforma isso num erro de `beforeAll` além da
+            // falha que já existe (revisão do #634).
+        }
     }
 
     /** A base é partilhada pela suite: o que este teste semeia não pode aparecer nos outros. */
