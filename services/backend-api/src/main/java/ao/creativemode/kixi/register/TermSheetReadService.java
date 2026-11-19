@@ -60,12 +60,13 @@ public class TermSheetReadService {
     public record Row(Long accountId, Object number, String name, String processNumber, Object mac, Object p1, Object p2, Object mt,
                       String status, boolean adjusted) { }
 
-    public record Detail(Summary sheet, List<Row> rows) { }
+    /** {@code dispensed}: as provas ("P1", "P2") que a escola dispensou; nelas {@code null} é «sem nota, sem falta», e não ausência (kixi#635). */
+    public record Detail(Summary sheet, List<Row> rows, List<String> dispensed) { }
 
     public record Mine(String sheetId, Integer termNumber, String schoolYear, String subjectName, String subjectCode,
                        String className, String processNumber, OwnRow row) { }
 
-    public record OwnRow(Object mac, Object p1, Object p2, Object mt, String status) { }
+    public record OwnRow(Object mac, Object p1, Object p2, Object mt, String status, List<String> dispensed) { }
 
     public Mono<java.util.Set<Long>> coordinatorInstitutions(Long accountId) {
         return db.sql("SELECT institution_id FROM institution_coordinators WHERE account_id = :a").bind("a", accountId)
@@ -99,8 +100,18 @@ public class TermSheetReadService {
                         row.get("c", String.class), row.get("s", String.class), row.get("updated_at", LocalDateTime.class)))
                 .one()
                 .filter(reader::sees)
-                .flatMap(sheet -> rows(sheetId, sheet).collectList().map(rows -> new Detail(sheet, rows)))
+                .flatMap(sheet -> rows(sheetId, sheet).collectList().zipWith(dispensedOf(sheetId)).map(t -> new Detail(sheet, t.getT1(), t.getT2())))
                 .switchIfEmpty(missing);
+    }
+
+    /**
+     * As provas P1/P2 dispensadas da pauta: o motor entrega-as sem nota e o Kixi, que as dispensou no plano, sabe distingui-las de
+     * uma prova a que o aluno faltou. A pauta do motor é a do plano ({@code term_plans.pauta_ref}).
+     */
+    Mono<List<String>> dispensedOf(String sheetId) {
+        return db.sql("SELECT a.kind FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id"
+                        + " WHERE p.pauta_ref = :s AND a.kind IN ('P1', 'P2') AND a.dispensed_at IS NOT NULL ORDER BY a.kind")
+                .bind("s", sheetId).map((row, meta) -> row.get(0, String.class)).all().collectList();
     }
 
     /** account_id → número de processo na escola, só dos alunos que o têm (kixi#512). Lê-se agora e não do payload do motor. */
@@ -159,10 +170,13 @@ public class TermSheetReadService {
                     Object mt = payload.get("mt") != null ? payload.get("mt") : row.get("score", java.math.BigDecimal.class);
                     return new Mine(sheet.sheetId(), sheet.termNumber(), sheet.schoolYear(), sheet.subjectName(), sheet.subjectCode(),
                             sheet.className(), null, new OwnRow(payload.get("mac"), payload.get("npp"), payload.get("npt"), mt,
-                            row.get("es", String.class)));
+                            row.get("es", String.class), List.of()));
                 })
                 .all()
-                .concatMap(mine -> ownProcessNumber(accountId, mine));
+                .concatMap(mine -> ownProcessNumber(accountId, mine))
+                .concatMap(mine -> dispensedOf(mine.sheetId()).map(dispensed -> new Mine(mine.sheetId(), mine.termNumber(), mine.schoolYear(),
+                        mine.subjectName(), mine.subjectCode(), mine.className(), mine.processNumber(),
+                        new OwnRow(mine.row().mac(), mine.row().p1(), mine.row().p2(), mine.row().mt(), mine.row().status(), dispensed))));
     }
 
     /** O número de processo do próprio aluno na escola desta pauta (kixi#512); sem número, a linha segue sem ele. */

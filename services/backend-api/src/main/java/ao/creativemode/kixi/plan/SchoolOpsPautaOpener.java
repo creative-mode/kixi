@@ -136,10 +136,9 @@ public class SchoolOpsPautaOpener {
 
     Mono<Built> request(Long planId) {
         return plans.assessmentsOf(planId).collectList().flatMap(assessments -> {
-            Assessment p1 = assessments.stream().filter(a -> a.kind().equals("P1")).findFirst().orElse(null);
-            Assessment p2 = assessments.stream().filter(a -> a.kind().equals("P2")).findFirst().orElse(null);
-            if (p1 == null || p2 == null || p1.statementId() == null || p2.statementId() == null) {
-                log.warn("[schoolops] plano {}: sem P1 e P2 com enunciado (dispensada?), a pauta não abre sozinha", planId);
+            List<Assessment> exams = examsToSend(assessments);
+            if (exams.isEmpty()) {
+                log.warn("[schoolops] plano {}: sem nenhuma prova P1/P2 com enunciado por enviar, a pauta não abre sozinha", planId);
                 return Mono.empty();
             }
             return db.sql("""
@@ -165,13 +164,13 @@ public class SchoolOpsPautaOpener {
                 // O coordenador da escola é opcional no contrato: com ele, o motor atribui-lhe as homologações (kixi#602).
                 ts.getT3().ifPresent(c -> pedido.put("coordenador", c));
                 pedido.put("alunos", ts.getT2());
-                pedido.put("provas", List.of(prova(p1, "P1"), prova(p2, "P2")));
+                pedido.put("provas", exams.stream().map(a -> prova(a, a.kind())).toList());
                 // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44). Cada uma com
                 // enunciado é uma prova como a P1 e a P2 (sourcedId e modalidade): corre o mesmo processo e a MAC é a média (schoolops#65).
                 List<Map<String, Object>> mac = macAssessments(assessments);
                 if (!mac.isEmpty()) pedido.put("avaliacoesContinuas", mac);
                 pedido.put("callback", Map.of("url", properties.getCallbackUrl()));
-                List<String> provas = new java.util.ArrayList<>(List.of(String.valueOf(p1.statementId()), String.valueOf(p2.statementId())));
+                List<String> provas = new java.util.ArrayList<>(exams.stream().map(a -> String.valueOf(a.statementId())).toList());
                 mac.stream().filter(m -> m.containsKey("sourcedId")).forEach(m -> provas.add(String.valueOf(m.get("sourcedId"))));
                 return new Built(pedido, provas);
             }));
@@ -193,6 +192,22 @@ public class SchoolOpsPautaOpener {
             }
             return item;
         }).toList();
+    }
+
+    /**
+     * As provas P1/P2 que seguem no pedido (kixi#635): as não dispensadas, no máximo uma por componente, cada uma com enunciado
+     * (o motor identifica a prova por ele). A componente dispensada fica de fora e o motor trata-a como dispensada. Vazio quando
+     * não há nenhuma para enviar ou quando uma prova por dispensar ainda não tem enunciado (a pauta espera por ela).
+     */
+    static List<Assessment> examsToSend(List<Assessment> assessments) {
+        List<Assessment> exams = new ArrayList<>();
+        for (String kind : List.of("P1", "P2")) {
+            Assessment a = assessments.stream().filter(x -> x.kind().equals(kind)).findFirst().orElse(null);
+            if (a != null && a.status().equals("DISPENSED")) continue;
+            if (a == null || a.statementId() == null) return List.of();
+            exams.add(a);
+        }
+        return exams;
     }
 
     private static Map<String, Object> prova(Assessment a, String componente) {
