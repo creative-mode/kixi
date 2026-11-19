@@ -124,7 +124,10 @@ public class SchoolOpsReports {
                                         return Mono.error(ApiException.conflict(
                                                 "Ainda não há pautas desta turma e trimestre: exporta depois de o professor fechar as provas."));
                                     }
-                                    Map<Long, PautaDaTurma.Aluno> alunos = alunos(folhas.entradas());
+                                    // Sem número não há linha na folha: o contrato exige-o, e o `montar` filtra-os.
+                                    // Se nenhum tiver número, o PDF sairia sem alunos — melhor dizer porquê (409).
+                                    List<PautaDaTurma.Aluno> alunos = alunos(folhas.entradas()).values().stream()
+                                            .filter(a -> a.numero() != null && a.numero() >= 1).toList();
                                     if (alunos.isEmpty()) {
                                         return Mono.error(ApiException.conflict("As pautas desta turma ainda não têm alunos com número."));
                                     }
@@ -132,7 +135,7 @@ public class SchoolOpsReports {
                                     return Mono.just(PautaDaTurma.montar(plan.institutionId(), instituicao.nome(), instituicao.sigla(),
                                             plan.classId(), turma.nome(), turma.classe(), turma.anoId(), anoLectivo, plan.termNumber(),
                                             turma.courseId(), curso.sigla(), curso.nome(),
-                                            new ArrayList<>(alunos.values()), folhas.disciplinas()));
+                                            new ArrayList<>(alunos), folhas.disciplinas()));
                                 }))));
     }
 
