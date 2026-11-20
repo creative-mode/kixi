@@ -81,6 +81,8 @@ class TermSheetReadPostgresIntegrationTest {
         sql("DELETE FROM users WHERE account_id IN (" + accounts + ")");
         sql("DELETE FROM register_term_entries WHERE sheet_id LIKE 'PT-506-%'");
         sql("DELETE FROM register_term_sheets WHERE sheet_id LIKE 'PT-506-%'");
+        sql("DELETE FROM term_assessments WHERE plan_id IN (SELECT id FROM term_plans WHERE class_id IN (506001, 506002))");
+        sql("DELETE FROM term_plans WHERE class_id IN (506001, 506002)");
         sql("DELETE FROM teaching_assignments WHERE teacher_id IN (506002, 506003)");
         sql("DELETE FROM teachers WHERE id IN (506002, 506003)");
         sql("DELETE FROM classes WHERE id IN (506001, 506002)");
@@ -164,6 +166,21 @@ class TermSheetReadPostgresIntegrationTest {
         bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-D").exchange().expectStatus().isNotFound();
         bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-NAO-EXISTE").exchange().expectStatus().isNotFound();
         assertThat(ids(token(ADMIN, "ADMIN"), "/api/v1/term-sheets?termNumber=1&classId=506001")).containsExactly("PT-506-A");
+    }
+
+    @Test
+    void aDispensedExamIsReportedSoNullIsNotMistakenForAnAbsence() {
+        // kixi#635: a P2 dispensada chega do motor sem nota; o Kixi sabe que foi dispensada e di-lo; a pauta sem plano não diz nada
+        sql("INSERT INTO term_plans (id, class_id, subject_id, term_id, created_by, pauta_ref) VALUES (506901, 506001, 506001, 1, 506001, 'PT-506-A')");
+        sql("INSERT INTO term_assessments (plan_id, kind, seq, title, planned_date, dispensed_at, dispensed_reason) VALUES "
+                + "(506901, 'P2', 1, 'P2', current_date, now(), 'Prova dispensada pela escola')");
+
+        bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.dispensed.length()").isEqualTo(1).jsonPath("$.dispensed[0]").isEqualTo("P2");
+        bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-C").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.dispensed.length()").isEqualTo(0);
+        bearer(token(ANA, "STUDENT")).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$[?(@.sheetId == 'PT-506-A')].row.dispensed[0]").isEqualTo("P2");
     }
 
     @Test

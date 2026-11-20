@@ -252,7 +252,7 @@ public class TermPlanService {
 
     /**
      * O professor da turma e disciplina conclui o agendamento: a pauta abre no motor, cada componente fica à espera da sua data.
-     * Pede P1 e P2 com enunciado (o contrato do motor identifica a prova pelo enunciado).
+     * Pede P1 e P2 com enunciado, ou só uma delas se a outra estiver dispensada (o contrato do motor identifica a prova pelo enunciado).
      */
     @Transactional
     public Mono<Plan> conclude(Access who, Long planId) {
@@ -263,7 +263,9 @@ public class TermPlanService {
             }
             if (h.schedulingConcluded()) return Mono.just(h);
             return assessments(planId).collectList().flatMap(list -> {
-                boolean missing = !hasStatement(list, "P1") || !hasStatement(list, "P2");
+                // Uma prova dispensada não precisa de enunciado (kixi#635), mas não pode ser as duas: a pauta leva pelo menos uma.
+                boolean missing = !(hasStatement(list, "P1") || isDispensed(list, "P1")) || !(hasStatement(list, "P2") || isDispensed(list, "P2"))
+                        || (isDispensed(list, "P1") && isDispensed(list, "P2"));
                 // Uma avaliação de MAC é uma prova como a P1 e a P2 (kixi#623): sem enunciado só se for dispensada.
                 boolean macWithoutStatement = list.stream().anyMatch(a -> a.kind().equals("MAC") && !a.status().equals("DISPENSED") && a.statementId() == null);
                 if (missing) return Mono.<Header>error(ApiException.conflict("P1 and P2 need a statement before the scheduling is concluded"));
@@ -273,6 +275,10 @@ public class TermPlanService {
                         .bind("u", who.accountId()).bind("p", planId).fetch().rowsUpdated().thenReturn(h);
             });
         }).then(plan(who, planId));
+    }
+
+    private static boolean isDispensed(List<Assessment> list, String kind) {
+        return list.stream().anyMatch(a -> a.kind().equals(kind) && a.status().equals("DISPENSED"));
     }
 
     private static boolean hasStatement(List<Assessment> list, String kind) {
