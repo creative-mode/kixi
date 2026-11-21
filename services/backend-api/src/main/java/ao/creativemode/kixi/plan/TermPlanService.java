@@ -204,11 +204,17 @@ public class TermPlanService {
                         : touch(planId).then(plan(who, planId)));
     }
 
+    /** term_assessments.dispensed_reason é VARCHAR(500). */
+    private static final int REASON_MAX = 500;
+
     /** O coordenador (ou o administrador) dispensa uma componente, com motivo. */
     @Transactional
     public Mono<Plan> dispense(Access who, Long planId, Long assessmentId, String reason) {
         if (reason == null || reason.isBlank()) {
             return Mono.error(ApiException.badRequest("A reason is required to dispense an assessment"));
+        }
+        if (reason.trim().length() > REASON_MAX) {
+            return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         }
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql(
                         "SELECT kind FROM term_assessments WHERE id = :id AND plan_id = :p").bind("id", assessmentId).bind("p", planId)
@@ -232,6 +238,7 @@ public class TermPlanService {
     public Mono<Plan> reschedule(Access who, Long planId, Long assessmentId, LocalDate date, String reason) {
         if (date == null) return Mono.error(ApiException.badRequest("A new date is required"));
         if (reason == null || reason.isBlank()) return Mono.error(ApiException.badRequest("A reason is required to reschedule an assessment"));
+        if (reason.trim().length() > REASON_MAX) return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> {
             if (h.pautaOpenedAt() != null) return Mono.<Long>error(ApiException.conflict("The pauta is already open: its assessments cannot be rescheduled"));
             return db.sql("""
