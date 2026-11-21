@@ -141,6 +141,11 @@ public class SchoolOpsPautaOpener {
                 log.warn("[schoolops] plano {}: sem nenhuma prova P1/P2 com enunciado por enviar, a pauta não abre sozinha", planId);
                 return Mono.empty();
             }
+            if (macDispensada(assessments) && exams.size() < 2) {
+                // O contrato do motor exige as duas provas quando a MAC está dispensada (422 senão): a MT nunca fica numa só componente.
+                log.warn("[schoolops] plano {}: MAC dispensada com P1 ou P2 dispensada, a pauta não abre sozinha", planId);
+                return Mono.empty();
+            }
             return db.sql("""
                     SELECT p.id, p.class_id, p.subject_id, c.code AS class_code, c.grade, i.id AS inst_id, i.name AS inst_name, i.code AS inst_code,
                            sy.start_year, sy.end_year, t.id AS term_id, t.number AS term_number, co.id AS course_id, co.code AS course_code,
@@ -167,14 +172,34 @@ public class SchoolOpsPautaOpener {
                 pedido.put("provas", exams.stream().map(a -> prova(a, a.kind())).toList());
                 // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44). Cada uma com
                 // enunciado é uma prova como a P1 e a P2 (sourcedId e modalidade): corre o mesmo processo e a MAC é a média (schoolops#65).
-                List<Map<String, Object>> mac = macAssessments(assessments);
-                if (!mac.isEmpty()) pedido.put("avaliacoesContinuas", mac);
+                List<Map<String, Object>> mac = comMac(pedido, assessments);
                 pedido.put("callback", Map.of("url", properties.getCallbackUrl()));
                 List<String> provas = new java.util.ArrayList<>(exams.stream().map(a -> String.valueOf(a.statementId())).toList());
                 mac.stream().filter(m -> m.containsKey("sourcedId")).forEach(m -> provas.add(String.valueOf(m.get("sourcedId"))));
                 return new Built(pedido, provas);
             }));
         });
+    }
+
+    /**
+     * A MAC no pedido: as avaliações por dispensar seguem em {@code avaliacoesContinuas}; com todas as do plano dispensadas segue
+     * {@code "macDispensada": true} e nenhuma lista (o contrato do motor recusa as duas coisas juntas, e exige as duas provas).
+     * Devolve as avaliações enviadas.
+     */
+    static List<Map<String, Object>> comMac(Map<String, Object> pedido, List<Assessment> assessments) {
+        List<Map<String, Object>> mac = macAssessments(assessments);
+        if (!mac.isEmpty()) {
+            pedido.put("avaliacoesContinuas", mac);
+        } else if (macDispensada(assessments)) {
+            pedido.put("macDispensada", true);
+        }
+        return mac;
+    }
+
+    /** Há avaliações de MAC no plano e todas estão dispensadas: a MT sai só com a P1 e a P2 (schoolops#46, D1). */
+    static boolean macDispensada(List<Assessment> assessments) {
+        List<Assessment> macs = assessments.stream().filter(x -> x.kind().equals("MAC")).toList();
+        return !macs.isEmpty() && macs.stream().allMatch(x -> x.status().equals("DISPENSED"));
     }
 
     /**

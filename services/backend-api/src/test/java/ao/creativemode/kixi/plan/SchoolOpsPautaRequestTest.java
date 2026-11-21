@@ -62,4 +62,45 @@ class SchoolOpsPautaRequestTest {
 
         assertThat(kinds(exams)).containsExactly("P1", "P2");
     }
+
+    // ── MAC dispensada (schoolops D1): macDispensada na raiz, sem avaliacoesContinuas ──────────────────────────────────────
+
+    @Test
+    void comAMacDispensadaSegueMacDispensadaESemAvaliacoesContinuas() {
+        java.util.Map<String, Object> pedido = new java.util.LinkedHashMap<>();
+        List<Assessment> plano = List.of(exam(1, "P1", 11L, "STATEMENT_READY"), exam(2, "P2", 12L, "STATEMENT_READY"),
+                exam(3, "MAC", null, "DISPENSED"));
+
+        SchoolOpsPautaOpener.comMac(pedido, plano);
+
+        assertThat(pedido).containsEntry("macDispensada", true).doesNotContainKey("avaliacoesContinuas");
+        assertThat(kinds(SchoolOpsPautaOpener.examsToSend(plano))).containsExactly("P1", "P2");
+    }
+
+    @Test
+    void comAsMacTodasDispensadasTambemSegueMacDispensada() {
+        java.util.Map<String, Object> pedido = new java.util.LinkedHashMap<>();
+
+        SchoolOpsPautaOpener.comMac(pedido, List.of(exam(3, "MAC", null, "DISPENSED"), exam(4, "MAC", null, "DISPENSED")));
+
+        assertThat(pedido).containsEntry("macDispensada", true).doesNotContainKey("avaliacoesContinuas");
+    }
+
+    @Test
+    void comUmaMacPorDispensarSegueAListaESemMacDispensada() {
+        java.util.Map<String, Object> pedido = new java.util.LinkedHashMap<>();
+
+        SchoolOpsPautaOpener.comMac(pedido, List.of(exam(3, "MAC", null, "DISPENSED"), exam(4, "MAC", 14L, "STATEMENT_READY")));
+
+        assertThat(pedido).doesNotContainKey("macDispensada").containsKey("avaliacoesContinuas");
+    }
+
+    @Test
+    void semMacNoPlanoNaoSegueMacDispensada() {
+        java.util.Map<String, Object> pedido = new java.util.LinkedHashMap<>();
+
+        SchoolOpsPautaOpener.comMac(pedido, List.of(exam(1, "P1", 11L, "STATEMENT_READY"), exam(2, "P2", 12L, "STATEMENT_READY")));
+
+        assertThat(pedido).doesNotContainKey("macDispensada").doesNotContainKey("avaliacoesContinuas");
+    }
 }

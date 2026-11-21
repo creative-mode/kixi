@@ -358,6 +358,26 @@ class TermPlanPostgresIntegrationTest {
                 .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
     }
 
+    /** Schoolops D1: com a MAC dispensada o agendamento conclui-se só com a P1 e a P2 (a MAC não exige enunciado). */
+    @Test
+    void concludingTheSchedulingDoesNotNeedAStatementInADispensedMac() {
+        String teacher = token(TEACHER, "TEACHER");
+        String coordinator = token(COORDINATOR, "COORDINATOR");
+        bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        AtomicLong plan = new AtomicLong();
+        bearer(teacher).post().uri("/api/v1/term-plans").contentType(MediaType.APPLICATION_JSON).bodyValue(body(1)).exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(v -> plan.set(((Number) v).longValue()));
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
+                + "(523001, 'Prova', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE plan_id = " + plan.get() + " AND kind IN ('P1', 'P2')");
+        // a única MAC sem enunciado: recusa; dispensada com motivo: conclui
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isEqualTo(409);
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + assessmentId(plan.get(), "MAC", 1) + "/dispense")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"reason\":\"MAC cancelada\"}").exchange().expectStatus().isOk();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+    }
+
     /** kixi#623: a MAC reagenda-se como a P1 e a P2 (só o coordenador, com motivo, e só antes de a pauta abrir). */
     @Test
     void aMacAssessmentIsRescheduledLikeAnExam() {
