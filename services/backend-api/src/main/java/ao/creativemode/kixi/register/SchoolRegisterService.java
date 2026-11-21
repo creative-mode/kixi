@@ -145,9 +145,22 @@ public class SchoolRegisterService {
 
     // ---- pautas ----
 
+    /**
+     * O que as pautas e os ecrãs que as listam (o gestor, o aluno, os PDFs) leem do contexto: a turma e a disciplina, o
+     * trimestre e o ano lectivo. O motor envia-os sempre; uma pauta sem eles fazia rebentar o ecrã do gestor (vaga 1C, P1-1).
+     */
+    static final List<String> REQUIRED_CONTEXT = List.of("turmaId", "disciplinaId", "trimestre", "anoLectivo", "turma", "disciplina");
+
     @Transactional
     public Mono<Void> registerTermSheet(String sheetId, Map<String, Object> context, Map<String, Object> statistics,
             List<Map<String, Object>> entries) {
+        List<String> missing = REQUIRED_CONTEXT.stream().filter(key -> {
+            Object value = context == null ? null : context.get(key);
+            return value == null || String.valueOf(value).isBlank();
+        }).toList();
+        if (!missing.isEmpty()) {
+            return Mono.error(ApiException.badRequest("The term sheet context is incomplete; missing: " + String.join(", ", missing)));
+        }
         return db.sql("""
                 INSERT INTO register_term_sheets (sheet_id, context, statistics) VALUES (:id, CAST(:c AS jsonb), CAST(:s AS jsonb))
                 ON CONFLICT (sheet_id) DO UPDATE SET context = EXCLUDED.context, statistics = EXCLUDED.statistics,
