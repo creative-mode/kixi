@@ -79,7 +79,8 @@ import reactor.core.publisher.Mono;
 @Import({SecurityConfig.class, CorsConfig.class, CorsProperties.class,
         CurrentAccountService.class, JwtAuthenticationFilter.class, RequestIdWebFilter.class,
         QuestionService.class, QuestionOptionService.class, StatementWriteAccessService.class,
-        InstitutionAccessService.class, TeachingAssignmentService.class})
+        InstitutionAccessService.class, TeachingAssignmentService.class,
+        ao.creativemode.kixi.exams.service.StatementReadAccessService.class})
 class QuestionWriteAuthorizationTest {
 
     private static final Long ADMIN_ID = 1L;
@@ -380,6 +381,7 @@ class QuestionWriteAuthorizationTest {
         // someone who may correct the paper. Without both, the omission would be
         // indistinguishable from the field simply not existing.
         givenTheStatementIsThere();
+        givenTheTeacherReadsTheClass(CLASS_ID);
         Question answered = question();
         answered.setModelAnswer("x = 1");
         answered.setNeedsReview(true);
@@ -394,6 +396,18 @@ class QuestionWriteAuthorizationTest {
                 .expectBody()
                 .jsonPath("$[0].modelAnswer").isEqualTo("x = 1")
                 .jsonPath("$[0].needsReview").isEqualTo(true);
+    }
+
+    @Test
+    void aTeacherOutsideTheClassOfTheStatementCannotReadItsQuestionsOrOptions() {
+        // Vaga 1A, P0-1: the questions and the answer key follow the same read rule as GET /statements/{id}.
+        givenTheStatementIsThere();
+        givenTheQuestionIsThere();
+        givenTheTeacherReadsTheClass(OTHER_CLASS_ID);
+
+        for (String path : java.util.List.of(QUESTIONS, QUESTIONS + "/trash", QUESTION, OPTIONS, OPTIONS + "/trash")) {
+            client.mutateWith(teacherJwt()).get().uri(path).exchange().expectStatus().isForbidden();
+        }
     }
 
     @Test
@@ -559,6 +573,13 @@ class QuestionWriteAuthorizationTest {
         givenTheClass(CLASS_ID);
         when(assignments.existsByTeacherIdAndClassIdAndSubjectIdAndSchoolYearIdAndDeletedAtIsNull(
                 TEACHER_ID, CLASS_ID, SUBJECT_ID, SCHOOL_YEAR_ID)).thenReturn(Mono.just(false));
+    }
+
+    /** The teaching assignments the read rule weighs a statement against (StatementReadAccessService). */
+    private void givenTheTeacherReadsTheClass(Long classId) {
+        givenTheTeacherIsAffiliated();
+        when(assignments.findAllByTeacherIdAndDeletedAtIsNull(TEACHER_ID)).thenReturn(reactor.core.publisher.Flux.just(
+                new ao.creativemode.kixi.institutions.model.TeachingAssignment(TEACHER_ID, classId, SUBJECT_ID, SCHOOL_YEAR_ID)));
     }
 
     private void givenTheTeacherIsAffiliated() {

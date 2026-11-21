@@ -60,25 +60,33 @@ public class QuestionService {
      * not only the classes they teach — so the rule is not narrower than
      * elsewhere in this API and is not narrower here either.
      *
-     * <p>What a non-staff caller never gets is the answer key: {@code staff}
+     * <p>A teacher is staff only inside their teaching assignments
+     * ({@link StatementReader}): outside them it is a 403, as on the statement
+     * routes.
+     *
+     * <p>What a non-staff caller never gets is the answer key: {@code reader.staff()}
      * reaches {@link #toResponse(Question, boolean)}, which is where modelAnswer
      * and needsReview are withheld.
      */
-    private Mono<Void> requireReadableStatement(Long statementId, boolean staff) {
-        return Mono.defer(() -> staff
+    private Mono<Void> requireReadableStatement(Long statementId, StatementReader reader) {
+        return Mono.defer(() -> reader.staff()
                 ? statements.findByIdAndDeletedAtIsNull(statementId)
                 // Same 404 as "does not exist", so an unpublished statement of
                 // another class is not confirmed to exist by the status code.
                 : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
+            // A teacher reads the statements their assignments cover, here as on
+            // GET /statements/{id}: the questions carry the same paper, and the
+            // answer key with it, so the rule cannot be narrower on the way in.
+            .flatMap(reader::require)
             .then();
     }
 
     /** The trashed questions are for whoever corrects the paper, not for a reader. */
-    private Mono<Void> requireStatementForTrash(Long statementId, boolean staff) {
-        return requireReadableStatement(statementId, staff)
+    private Mono<Void> requireStatementForTrash(Long statementId, StatementReader reader) {
+        return requireReadableStatement(statementId, reader)
             .then(Mono.defer(() -> {
-                if (staff) {
+                if (reader.staff()) {
                     return Mono.empty();
                 }
                 return Mono.error(ApiException.notFound("Statement not found: " + statementId));
@@ -94,22 +102,25 @@ public class QuestionService {
      * order the teacher sets is what {@code reorder} writes and what a listing
      * has to honour. Sorting by the number would make every reordering invisible.
      */
-    public Flux<QuestionResponse> findAllActive(Long statementId, boolean staff) {
-        return requireReadableStatement(statementId, staff)
+    public Flux<QuestionResponse> findAllActive(Long statementId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireReadableStatement(statementId, reader)
             // Deferred so the listing is never even asked for when the statement
             // turns out not to be there.
             .thenMany(Flux.defer(() -> questions.findAllByStatementIdOrderedByOrderIndex(statementId)))
             .map(question -> toResponse(question, staff));
     }
 
-    public Flux<QuestionResponse> findAllDeleted(Long statementId, boolean staff) {
-        return requireStatementForTrash(statementId, staff)
+    public Flux<QuestionResponse> findAllDeleted(Long statementId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireStatementForTrash(statementId, reader)
             .thenMany(Flux.defer(() -> questions.findAllByStatementIdAndDeletedAtIsNotNull(statementId)))
             .map(question -> toResponse(question, staff));
     }
 
-    public Mono<QuestionResponse> findById(Long statementId, Long questionId, boolean staff) {
-        return requireReadableStatement(statementId, staff)
+    public Mono<QuestionResponse> findById(Long statementId, Long questionId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireReadableStatement(statementId, reader)
             .then(Mono.defer(() -> findActiveQuestion(statementId, questionId)))
             .map(question -> toResponse(question, staff));
     }
