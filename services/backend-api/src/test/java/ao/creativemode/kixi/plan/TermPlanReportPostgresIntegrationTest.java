@@ -285,6 +285,43 @@ class TermPlanReportPostgresIntegrationTest {
         assertThat(exportacoes("PAUTA_TURMA")).isEqualTo(1);
     }
 
+    /**
+     * Vaga 1B, C1: o motor só regista as linhas MAC e MT; a P1 e a P2 vêm no payload da MT ({@code npp}, {@code npt}).
+     * A folha da turma tem de levar as quatro colunas, com os valores que o motor realmente escreve.
+     */
+    @Test
+    void aPautaDaTurmaLevaAP1EAP2DoPayloadDaMtQueOMotorEscreve() throws Exception {
+        long plan = plano();
+        sql("INSERT INTO register_term_sheets (sheet_id, context, status) VALUES ('it633-motor', '" + folhaContexto() + "'::jsonb, 'FECHADA')");
+        sql("INSERT INTO register_term_entries (sheet_id, component, account_id, score, status, payload) VALUES "
+                + "('it633-motor', 'MAC', " + STUDENT + ", 15, NULL, '{\"alunoId\":\"" + STUDENT + "\",\"mac\":15,\"nota\":15}'::jsonb), "
+                + "('it633-motor', 'MT', " + STUDENT + ", 14, 'COMPLETA', '{\"numero\":1,\"nome\":\"Aluno Um\",\"mac\":15,\"npp\":14.5,"
+                + "\"npt\":12,\"mt\":14,\"alunoId\":\"" + STUDENT + "\",\"ajustada\":false,\"completa\":true}'::jsonb), "
+                + "('it633-motor', 'MT', " + SECOND_STUDENT + ", NULL, 'INCOMPLETA', '{\"numero\":2,\"nome\":\"Aluno Dois\",\"mac\":8,\"npp\":10,"
+                + "\"npt\":null,\"mt\":null,\"alunoId\":\"" + SECOND_STUDENT + "\",\"ajustada\":false,\"completa\":false}'::jsonb)");
+        pdf();
+
+        bearer(token(TEACHER, "TEACHER")).get().uri("/api/v1/term-plans/" + plan + "/reports/class").exchange().expectStatus().isOk();
+
+        com.fasterxml.jackson.databind.JsonNode pedido = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(MOTOR.takeRequest().getBody().readUtf8());
+        com.fasterxml.jackson.databind.JsonNode resultados = pedido.path("disciplinas").get(0).path("resultados");
+        java.util.Map<String, java.util.Map<String, Double>> notas = new java.util.LinkedHashMap<>();
+        for (com.fasterxml.jackson.databind.JsonNode componente : resultados) {
+            java.util.Map<String, Double> porAluno = new java.util.LinkedHashMap<>();
+            for (com.fasterxml.jackson.databind.JsonNode nota : componente.path("notas")) {
+                porAluno.put(nota.path("aluno").asText(), nota.path("nota").asDouble());
+            }
+            notas.put(componente.path("componente").asText(), porAluno);
+        }
+        assertThat(notas.keySet()).containsExactly("P1", "P2", "MAC", "MD");
+        assertThat(notas.get("P1")).containsEntry(String.valueOf(STUDENT), 14.5).containsEntry(String.valueOf(SECOND_STUDENT), 10.0);
+        // a P2 do segundo aluno é nula no payload: fica em branco, não é inventada
+        assertThat(notas.get("P2")).containsOnlyKeys(String.valueOf(STUDENT)).containsEntry(String.valueOf(STUDENT), 12.0);
+        assertThat(notas.get("MAC")).containsEntry(String.valueOf(STUDENT), 15.0);
+        assertThat(notas.get("MD")).containsEntry(String.valueOf(STUDENT), 14.0);
+    }
+
     @Test
     void semFolhasRegistadasAPautaDaTurmaDiz409ESemChamarOMotor() {
         long plan = plano();
