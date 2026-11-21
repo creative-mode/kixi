@@ -157,6 +157,20 @@ class DonationPostgresTest {
                 .containsExactly(SCHOOL_A);
     }
 
+    /** «Ficheiros 0» na lista do administrador: a contagem por doação tem de chegar à linha certa, não ficar sempre a zero. */
+    @Test
+    void theAdminListCountsTheFilesOfEachDonation() {
+        String refTwo = service.submit(submission(png(60, 60, 1), png(61, 61, 2)), "c".repeat(64)).block(WAIT).reference();
+        String refOne = service.submit(submission(png(62, 62, 3)), "d".repeat(64)).block(WAIT).reference();
+        Long two = donations.findAll().filter(d -> d.getReference().equals(refTwo)).blockFirst(WAIT).getId();
+        Long one = donations.findAll().filter(d -> d.getReference().equals(refOne)).blockFirst(WAIT).getId();
+
+        var items = service.list(null, null, 1, 50).block(WAIT).items();
+
+        assertThat(items.stream().filter(i -> i.id().equals(two)).findFirst().orElseThrow().fileCount()).isEqualTo(2);
+        assertThat(items.stream().filter(i -> i.id().equals(one)).findFirst().orElseThrow().fileCount()).isEqualTo(1);
+    }
+
     @Test
     void aDonationIsStoredPendingWithItsFilesOnDiskAndNoAddress() {
         DonationDetail detail = donate(png(30, 30, 1), png(31, 31, 2));
