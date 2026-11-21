@@ -267,9 +267,11 @@ public class SimulationSubmissionService {
                 .switchIfEmpty(Mono.error(ApiException.notFound("Question not found")))
                 .flatMap(question -> authorizeGrading(question, accountId, admin).then(Mono.defer(() -> {
                     if (rectify) {
-                        // Uma reclamação deferida rectifica tanto uma nota dada por uma pessoa como a da IA (kixi#542).
+                        // Uma reclamação deferida rectifica uma nota dada por uma pessoa, a da IA (kixi#542) ou a correção
+                        // automática de uma objetiva (o motor rectifica-a, vaga 1B B1); só o que ainda está por corrigir não.
                         if (answer.getReviewStatus() != SimulationAnswerStatus.GRADED
-                                && answer.getReviewStatus() != SimulationAnswerStatus.AI_GRADED) {
+                                && answer.getReviewStatus() != SimulationAnswerStatus.AI_GRADED
+                                && answer.getReviewStatus() != SimulationAnswerStatus.AUTO_GRADED) {
                             return Mono.error(ApiException.conflict("Only graded answers can be rectified"));
                         }
                     } else if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {

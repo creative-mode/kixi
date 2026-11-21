@@ -50,7 +50,7 @@ Um enunciado ligado a uma sala **não é visível ao aluno** até todas as salas
 
 ## Re-correção de uma resposta (`PATCH /api/v1/simulation-answers/{id}/grade?rectify=true`)
 
-Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (por uma pessoa ou pela IA; 409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509). Uma resposta corrigida pela IA e depois rectificada passa a `GRADED`.
+Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (por uma pessoa, pela IA ou automaticamente, como uma objetiva que uma reclamação deferida corrige; 409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509). Uma resposta corrigida pela IA ou automaticamente e depois rectificada passa a `GRADED`.
 
 ## Correção pela IA das provas de um plano (kixi#542)
 

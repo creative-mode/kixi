@@ -81,7 +81,8 @@ class AnswerRectificationPostgresIntegrationTest {
                 .configureClient().responseTimeout(Duration.ofSeconds(20)).build();
         sql("DELETE FROM simulation_answers WHERE simulation_id IN (SELECT id FROM simulations WHERE statement_id = " + STATEMENT + ")");
         sql("DELETE FROM simulations WHERE statement_id = " + STATEMENT);
-        sql("DELETE FROM questions WHERE id = " + QUESTION);
+        sql("DELETE FROM question_options WHERE question_id IN (" + QUESTION + ", " + (QUESTION + 1) + ")");
+        sql("DELETE FROM questions WHERE id IN (" + QUESTION + ", " + (QUESTION + 1) + ")");
         sql("DELETE FROM statements WHERE id = " + STATEMENT);
         sql("DELETE FROM account_roles WHERE account_id IN (" + TEACHER + ", " + STUDENT + ", " + ENGINE + ")");
         sql("DELETE FROM accounts WHERE id IN (" + TEACHER + ", " + STUDENT + ", " + ENGINE + ")");
@@ -135,6 +136,50 @@ class AnswerRectificationPostgresIntegrationTest {
         patch(engineToken, grade + "?rectify=true", 7.0).expectStatus().isBadRequest();
         patch(studentToken, grade + "?rectify=true", 6.0).expectStatus().isForbidden();
         assertThat(finalScore(simulation.get())).isEqualTo(5.0);
+    }
+
+    /**
+     * Vaga 1B, B1: o motor rectifica uma questão objectiva deferida em reclamação com {@code ?rectify=true}; a resposta está
+     * {@code AUTO_GRADED}. Passa a {@code GRADED}, a nota final recalcula-se e o aluno vê a nota certa.
+     */
+    @Test
+    void anAutoGradedObjectiveAnswerIsRectifiedByAnAppealAndTheStudentSeesTheNewScore() {
+        // a prova só tem uma objectiva (cotação 6): a errada vale 0
+        sql("DELETE FROM questions WHERE id = " + QUESTION);
+        long objective = QUESTION + 1;
+        sql("INSERT INTO questions (id, statement_id, number, text, question_type, max_score, order_index) VALUES ("
+                + objective + ", " + STATEMENT + ", 1, 'Quanto e 2 + 2?', 'multiple_choice', 6, 1)");
+        sql("INSERT INTO question_options (id, question_id, option_label, option_text, is_correct, order_index) VALUES "
+                + "(" + objective + ", " + objective + ", 'A', '3', false, 1), (" + (objective + 1) + ", " + objective + ", 'B', '4', true, 2)");
+        bearer(teacherToken).post().uri("/api/v1/statements/" + STATEMENT + "/approve").exchange().expectStatus().isOk();
+        bearer(teacherToken).patch().uri("/api/v1/statements/" + STATEMENT + "/visibility?visible=true").exchange().expectStatus().isOk();
+        AtomicLong simulation = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/simulations").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"accountId\":" + STUDENT + ",\"statementId\":" + STATEMENT + "}").exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(value -> simulation.set(((Number) value).longValue()));
+        AtomicLong answer = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/simulation-answers").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"simulationId\":" + simulation.get() + ",\"questionId\":" + objective + ",\"selectedOptionId\":" + objective + "}")
+                .exchange().expectStatus().isCreated().expectBody().jsonPath("$.id").value(value -> answer.set(((Number) value).longValue()));
+        bearer(studentToken).post().uri("/api/v1/simulations/" + simulation.get() + "/submit").exchange().expectStatus().isOk();
+        String grade = "/api/v1/simulation-answers/" + answer.get() + "/grade";
+        assertThat(finalScore(simulation.get())).isEqualTo(0.0);
+
+        // sem rectify continua recusado (não é uma primeira correção); o aluno nunca rectifica
+        patch(engineToken, grade, 6.0).expectStatus().isEqualTo(409);
+        patch(studentToken, grade + "?rectify=true", 6.0).expectStatus().isForbidden();
+        // a reclamação deferida: o motor rectifica a objectiva
+        patch(engineToken, grade + "?rectify=true", 6.0).expectStatus().isOk()
+                .expectBody().jsonPath("$.scoreObtained").isEqualTo(6.0).jsonPath("$.reviewStatus").isEqualTo("GRADED");
+        assertThat(finalScore(simulation.get())).isEqualTo(6.0);
+        bearer(studentToken).get().uri("/api/v1/simulations/" + simulation.get() + "/result").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.finalScore").isEqualTo(6.0)
+                .jsonPath("$.questions[0].scoreObtained").isEqualTo(6.0)
+                .jsonPath("$.questions[0].reviewStatus").isEqualTo("GRADED");
+        // repetir o mesmo valor (a reentrega do job) não duplica nada; nunca acima da cotação
+        patch(engineToken, grade + "?rectify=true", 6.0).expectStatus().isOk();
+        patch(engineToken, grade + "?rectify=true", 7.0).expectStatus().isBadRequest();
+        assertThat(finalScore(simulation.get())).isEqualTo(6.0);
     }
 
     private WebTestClient.ResponseSpec patch(String token, String uri, double score) {
