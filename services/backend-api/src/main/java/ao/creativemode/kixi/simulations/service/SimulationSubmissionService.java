@@ -274,6 +274,12 @@ public class SimulationSubmissionService {
                                 && answer.getReviewStatus() != SimulationAnswerStatus.AUTO_GRADED) {
                             return Mono.error(ApiException.conflict("Only graded answers can be rectified"));
                         }
+                        // A correção automática de uma objetiva só a rectifica o motor (ao deferir uma reclamação) e a administração:
+                        // um professor não muda directamente a nota de uma resposta auto-corrigida. `admin` inclui a conta INTEGRATION.
+                        if (answer.getReviewStatus() == SimulationAnswerStatus.AUTO_GRADED && !admin) {
+                            return Mono.error(ApiException.conflict(
+                                "An automatically graded answer can only be rectified by the school ops engine or an administrator"));
+                        }
                     } else if (answer.getReviewStatus() != SimulationAnswerStatus.PENDING_REVIEW) {
                         return Mono.error(ApiException.conflict("Only answers pending review can be graded"));
                     }
