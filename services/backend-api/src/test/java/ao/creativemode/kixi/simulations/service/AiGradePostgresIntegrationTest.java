@@ -199,9 +199,17 @@ class AiGradePostgresIntegrationTest {
                 .bodyValue("{\"grades\":[{\"answerId\":" + answer + ",\"score\":3.0}],\"byKey\":false}")
                 .exchange().expectStatus().isEqualTo(409);
         assertThat(text("SELECT review_status FROM simulation_answers WHERE id = " + answer)).isEqualTo("PENDING_REVIEW");
-        // o administrador (que também opera o motor do servidor, ainda com uma conta ADMIN) não é travado: sem isto, publicar o
-        // Kixi antes do motor novo deixava a correção das pautas em curso em incidente
+        // o administrador também é travado (kixi#542, matriz «Correção pela IA»: 409 para professor e administrador)
         bearer(token(ADMIN, "ADMIN")).patch().uri(grade).contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":2.0}")
+                .exchange().expectStatus().isEqualTo(409);
+        bearer(token(ADMIN, "ADMIN")).post().uri("/api/v1/exam-rooms/543001/grade").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"grades\":[{\"answerId\":" + answer + ",\"score\":2.0}],\"byKey\":false}")
+                .exchange().expectStatus().isEqualTo(409);
+        assertThat(text("SELECT review_status FROM simulation_answers WHERE id = " + answer)).isEqualTo("PENDING_REVIEW");
+        // a conta do motor (INTEGRATION) continua a poder gravar a nota, e a rectificação (rectify=true) também não é travada
+        bearer(token(ENGINE, "INTEGRATION")).patch().uri(grade).contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":2.0}")
+                .exchange().expectStatus().isOk();
+        bearer(token(ADMIN, "ADMIN")).patch().uri(grade + "?rectify=true").contentType(MediaType.APPLICATION_JSON).bodyValue("{\"scoreObtained\":2.5}")
                 .exchange().expectStatus().isOk();
         sql("UPDATE simulation_answers SET review_status = 'PENDING_REVIEW', score_obtained = NULL WHERE id = " + answer);
 

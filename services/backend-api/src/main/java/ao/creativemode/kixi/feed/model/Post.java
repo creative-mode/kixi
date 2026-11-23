@@ -119,6 +119,14 @@ public class Post {
     @Column("updated_at")
     private LocalDateTime updatedAt;
 
+    /** Set only when the author edits the post (kixi#593); null for a fresh card, a hide or a soft delete. */
+    @Column("edited_at")
+    private LocalDateTime editedAt;
+
+    /** True por omissão: um cartão guarda sempre a nota. false: a nota e os acertos ficam ocultos a quem não é o autor (kixi#612). */
+    @Column("show_score")
+    private Boolean showScore;
+
     @Column("deleted_at")
     private LocalDateTime deletedAt;
 

@@ -82,7 +82,7 @@ por isso uma dependência indevida falha o build.
 | `simulations` | Simulados e respostas submetidas | `/api/v1/simulations`, `/simulation-answers` |
 | `gamification` | Ranking, XP e consentimento de comparação | `/api/v1/leaderboard` |
 | `feed` | Publicações e interacções | `/api/v1/feed/posts` |
-| `chat` | Tutor com IA, por enunciado | `/api/v1/chat/sessions` |
+| `chat` | Tutor com IA, por enunciado, disciplina ou tema | `/api/v1/chat/sessions` |
 | `analytics` | Indicadores de desempenho para professores | `/api/v1/analytics` |
 | `donations` | Apoio ao projecto | `/api/v1/donations` |
 | `ocr` | Ponte para o serviço de OCR | `/api/v1/ocr` |
@@ -90,6 +90,13 @@ por isso uma dependência indevida falha o build.
 
 O contrato está publicado em OpenAPI (Swagger UI em `/swagger-ui.html`), e o guia
 [API e OpenAPI](conceptual/architecture/implementation-guides/api.md) explica os fluxos principais.
+
+As salas usam hora de Angola (`Africa/Luanda`). A resposta mantém `status` e inclui `phase`:
+`SCHEDULED` antes do início, `ONGOING` durante a janela e `ENDED` no fim ou após fecho manual.
+O job de expiração fecha salas `OPEN` ou `RUNNING` vencidas e submete as simulações pendentes;
+repete a varredura a cada 60 segundos por defeito (`app.exam-rooms.expiry-poll-ms`). Uma falha
+numa sala é registada e novamente tentada em varreduras seguintes. O job também recupera salas
+vencidas anteriores ao arranque. A conclusão em produção depende de a aplicação executar o job.
 
 ## Arranque rápido
 

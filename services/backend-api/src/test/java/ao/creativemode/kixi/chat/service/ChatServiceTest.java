@@ -60,7 +60,8 @@ class ChatServiceTest {
         when(tutorStyles.styleOf(any(Statement.class))).thenReturn(Mono.just(""));
         service = new ChatService(
                 sessionRepository, messageRepository, statementService, rateLimiter,
-                groqClient, tutorStyles, mock(SimilarQuestionService.class));
+                groqClient, tutorStyles, mock(SimilarQuestionService.class),
+                mock(TutorSubjectCatalog.class), mock(TutorExamGuard.class));
     }
 
     // === createSession ====================================================

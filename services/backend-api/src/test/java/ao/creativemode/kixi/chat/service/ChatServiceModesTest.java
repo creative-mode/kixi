@@ -76,7 +76,7 @@ class ChatServiceModesTest {
             return Mono.just(saved);
         });
         service = new ChatService(sessionRepository, messageRepository, statementService, rateLimiter,
-                groqClient, tutorStyles, similarQuestions);
+                groqClient, tutorStyles, similarQuestions, mock(TutorSubjectCatalog.class), mock(TutorExamGuard.class));
     }
 
     // === opening a session ================================================
@@ -276,6 +276,42 @@ class ChatServiceModesTest {
         assertThat(prompt.indexOf("MODO:")).isLessThan(prompt.indexOf("ESTILO DO PROFESSOR"));
         assertThat(prompt.strip()).endsWith("seguem as regras.");
         assertThat(TutorSystemPrompt.compose(null, "")).isEqualTo(TutorSystemPrompt.BASE);
+        // Issue #594: the format is in BASE and repeated next to the mode.
+        assertThat(occurrences(prompt, TutorSystemPrompt.FORMAT_RULES)).isEqualTo(2);
+    }
+
+    /**
+     * Issue #594: every mode that adds rules repeats the answer format, so the last
+     * rules before the teacher's style are the shape we want. GENERAL stays empty: a
+     * #114 session keeps the prompt it had.
+     */
+    @Test
+    void everyModeRepeatsTheAnswerFormat() {
+        for (TutorMode mode : TutorMode.values()) {
+            String rules = ChatService.instructionsFor(mode, mock(Question.class));
+
+            if (mode == TutorMode.GENERAL) {
+                assertThat(rules).isEmpty();
+            } else {
+                assertThat(rules).endsWith(TutorSystemPrompt.FORMAT_RULES);
+            }
+        }
+    }
+
+    /** A question that vanished since the session opened falls back, with the format too. */
+    @Test
+    void theQuestionGoneFallbackAlsoRepeatsTheAnswerFormat() {
+        assertThat(ChatService.instructionsFor(TutorMode.EXPLAIN_QUESTION, null))
+                .contains("já não está disponível")
+                .endsWith(TutorSystemPrompt.FORMAT_RULES);
+    }
+
+    private static int occurrences(String text, String needle) {
+        int count = 0;
+        for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
     }
 
     // === fixtures =========================================================
@@ -309,7 +345,7 @@ class ChatServiceModesTest {
     }
 
     private static ChatSessionRequest request(TutorMode mode, Long questionId, Long optionId, String answer) {
-        return new ChatSessionRequest(7L, mode, questionId, optionId, answer);
+        return new ChatSessionRequest(7L, null, null, mode, questionId, optionId, answer);
     }
 
     private static ChatSession session(TutorMode mode, Long questionId, Long optionId, String answer) {

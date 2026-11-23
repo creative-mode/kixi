@@ -29,20 +29,23 @@ public class ExamRoomIntegrityService {
     private final ExamRoomRepository rooms;
     private final ExamRoomParticipantRepository participants;
     private final SimulationIntegrityEventRepository events;
+    private final ExamRoomParticipantNames names;
     private final Clock clock;
 
     public ExamRoomIntegrityService(ExamRoomRepository rooms, ExamRoomParticipantRepository participants,
-            SimulationIntegrityEventRepository events, Clock clock) {
+            SimulationIntegrityEventRepository events, ExamRoomParticipantNames names, Clock clock) {
         this.rooms = rooms;
         this.participants = participants;
         this.events = events;
+        this.names = names;
         this.clock = clock;
     }
 
     public Mono<ExamRoomIntegrityResponse> list(Long roomId, Long caller, boolean admin) {
         return managedRoom(roomId, caller, admin)
                 .then(Mono.defer(() -> participants.findByExamRoomId(roomId).collectList()))
-                .flatMap(rows -> loadEvents(rows).map(bySimulation -> response(roomId, rows, bySimulation)));
+                .flatMap(rows -> names.resolve(rows).zipWith(loadEvents(rows),
+                        (displayNames, bySimulation) -> response(roomId, rows, bySimulation, displayNames)));
     }
 
     private Mono<ExamRoom> managedRoom(Long roomId, Long caller, boolean admin) {
@@ -68,14 +71,16 @@ public class ExamRoomIntegrityService {
     }
 
     private ExamRoomIntegrityResponse response(Long roomId, List<ExamRoomParticipant> rows,
-            Map<Long, List<SimulationIntegrityEvent>> bySimulation) {
+            Map<Long, List<SimulationIntegrityEvent>> bySimulation, Map<Long, String> displayNames) {
         List<ExamRoomIntegrityResponse.ParticipantIntegrity> result = rows.stream().map(row -> {
             Long simulationId = row.getSimulationId();
             List<SimulationIntegrityEventResponse> participantEvents =
                     simulationId == null ? List.of() : bySimulation.getOrDefault(simulationId, List.of()).stream()
                             .map(SimulationIntegrityEventService::response)
                             .toList();
-            return new ExamRoomIntegrityResponse.ParticipantIntegrity(row.getAccountId(), simulationId, participantEvents);
+            return new ExamRoomIntegrityResponse.ParticipantIntegrity(row.getAccountId(),
+                    displayNames.getOrDefault(row.getAccountId(), ExamRoomParticipantNames.UNKNOWN),
+                    simulationId, participantEvents);
         }).toList();
         return new ExamRoomIntegrityResponse(roomId, LocalDateTime.now(clock), result);
     }

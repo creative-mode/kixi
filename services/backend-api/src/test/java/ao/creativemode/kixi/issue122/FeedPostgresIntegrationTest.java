@@ -250,6 +250,39 @@ class FeedPostgresIntegrationTest {
         assertThat(cardOf(464002L)).isEqualTo(new Card(4.0, 2, true));
     }
 
+    /** Um cartão de simulação com a nota escondida: o autor vê, a turma não (kixi#612). */
+    @Test
+    void aPublishedSimulationHidesTheScoreFromEveryoneButTheAuthor() {
+        sql("INSERT INTO subjects (id, code, name) VALUES (587001, 'F587', 'Matemática')");
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, variant, total_max_score, subject_id, class_id,"
+                + " school_year_id, visible, needs_review, source) VALUES (587001, 'Exame de Matemática', 'Exame', 90, 'A', 20, 587001, "
+                + CLASS + ", " + YEAR + ", true, false, 'manual')");
+        sql("INSERT INTO simulations (id, account_id, statement_id, status, final_score, finished_at) VALUES"
+                + " (587001, " + STUDENT + ", 587001, 'FINISHED', 14, now())");
+        AtomicLong postId = new AtomicLong();
+        bearer(studentToken).post().uri("/api/v1/feed/posts").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"type\":\"SIMULATION\",\"classId\":" + CLASS + ",\"simulationId\":587001,\"content\":\"Correu bem\",\"showScore\":false}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.simulation.finalScore").isEqualTo(14.0)
+                .jsonPath("$.simulation.paperKind").isEqualTo("Exame")
+                .jsonPath("$.id").value(value -> postId.set(((Number) value).longValue()));
+        long id = postId.get();
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].id").isEqualTo((int) id)
+                .jsonPath("$[0].simulation.finalScore").isEqualTo(14.0)
+                .jsonPath("$[0].simulation.maxScore").isEqualTo(20.0);
+
+        bearer(classmateToken).get().uri("/api/v1/feed/posts").exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].id").isEqualTo((int) id)
+                .jsonPath("$[0].simulation.finalScore").doesNotExist()
+                .jsonPath("$[0].simulation.maxScore").doesNotExist()
+                .jsonPath("$[0].simulation.correctAnswers").doesNotExist()
+                .jsonPath("$[0].simulation.totalQuestions").doesNotExist()
+                .jsonPath("$[0].simulation.pendingReviewCount").doesNotExist()
+                .jsonPath("$[0].simulation.statementTitle").isEqualTo("Exame de Matemática");
+    }
+
     /**
      * kixi#587: o cartão publicado traz o cabeçalho da folha, lido do enunciado no servidor (nunca do pedido), e
      * um cartão antigo, publicado antes das colunas existirem, é preenchido pelo backfill da migração.
@@ -456,6 +489,114 @@ class FeedPostgresIntegrationTest {
         // that is perfectly correct - the filter, not the code, was what broke.
         assertThat(visibleComments(id)).isEqualTo(1L);
         assertThat(visibleComments(otherPostId.get())).isZero();
+    }
+
+    /** The author rewrites their own post; anyone else gets 403. */
+    @Test
+    void theAuthorEditsTheirPostAndAnotherStudentCannot() {
+        long id = createPost(studentToken, "Texto original");
+        bearer(studentToken).put().uri("/api/v1/feed/posts/" + id)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Texto revisto\"}")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.content").isEqualTo("Texto revisto")
+                .jsonPath("$.edited").isEqualTo(true);
+
+        bearer(classmateToken).put().uri("/api/v1/feed/posts/" + id)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Apropriado\"}")
+                .exchange().expectStatus().isForbidden();
+
+        // O selo persiste: a leitura seguinte continua a dizer «editado».
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].edited").isEqualTo(true);
+    }
+
+    /** Uma publicação nunca editada diz logo «edited: false». */
+    @Test
+    void aPostThatWasNeverEditedReportsIt() {
+        long id = createPost(studentToken, "Nunca editada");
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].edited").isEqualTo(false);
+    }
+
+    /** O autor apaga a publicação; ela sai do feed e a segunda tentativa é 404. */
+    @Test
+    void theAuthorDeletesTheirPostAndItLeavesEveryListing() {
+        long id = createPost(studentToken, "Publicada para apagar");
+        bearer(studentToken).delete().uri("/api/v1/feed/posts/" + id)
+                .exchange().expectStatus().isNoContent();
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody().json("[]");
+        bearer(studentToken).delete().uri("/api/v1/feed/posts/" + id)
+                .exchange().expectStatus().isNotFound();
+    }
+
+    /** O administrador apaga a publicação de outro; o aluno comum não. */
+    @Test
+    void theAdminCanDeleteSomeoneElsesPostButAStudentCannot() {
+        long id = createPost(studentToken, "Precisa de moderação");
+        bearer(classmateToken).delete().uri("/api/v1/feed/posts/" + id)
+                .exchange().expectStatus().isNotFound();
+        bearer(adminToken).delete().uri("/api/v1/feed/posts/" + id)
+                .exchange().expectStatus().isNoContent();
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody().json("[]");
+    }
+
+    /** Um comentário editado traz o selo «editado» e a contagem desce ao apagá-lo. */
+    @Test
+    void aCommentIsEditedAndItsDeletionChangesTheCount() {
+        long id = createPost(studentToken, "Contagem");
+        AtomicLong commentId = new AtomicLong();
+        bearer(classmateToken).post().uri("/api/v1/feed/posts/" + id + "/comments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Primeira versão\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> commentId.set(((Number) value).longValue()));
+
+        bearer(classmateToken).put().uri("/api/v1/feed/posts/" + id + "/comments/" + commentId.get())
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Versão revista\"}")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.content").isEqualTo("Versão revista")
+                .jsonPath("$.edited").isEqualTo(true);
+
+        bearer(classmateToken).delete().uri("/api/v1/feed/posts/" + id + "/comments/" + commentId.get())
+                .exchange().expectStatus().isNoContent();
+
+        bearer(studentToken).get().uri("/api/v1/feed/posts?page=1&limit=10")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$[0].commentCount").isEqualTo(0);
+        bearer(studentToken).get().uri("/api/v1/feed/posts/" + id + "/comments")
+                .exchange().expectStatus().isOk().expectBody().json("[]");
+        // Segunda vez: o comentário já não existe.
+        bearer(classmateToken).delete().uri("/api/v1/feed/posts/" + id + "/comments/" + commentId.get())
+                .exchange().expectStatus().isNotFound();
+    }
+
+    /** Uma resposta aceite recusa-se a ser apagada com 409; depois de retirada a aceitação, apaga-se normalmente. */
+    @Test
+    void anAcceptedAnswerRefusesToBeDeletedWith409AndDeletesAfterRevokingTheAcceptance() {
+        long id = createPost(studentToken, "Resposta aceite");
+        AtomicLong commentId = new AtomicLong();
+        bearer(classmateToken).post().uri("/api/v1/feed/posts/" + id + "/comments")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"content\":\"Esta é a resposta\"}")
+                .exchange().expectStatus().isCreated().expectBody()
+                .jsonPath("$.id").value(value -> commentId.set(((Number) value).longValue()));
+        long comment = commentId.get();
+
+        bearer(studentToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/accept")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.isAccepted").isEqualTo(true);
+
+        bearer(classmateToken).delete().uri("/api/v1/feed/posts/" + id + "/comments/" + comment)
+                .exchange().expectStatus().isEqualTo(409);
+
+        // Depois de retirar a aceitação, apagar deixa de ser recusado.
+        bearer(studentToken).patch().uri("/api/v1/feed/posts/" + id + "/comments/" + comment + "/accept")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.isAccepted").isEqualTo(false);
+        bearer(classmateToken).delete().uri("/api/v1/feed/posts/" + id + "/comments/" + comment)
+                .exchange().expectStatus().isNoContent();
     }
 
     /** The comments of a post the database still considers visible, hidden or not. */

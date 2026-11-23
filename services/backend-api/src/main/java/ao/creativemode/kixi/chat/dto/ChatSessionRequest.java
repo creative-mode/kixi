@@ -1,13 +1,20 @@
 package ao.creativemode.kixi.chat.dto;
 
 import ao.creativemode.kixi.chat.model.TutorMode;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 /**
- * Opens a tutor session bound to a statement the caller is allowed to read.
- * The statement is what scopes the tutor — without it there is nothing the
- * tutor may answer from (issue #114: restricted to official statements).
+ * Opens a tutor session bound to one context the caller is allowed to read.
+ *
+ * <p>A session has exactly one context. The tutor of issues #114/#115 is bound to
+ * a {@code statementId}; issue #610 adds the tutor that exists outside one paper:
+ * {@code subjectId} for a whole subject, or {@code topicId} for one topic of the
+ * exam matrix (kixi#581). A topic carries its subject, so {@code topicId} alone
+ * is enough; when both are sent the topic must belong to that subject.</p>
+ *
+ * <p>The statement context keeps everything of #115. The subject/topic context is
+ * only for {@link TutorMode#GENERAL} and {@link TutorMode#CONCEPT}: the modes
+ * that walk through one question still need a paper to point at.</p>
  *
  * <p>Issue #115 adds what the session is for. All of it is optional, so the
  * request of #114 ({@code statementId} alone) still opens the same tutor:</p>
@@ -21,8 +28,9 @@ import jakarta.validation.constraints.Size;
  * </ul>
  */
 public record ChatSessionRequest(
-    @NotNull(message = "statementId is required")
     Long statementId,
+    Long subjectId,
+    Long topicId,
     TutorMode mode,
     Long questionId,
     Long selectedOptionId,
@@ -34,6 +42,19 @@ public record ChatSessionRequest(
      * has only the canonical one to bind the JSON body to.
      */
     public static ChatSessionRequest of(Long statementId) {
-        return new ChatSessionRequest(statementId, null, null, null, null);
+        return new ChatSessionRequest(statementId, null, null, null, null, null, null);
+    }
+
+    /** The request of #610: a whole subject, or one topic of its exam matrix. */
+    public static ChatSessionRequest ofSubject(Long subjectId, Long topicId) {
+        return new ChatSessionRequest(null, subjectId, topicId, null, null, null, null);
+    }
+
+    public boolean hasStatementContext() {
+        return statementId != null;
+    }
+
+    public boolean hasSubjectContext() {
+        return subjectId != null || topicId != null;
     }
 }

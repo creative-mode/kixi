@@ -414,7 +414,8 @@ class CriticalExamFlowPostgresIntegrationTest {
                 .bodyValue("{\"grades\":[{\"alunoId\":\"" + STUDENT + "\",\"nota\":25}]}").exchange().expectStatus().isBadRequest();
         String sheet = "/api/v1/school-register/term-sheets/PT-it-1";
         bearer(engine).put().uri(sheet).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"contexto\":{\"turma\":\"A1\"},\"estatisticas\":{\"media\":12},\"entradas\":[{\"alunoId\":\"" + STUDENT + "\",\"nota\":13}]}")
+                .bodyValue("{\"contexto\":{\"turma\":\"A1\",\"turmaId\":\"1-1\",\"disciplina\":\"Matemática\",\"disciplinaId\":\"1\","
+                        + "\"trimestre\":1,\"anoLectivo\":\"2025/2026\"},\"estatisticas\":{\"media\":12},\"entradas\":[{\"alunoId\":\"" + STUDENT + "\",\"nota\":13}]}")
                 .exchange().expectStatus().isNoContent();
         bearer(engine).put().uri(sheet + "/components/MAC").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"entradas\":[{\"alunoId\":\"" + STUDENT + "\",\"mac\":15}]}").exchange().expectStatus().isNoContent();

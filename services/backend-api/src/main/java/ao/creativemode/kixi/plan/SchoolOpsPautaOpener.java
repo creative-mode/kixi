@@ -70,6 +70,7 @@ public class SchoolOpsPautaOpener {
                     .bodyToMono(Map.class)
                     .flatMap(response -> {
                         String pautaId = String.valueOf(response.get("pautaId"));
+                        warned.remove(planId);
                         return db.sql("UPDATE term_plans SET pauta_opened_at = CURRENT_TIMESTAMP, pauta_ref = :r, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
                                 .bind("r", pautaId).bind("p", planId).fetch().rowsUpdated().then();
                     })
@@ -86,14 +87,18 @@ public class SchoolOpsPautaOpener {
 
     /**
      * Daqui a um instante (a sala fechada já está gravada) e fora do fio reativo, porque {@link #closeFinishedProvas} bloqueia.
-     * A verificação periódica fica como rede de segurança, e o encerramento é idempotente ({@code closed_notified_at}).
+     * A verificação periódica fica como rede de segurança, e o encerramento é idempotente: a prova reserva-se com
+     * {@code closed_notified_at} antes do POST (ver {@link #closeFinishedProvas}), por isso duas verificações em paralelo não a enviam duas vezes.
      */
     private void closeSoon() {
         if (!properties.isEnabled()) return;
         Schedulers.boundedElastic().schedule(this::closeFinishedProvas, 1, TimeUnit.SECONDS);
     }
 
-    /** Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. */
+    /**
+     * Encerra no motor as provas cuja sala fechou ou cuja data passou, para o motor passar à recolha e correção. As avaliações de
+     * MAC com enunciado são provas como a P1 e a P2 (kixi#623); as sem enunciado não têm nada para encerrar.
+     */
     @Scheduled(fixedDelayString = "${schoolops.poll-ms:60000}", initialDelayString = "${schoolops.poll-ms:60000}")
     public void closeFinishedProvas() {
         if (!properties.isEnabled()) return;
@@ -101,16 +106,26 @@ public class SchoolOpsPautaOpener {
             db.sql("""
                     SELECT a.id, a.statement_id, p.pauta_ref
                     FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id LEFT JOIN exam_rooms r ON r.id = a.room_id
-                    WHERE a.kind IN ('P1', 'P2') AND a.closed_notified_at IS NULL AND a.dispensed_at IS NULL AND a.statement_id IS NOT NULL
+                    WHERE a.kind IN ('P1', 'P2', 'MAC') AND a.closed_notified_at IS NULL AND a.dispensed_at IS NULL AND a.statement_id IS NOT NULL
                       AND p.pauta_opened_at IS NOT NULL AND p.pauta_ref IS NOT NULL
                       AND ((a.room_id IS NOT NULL AND r.status = 'CLOSED') OR (a.room_id IS NULL AND a.planned_date < CURRENT_DATE))
                     ORDER BY a.id
                     """).fetch().all().collectList().block(Duration.ofSeconds(30)).forEach(row -> {
                 try {
                     WebClient http = webClients.baseUrl(properties.getBaseUrl()).defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getToken()).build();
-                    close(http, String.valueOf(row.get("pauta_ref")), String.valueOf(row.get("statement_id")))
-                            .then(db.sql("UPDATE term_assessments SET closed_notified_at = CURRENT_TIMESTAMP WHERE id = :a")
-                                    .bind("a", row.get("id")).fetch().rowsUpdated().then()).block(Duration.ofSeconds(60));
+                    // Reserva a prova antes do POST: a verificação periódica, o closeSoon() depois de abrir a pauta e o fecho da sala
+                    // podem correr ao mesmo tempo e todas leem a mesma linha por encerrar; só quem a reserva (UPDATE condicional,
+                    // atómico) envia o POST. Se o POST falhar, liberta-se a reserva para a verificação seguinte repetir.
+                    Long reserved = db.sql("UPDATE term_assessments SET closed_notified_at = CURRENT_TIMESTAMP WHERE id = :a AND closed_notified_at IS NULL")
+                            .bind("a", row.get("id")).fetch().rowsUpdated().block(Duration.ofSeconds(30));
+                    if (reserved == null || reserved == 0) return;
+                    try {
+                        close(http, String.valueOf(row.get("pauta_ref")), String.valueOf(row.get("statement_id"))).block(Duration.ofSeconds(60));
+                    } catch (RuntimeException e) {
+                        db.sql("UPDATE term_assessments SET closed_notified_at = NULL WHERE id = :a").bind("a", row.get("id"))
+                                .fetch().rowsUpdated().block(Duration.ofSeconds(30));
+                        throw e;
+                    }
                 } catch (RuntimeException e) {
                     log.warn("[schoolops] prova {} da pauta {}: encerramento por repetir ({})", row.get("statement_id"), row.get("pauta_ref"), e.getMessage());
                 }
@@ -129,14 +144,30 @@ public class SchoolOpsPautaOpener {
                 .then();
     }
 
+    /** Os planos para que já se avisou que a pauta não abre sozinha: o aviso repete-se a cada ciclo, por isso só o 1.º sobe a WARN. */
+    private final java.util.Set<Long> warned = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** WARN na primeira vez que um plano fica à espera; nos ciclos seguintes DEBUG (nada se esconde, o 1.º aviso fica no registo). */
+    private void warnOnce(Long planId, String reason) {
+        if (warned.add(planId)) {
+            log.warn("[schoolops] plano {}: {}", planId, reason);
+        } else {
+            log.debug("[schoolops] plano {}: {}", planId, reason);
+        }
+    }
+
     private record Built(Map<String, Object> body, List<String> provaIds) { }
 
     Mono<Built> request(Long planId) {
         return plans.assessmentsOf(planId).collectList().flatMap(assessments -> {
-            Assessment p1 = assessments.stream().filter(a -> a.kind().equals("P1")).findFirst().orElse(null);
-            Assessment p2 = assessments.stream().filter(a -> a.kind().equals("P2")).findFirst().orElse(null);
-            if (p1 == null || p2 == null || p1.statementId() == null || p2.statementId() == null) {
-                log.warn("[schoolops] plano {}: sem P1 e P2 com enunciado (dispensada?), a pauta não abre sozinha", planId);
+            List<Assessment> exams = examsToSend(assessments);
+            if (exams.isEmpty()) {
+                warnOnce(planId, "sem nenhuma prova P1/P2 com enunciado por enviar, a pauta não abre sozinha");
+                return Mono.empty();
+            }
+            if (macDispensada(assessments) && exams.size() < 2) {
+                // O contrato do motor exige as duas provas quando a MAC está dispensada (422 senão): a MT nunca fica numa só componente.
+                warnOnce(planId, "MAC dispensada com P1 ou P2 dispensada, a pauta não abre sozinha");
                 return Mono.empty();
             }
             return db.sql("""
@@ -146,7 +177,7 @@ public class SchoolOpsPautaOpener {
                     FROM term_plans p JOIN classes c ON c.id = p.class_id JOIN institutions i ON i.id = c.institution_id
                       JOIN school_years sy ON sy.id = c.school_year_id JOIN terms t ON t.id = p.term_id JOIN courses co ON co.id = c.course_id
                       JOIN subjects s ON s.id = p.subject_id WHERE p.id = :p
-                    """).bind("p", planId).fetch().one().flatMap(h -> teacher(h).zipWith(students(h)).map(ts -> {
+                    """).bind("p", planId).fetch().one().flatMap(h -> Mono.zip(teacher(h), students(h), coordinator(h)).map(ts -> {
                 Map<String, Object> pedido = new LinkedHashMap<>();
                 pedido.put("contratoVersao", "1");
                 pedido.put("pautaRef", "kixi-plano-" + planId);
@@ -159,16 +190,73 @@ public class SchoolOpsPautaOpener {
                         "curso", Map.of("sourcedId", String.valueOf(h.get("course_id")), "sigla", String.valueOf(h.get("course_code")), "nome", String.valueOf(h.get("course_name"))),
                         "disciplina", Map.of("sourcedId", String.valueOf(h.get("subject_id")), "sigla", subjectCode, "nome", String.valueOf(h.get("subject_name")))));
                 pedido.put("professor", ts.getT1());
+                // O coordenador da escola é opcional no contrato: com ele, o motor atribui-lhe as homologações (kixi#602).
+                ts.getT3().ifPresent(c -> pedido.put("coordenador", c));
                 pedido.put("alunos", ts.getT2());
-                pedido.put("provas", List.of(prova(p1, "P1"), prova(p2, "P2")));
-                // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44).
-                List<Map<String, Object>> mac = assessments.stream().filter(x -> x.kind().equals("MAC") && !x.status().equals("DISPENSED"))
-                        .map(x -> Map.<String, Object>of("titulo", x.title(), "data", x.plannedDate().toString())).toList();
-                if (!mac.isEmpty()) pedido.put("avaliacoesContinuas", mac);
+                pedido.put("provas", exams.stream().map(a -> prova(a, a.kind())).toList());
+                // As avaliações de MAC do plano: o motor usa-as e não volta a perguntá-las ao professor (schoolops#44). Cada uma com
+                // enunciado é uma prova como a P1 e a P2 (sourcedId e modalidade): corre o mesmo processo e a MAC é a média (schoolops#65).
+                List<Map<String, Object>> mac = comMac(pedido, assessments);
                 pedido.put("callback", Map.of("url", properties.getCallbackUrl()));
-                return new Built(pedido, List.of(String.valueOf(p1.statementId()), String.valueOf(p2.statementId())));
+                List<String> provas = new java.util.ArrayList<>(exams.stream().map(a -> String.valueOf(a.statementId())).toList());
+                mac.stream().filter(m -> m.containsKey("sourcedId")).forEach(m -> provas.add(String.valueOf(m.get("sourcedId"))));
+                return new Built(pedido, provas);
             }));
         });
+    }
+
+    /**
+     * A MAC no pedido: as avaliações por dispensar seguem em {@code avaliacoesContinuas}; com todas as do plano dispensadas segue
+     * {@code "macDispensada": true} e nenhuma lista (o contrato do motor recusa as duas coisas juntas, e exige as duas provas).
+     * Devolve as avaliações enviadas.
+     */
+    static List<Map<String, Object>> comMac(Map<String, Object> pedido, List<Assessment> assessments) {
+        List<Map<String, Object>> mac = macAssessments(assessments);
+        if (!mac.isEmpty()) {
+            pedido.put("avaliacoesContinuas", mac);
+        } else if (macDispensada(assessments)) {
+            pedido.put("macDispensada", true);
+        }
+        return mac;
+    }
+
+    /** Há avaliações de MAC no plano e todas estão dispensadas: a MT sai só com a P1 e a P2 (schoolops#46, D1). */
+    static boolean macDispensada(List<Assessment> assessments) {
+        List<Assessment> macs = assessments.stream().filter(x -> x.kind().equals("MAC")).toList();
+        return !macs.isEmpty() && macs.stream().allMatch(x -> x.status().equals("DISPENSED"));
+    }
+
+    /**
+     * As avaliações de MAC não dispensadas, como o motor as recebe: título e data e, com enunciado, a prova ({@code sourcedId} e
+     * {@code modalidade}: sala = digital, sem sala = papel). Sem enunciado seguem o caminho antigo (o professor lança as notas).
+     */
+    static List<Map<String, Object>> macAssessments(List<Assessment> assessments) {
+        return assessments.stream().filter(x -> x.kind().equals("MAC") && !x.status().equals("DISPENSED")).map(x -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("titulo", x.title());
+            item.put("data", x.plannedDate().toString());
+            if (x.statementId() != null) {
+                item.put("sourcedId", String.valueOf(x.statementId()));
+                item.put("modalidade", x.roomId() != null ? "DIGITAL" : "PAPEL");
+            }
+            return item;
+        }).toList();
+    }
+
+    /**
+     * As provas P1/P2 que seguem no pedido (kixi#635): as não dispensadas, no máximo uma por componente, cada uma com enunciado
+     * (o motor identifica a prova por ele). A componente dispensada fica de fora e o motor trata-a como dispensada. Vazio quando
+     * não há nenhuma para enviar ou quando uma prova por dispensar ainda não tem enunciado (a pauta espera por ela).
+     */
+    static List<Assessment> examsToSend(List<Assessment> assessments) {
+        List<Assessment> exams = new ArrayList<>();
+        for (String kind : List.of("P1", "P2")) {
+            Assessment a = assessments.stream().filter(x -> x.kind().equals(kind)).findFirst().orElse(null);
+            if (a != null && a.status().equals("DISPENSED")) continue;
+            if (a == null || a.statementId() == null) return List.of();
+            exams.add(a);
+        }
+        return exams;
     }
 
     private static Map<String, Object> prova(Assessment a, String componente) {
@@ -182,6 +270,23 @@ public class SchoolOpsPautaOpener {
                 """).bind("c", h.get("class_id")).bind("s", h.get("subject_id")).fetch().one()
                 .map(r -> Map.<String, Object>of("sourcedId", String.valueOf(r.get("account_id")), "nome", (r.get("first_name") + " " + r.get("last_name")).trim()))
                 .switchIfEmpty(Mono.error(new IllegalStateException("A turma e a disciplina não têm professor com conta")));
+    }
+
+    /** O coordenador da escola da turma (o mais antigo, se houver vários); vazio quando a escola não tem. */
+    private Mono<java.util.Optional<Map<String, Object>>> coordinator(Map<String, Object> h) {
+        return db.sql("""
+                SELECT a.id, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name, a.username
+                FROM institution_coordinators ic JOIN accounts a ON a.id = ic.account_id AND a.deleted_at IS NULL
+                  LEFT JOIN users u ON u.account_id = a.id AND u.deleted_at IS NULL
+                WHERE ic.institution_id = :i ORDER BY ic.created_at, a.id LIMIT 1
+                """).bind("i", h.get("inst_id")).fetch().one().map(r -> java.util.Optional.of(coordinatorOf(r)))
+                .defaultIfEmpty(java.util.Optional.empty());
+    }
+
+    /** A pessoa do contrato v1: {@code sourcedId} é o id da conta, que é também o assignee das tarefas no gestor. */
+    static Map<String, Object> coordinatorOf(Map<String, Object> row) {
+        String name = String.valueOf(row.get("name")).isBlank() ? String.valueOf(row.get("username")) : String.valueOf(row.get("name"));
+        return Map.of("sourcedId", String.valueOf(row.get("id")), "nome", name);
     }
 
     private Mono<List<Map<String, Object>>> students(Map<String, Object> h) {

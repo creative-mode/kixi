@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import ao.creativemode.kixi.shared.exception.ApiException;
+import ao.creativemode.kixi.shared.config.ServerClockConfig;
 import ao.creativemode.kixi.identity.dto.accounts.AccountBasicResponse;
 import ao.creativemode.kixi.academic.dto.schoolyears.SchoolYearResponse;
 import ao.creativemode.kixi.simulations.dto.simulation.SimulationRequest;
@@ -29,6 +30,14 @@ import reactor.core.publisher.Mono;
 
 @Service
 public class SimulationService {
+
+    /** Opcional: sem ele (testes unitários que constroem o serviço à mão) não se grava o trilho (kixi#596). */
+    @Autowired(required = false)
+    private SimulationAuditService audit;
+
+    /** kixi#609: para dizer em que ponto está a correção das abertas; opcional como as outras portas (nulo = sem estado). */
+    @Autowired(required = false)
+    private ao.creativemode.kixi.simulations.repository.SimulationAnswerRepository answerRepository;
 
     private final SimulationRepository repository;
     private final AccountRepository accountRepository;
@@ -257,7 +266,7 @@ public class SimulationService {
                     simulation.setSchoolYearId(dto.schoolYearId());
                     simulation.setStatementId(dto.statementId());
                     // The clock starts on the server; a client must not choose its own elapsed time.
-                    simulation.setStartedAt(LocalDateTime.now());
+                    simulation.setStartedAt(LocalDateTime.now(ServerClockConfig.ZONE));
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     return repository.save(simulation);
                 }))
@@ -274,7 +283,30 @@ public class SimulationService {
         if (!accountId.equals(dto.accountId())) {
             return Mono.error(ApiException.forbidden("A simulation can only be created for the authenticated account"));
         }
-        return create(dto, accountId, false, false, true, true);
+        return create(dto, accountId, false, false, true, true)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, accountId));
+    }
+
+    /**
+     * O motor SchoolOps (conta INTEGRATION) abre a simulação de um aluno (kixi#596): a autorização é do papel e do
+     * IntegrationScope, não de a conta ser a do aluno, e o acto fica no trilho com a conta do motor.
+     */
+    @Transactional
+    public Mono<SimulationResponse> createForIntegration(SimulationRequest dto, Long actorAccountId) {
+        return create(dto, actorAccountId, true)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, actorAccountId));
+    }
+
+    @Transactional
+    public Mono<SimulationResponse> updateForIntegration(Long id, SimulationRequest dto, Long actorAccountId) {
+        return update(id, dto)
+                .flatMap(updated -> audited(updated, SimulationAuditService.Action.UPDATE, actorAccountId));
+    }
+
+    private Mono<SimulationResponse> audited(SimulationResponse response, SimulationAuditService.Action action, Long actor) {
+        return audit == null ? Mono.just(response)
+                : audit.record(SimulationAuditService.Target.SIMULATION, response.id(), response.id(), action, actor, null)
+                        .thenReturn(response);
     }
 
     /**
@@ -290,12 +322,13 @@ public class SimulationService {
                     Simulation simulation = new Simulation();
                     simulation.setAccountId(accountId);
                     simulation.setStatementId(practiceStatementId);
-                    simulation.setStartedAt(LocalDateTime.now());
+                    simulation.setStartedAt(LocalDateTime.now(ServerClockConfig.ZONE));
                     simulation.setStatus(SimulationStatus.IN_PROGRESS);
                     simulation.setTitle(title);
                     return repository.save(simulation);
                 }))
-                .flatMap(this::toResponse);
+                .flatMap(this::toResponse)
+                .flatMap(created -> audited(created, SimulationAuditService.Action.CREATE, accountId));
     }
 
     @Transactional
@@ -311,7 +344,8 @@ public class SimulationService {
         return repository.findByIdAndAccountIdAndDeletedAtIsNull(id, accountId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found!")))
                 .flatMap(simulation -> lockForUpdate(simulation)
-                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)));
+                        .flatMap(locked -> updateExisting(Mono.just(locked), dto)))
+                .flatMap(updated -> audited(updated, SimulationAuditService.Action.UPDATE, accountId));
     }
 
     private Mono<Simulation> lockForUpdate(Simulation simulation) {
@@ -328,7 +362,7 @@ public class SimulationService {
                     }
                     if (locked.getExamRoomId() == null || examRoomAccess == null) return Mono.just(locked);
                     Mono<Boolean> accepts = examRoomAccess.acceptsSimulationAnswers(locked.getExamRoomId(),
-                            LocalDateTime.now());
+                            LocalDateTime.now(ServerClockConfig.ZONE));
                     return (accepts == null ? Mono.just(false) : accepts)
                             .filter(Boolean::booleanValue)
                             .switchIfEmpty(Mono.error(ApiException.conflict(
@@ -363,6 +397,31 @@ public class SimulationService {
                     return repository.save(simulation);
                 })
                 .flatMap(this::toResponse);
+    }
+
+    /**
+     * Apagar, restaurar e purgar, só pelo administrador (kixi#596), com o registo da auditoria na MESMA transação da
+     * mutação: se o registo falhar, a mutação desfaz-se.
+     */
+    @Transactional
+    public Mono<Void> softDelete(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.SOFT_DELETE, actorAccountId, reason, () -> softDelete(id));
+    }
+
+    @Transactional
+    public Mono<Void> restore(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.RESTORE, actorAccountId, reason, () -> restore(id));
+    }
+
+    @Transactional
+    public Mono<Void> hardDelete(Long id, Long actorAccountId, String reason) {
+        return auditedLifecycle(id, SimulationAuditService.Action.PURGE, actorAccountId, reason, () -> hardDelete(id));
+    }
+
+    private Mono<Void> auditedLifecycle(Long id, SimulationAuditService.Action action, Long actor, String reason,
+            java.util.function.Supplier<Mono<Void>> mutation) {
+        return mutation.get().then(Mono.defer(() -> audit == null ? Mono.<Void>empty()
+                : audit.record(SimulationAuditService.Target.SIMULATION, id, id, action, actor, reason)));
     }
 
     public Mono<Void> softDelete(Long id) {
@@ -444,7 +503,35 @@ public class SimulationService {
                                 ? simulation.getExamRoomDurationMinutes() : tuple.getT2().getDurationMinutes(),
                         Boolean.TRUE.equals(tuple.getT1().getAccessibilityExtraTime()))))
                     .map(deadline -> toResponse(simulation, tuple, deadline, tuple.getT4()))
-                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null, tuple.getT4()))));
+                    .switchIfEmpty(Mono.fromSupplier(() -> toResponse(simulation, tuple, null, tuple.getT4()))))
+                .flatMap(response -> correctionOf(simulation)
+                        .map(summary -> response.withCorrection(summary.status(), summary.correctedAt())));
+    }
+
+    /**
+     * O motor avisa que não conseguiu corrigir as abertas (kixi#609): guarda-se quando e porquê, e o estado da correção passa a
+     * FAILED até a IA voltar a corrigir (a correção seguinte limpa o aviso). Só faz sentido numa simulação entregue.
+     */
+    public Mono<Void> markCorrectionFailed(Long id, String reason) {
+        return repository.findByIdAndDeletedAtIsNull(id)
+                .switchIfEmpty(Mono.error(ApiException.notFound("Simulation not found")))
+                .flatMap(simulation -> {
+                    if (simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.FINISHED) {
+                        return Mono.<Simulation>error(ApiException.conflict("Only a finished simulation has a correction that can fail"));
+                    }
+                    simulation.setCorrectionFailedAt(LocalDateTime.now());
+                    simulation.setCorrectionFailureReason(reason);
+                    return repository.save(simulation);
+                }).then();
+    }
+
+    /** O estado da correção das abertas de uma simulação entregue (kixi#609); sem ele numa simulação por entregar. */
+    private Mono<CorrectionSummary> correctionOf(Simulation simulation) {
+        if (answerRepository == null || simulation.getStatus() != ao.creativemode.kixi.simulations.model.SimulationStatus.FINISHED) {
+            return Mono.just(CorrectionSummary.NONE);
+        }
+        return answerRepository.findAllBySimulationIdInAndDeletedAtIsNull(java.util.List.of(simulation.getId())).collectList()
+                .map(answers -> CorrectionSummary.of(simulation, answers));
     }
 
     private SimulationResponse toResponse(Simulation simulation,
@@ -466,7 +553,9 @@ public class SimulationService {
                         simulation.getCreatedAt(),
                         simulation.getUpdatedAt(),
                         simulation.getDeletedAt(),
-                        simulation.selectedQuestionIdSet() == null ? null : java.util.List.copyOf(simulation.selectedQuestionIdSet())
+                        simulation.selectedQuestionIdSet() == null ? null : java.util.List.copyOf(simulation.selectedQuestionIdSet()),
+                        null,
+                        null
                     );
     }
 

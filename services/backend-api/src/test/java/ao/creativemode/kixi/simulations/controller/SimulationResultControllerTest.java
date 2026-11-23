@@ -214,6 +214,8 @@ class SimulationResultControllerTest {
                 1,
                 1,
                 0,
+                null,
+                null,
                 1800,
                 LocalDateTime.now(),
                 List.of(new SimulationResultResponse.QuestionResult(
@@ -226,7 +228,7 @@ class SimulationResultControllerTest {
     }
 
     private SimulationResultResponse hiddenResult() {
-        return new SimulationResultResponse(SIMULATION_ID, SimulationStatus.FINISHED, null, null, 1, null,
+        return new SimulationResultResponse(SIMULATION_ID, SimulationStatus.FINISHED, null, null, 1, null, null, null,
                 1800, LocalDateTime.now(), List.of(new SimulationResultResponse.QuestionResult(
                         20L, 1, "Qual?", "multiple_choice", 5.0, null, null, 30L, null, null, null, null,
                         List.of(new SimulationResultResponse.OptionResult(30L, "A", "A text", null)),

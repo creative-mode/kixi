@@ -1,6 +1,6 @@
 package ao.creativemode.kixi.simulations.repository;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -30,5 +30,6 @@ public interface SimulationIntegrityEventRepository extends ReactiveCrudReposito
     Flux<SimulationIntegrityEvent> findRecentBySimulationIdIn(
             Collection<Long> simulationIds, int perSimulationLimit);
 
-    Mono<Long> countBySimulationIdAndAtAfter(Long simulationId, LocalDateTime since);
+    @Query("SELECT COUNT(*) FROM simulation_integrity_events WHERE simulation_id = :simulationId AND occurred_at > :since")
+    Mono<Long> countBySimulationIdAndAtAfter(Long simulationId, OffsetDateTime since);
 }

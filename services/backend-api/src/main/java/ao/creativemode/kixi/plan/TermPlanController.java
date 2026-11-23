@@ -3,6 +3,8 @@ package ao.creativemode.kixi.plan;
 import ao.creativemode.kixi.plan.TermPlanService.Plan;
 import ao.creativemode.kixi.plan.TermPlanService.PlanInput;
 import ao.creativemode.kixi.plan.TermPlanService.Reminder;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -26,9 +28,11 @@ import reactor.core.publisher.Mono;
 public class TermPlanController {
 
     public record CreateRequest(Long classId, Long subjectId, Long termId, LocalDate p1Date, LocalDate p2Date, Integer macCount,
-                                List<LocalDate> macDates, List<String> macTitles) { }
+                                List<LocalDate> macDates, List<@Size(max = 200, message = "A title must not exceed 200 characters") String> macTitles) { }
 
-    public record LinkRequest(Long statementId, Long roomId, String title, LocalDate plannedDate) { }
+    /** {@code title} cabe em term_assessments.title (VARCHAR 200): mais do que isso era um 500 da base de dados. */
+    public record LinkRequest(Long statementId, Long roomId,
+                              @Size(max = 200, message = "The title must not exceed 200 characters") String title, LocalDate plannedDate) { }
 
     private final TermPlanService service;
 
@@ -38,7 +42,7 @@ public class TermPlanController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public Mono<Plan> create(@RequestBody CreateRequest r) {
+    public Mono<Plan> create(@Valid @RequestBody CreateRequest r) {
         return service.access().flatMap(who -> service.create(who, new PlanInput(r.classId(), r.subjectId(), r.termId(), r.p1Date(),
                 r.p2Date(), r.macCount(), r.macDates(), r.macTitles())));
     }
@@ -60,13 +64,13 @@ public class TermPlanController {
     }
 
     @PutMapping("/{id}")
-    public Mono<Plan> update(@PathVariable Long id, @RequestBody CreateRequest r) {
+    public Mono<Plan> update(@PathVariable Long id, @Valid @RequestBody CreateRequest r) {
         return service.access().flatMap(who -> service.update(who, id, new PlanInput(null, null, null, r.p1Date(), r.p2Date(),
                 r.macCount(), r.macDates(), r.macTitles())));
     }
 
     @PatchMapping("/{id}/assessments/{assessmentId}")
-    public Mono<Plan> link(@PathVariable Long id, @PathVariable Long assessmentId, @RequestBody LinkRequest r) {
+    public Mono<Plan> link(@PathVariable Long id, @PathVariable Long assessmentId, @Valid @RequestBody LinkRequest r) {
         return service.access().flatMap(who -> service.link(who, id, assessmentId, r.statementId(), r.roomId(), r.title(), r.plannedDate()));
     }
 

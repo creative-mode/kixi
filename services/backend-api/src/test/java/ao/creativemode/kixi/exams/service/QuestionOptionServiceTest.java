@@ -510,7 +510,7 @@ class QuestionOptionServiceTest {
         answered.markAsCorrect();
         when(options.findAllByQuestionIdOrderedByOrderIndex(QUESTION_ID)).thenReturn(Flux.just(answered));
 
-        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, false))
+        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT))
                 .assertNext(response -> {
                     assertThat(response.optionText()).isEqualTo("texto");
                     assertThat(response.isCorrect()).isNull();
@@ -526,7 +526,7 @@ class QuestionOptionServiceTest {
         answered.markAsCorrect();
         when(options.findAllByQuestionIdOrderedByOrderIndex(QUESTION_ID)).thenReturn(Flux.just(answered));
 
-        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, true))
+        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.ADMIN))
                 .assertNext(response -> assertThat(response.isCorrect()).isTrue())
                 .verifyComplete();
     }
@@ -536,7 +536,7 @@ class QuestionOptionServiceTest {
         givenTheStatementIsPublished();
         givenTheQuestionIsThere();
 
-        StepVerifier.create(service.findAllDeleted(STATEMENT_ID, QUESTION_ID, false))
+        StepVerifier.create(service.findAllDeleted(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -548,7 +548,7 @@ class QuestionOptionServiceTest {
     void aReaderOnlyReachesAPublishedStatement() {
         when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, false))
+        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -563,7 +563,7 @@ class QuestionOptionServiceTest {
         question.setStatementId(999L);
         when(questions.findByIdAndDeletedAtIsNull(QUESTION_ID)).thenReturn(Mono.just(question));
 
-        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, true))
+        StepVerifier.create(service.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.ADMIN))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
