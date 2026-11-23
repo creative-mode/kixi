@@ -12,6 +12,9 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
 import ao.creativemode.kixi.exams.service.QuestionOptionService;
 import ao.creativemode.kixi.exams.service.QuestionService;
+import ao.creativemode.kixi.exams.service.StatementReadAccessService;
+import ao.creativemode.kixi.exams.service.StatementReadScope;
+import ao.creativemode.kixi.exams.service.StatementReader;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
 import ao.creativemode.kixi.identity.config.SecurityConfig;
@@ -78,12 +81,21 @@ class QuestionOptionControllerTest {
     @MockBean
     private CurrentAccountService currentAccountService;
 
+    @MockBean
+    private StatementReadAccessService readAccess;
+
+    /** O âmbito do professor 7: as leituras aninhadas pesam o enunciado contra ele (StatementReader). */
+    private static final StatementReadScope SCOPE =
+            new StatementReadScope(List.of(new StatementReadScope.Pair(1L, 10L)));
+    private static final StatementReader TEACHER = new StatementReader(true, SCOPE);
+
     @BeforeEach
     void setUp() {
         when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(TEACHER_ID));
-        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(true));
+        when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
         when(currentAccountService.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
-        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, true))
+        when(readAccess.teacherScope(TEACHER_ID)).thenReturn(Mono.just(SCOPE));
+        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, TEACHER))
                 .thenReturn(Flux.just(optionResponse()));
     }
 
@@ -100,7 +112,7 @@ class QuestionOptionControllerTest {
                 .jsonPath("$[0].id").isEqualTo(OPTION_ID)
                 .jsonPath("$[0].questionId").isEqualTo(QUESTION_ID);
 
-        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, true);
+        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, TEACHER);
     }
 
     @Test
@@ -109,8 +121,8 @@ class QuestionOptionControllerTest {
         // covered in QuestionOptionServiceTest — so what this pins is that the
         // controller asks for the reader's view at all, rather than for the staff
         // one and dropping the field on the way out.
-        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(false));
-        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, false))
+        when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(false));
+        when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT))
                 .thenReturn(Flux.just(optionResponse()));
 
         client.mutateWith(studentJwt())
@@ -119,12 +131,12 @@ class QuestionOptionControllerTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, false);
+        verify(questionOptionService).findAll(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT);
     }
 
     @Test
     void listsTheRemovedOptionsOnTheirOwnPath() {
-        when(questionOptionService.findAllDeleted(STATEMENT_ID, QUESTION_ID, true))
+        when(questionOptionService.findAllDeleted(STATEMENT_ID, QUESTION_ID, TEACHER))
                 .thenReturn(Flux.just(optionResponse()));
 
         client.mutateWith(teacherJwt())
@@ -136,7 +148,7 @@ class QuestionOptionControllerTest {
 
     @Test
     void findsOneOption() {
-        when(questionOptionService.findById(STATEMENT_ID, QUESTION_ID, OPTION_ID, true))
+        when(questionOptionService.findById(STATEMENT_ID, QUESTION_ID, OPTION_ID, TEACHER))
                 .thenReturn(Mono.just(optionResponse()));
 
         client.mutateWith(teacherJwt())

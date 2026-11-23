@@ -6,7 +6,7 @@ import ao.creativemode.kixi.exams.dto.statement.StatementRequest;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.exams.service.ManualStatementService;
 import ao.creativemode.kixi.exams.service.StatementReadAccessService;
-import ao.creativemode.kixi.exams.service.StatementReadScope;
+import ao.creativemode.kixi.exams.service.StatementReader;
 import ao.creativemode.kixi.exams.service.StatementService;
 import ao.creativemode.kixi.exams.service.StatementWithQuestions;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -218,33 +218,16 @@ public class StatementController {
      * Who is reading. An administrator reads everything, a student only what is
      * published, and a teacher (#174) what their teaching assignments cover:
      * until then the whole school reached the browser and the manager app threw
-     * away the rows that were not theirs.
-     *
-     * @param staff whether the caller reads as staff (sees drafts and review state)
-     * @param scope the teacher's scope; {@code null} for an administrator or a student
+     * away the rows that were not theirs. The rule lives in {@link StatementReader},
+     * shared with the question and option routes.
      */
-    private record Reader(boolean staff, StatementReadScope scope) {
-        boolean sees(Statement statement) {
-            return scope == null || scope.allows(statement);
-        }
-    }
-
-    private Mono<Reader> reader() {
-        return Mono.zip(currentAccountService.hasAnyRole("ADMIN"), currentAccountService.hasAnyRole("TEACHER"))
-            .flatMap(roles -> {
-                if (roles.getT1()) return Mono.just(new Reader(true, null));
-                if (!roles.getT2()) return Mono.just(new Reader(false, null));
-                return currentAccountService.requiredAccountId()
-                    .flatMap(readAccess::teacherScope)
-                    .map(scope -> new Reader(true, scope));
-            });
+    private Mono<StatementReader> reader() {
+        return StatementReader.current(currentAccountService, readAccess);
     }
 
     /** A record outside the teacher's scope is refused, not hidden behind a 404. */
-    private static Mono<Statement> requireSees(Reader reader, Statement statement) {
-        return reader.sees(statement)
-            ? Mono.just(statement)
-            : Mono.error(ApiException.forbidden("Teacher is not assigned to this statement"));
+    private static Mono<Statement> requireSees(StatementReader reader, Statement statement) {
+        return reader.require(statement);
     }
 
     /** The staff-only lists (review, OCR, trash): the route already keeps students out. */
@@ -273,7 +256,7 @@ public class StatementController {
     }
 
     private Mono<StatementWithQuestions> readableStatementWithQuestions(
-        Reader reader,
+        StatementReader reader,
         Supplier<Mono<StatementWithQuestions>> staffQuery,
         Supplier<Mono<StatementWithQuestions>> studentQuery
     ) {

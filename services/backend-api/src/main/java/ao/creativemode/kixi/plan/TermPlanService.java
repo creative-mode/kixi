@@ -204,11 +204,17 @@ public class TermPlanService {
                         : touch(planId).then(plan(who, planId)));
     }
 
+    /** term_assessments.dispensed_reason é VARCHAR(500). */
+    private static final int REASON_MAX = 500;
+
     /** O coordenador (ou o administrador) dispensa uma componente, com motivo. */
     @Transactional
     public Mono<Plan> dispense(Access who, Long planId, Long assessmentId, String reason) {
         if (reason == null || reason.isBlank()) {
             return Mono.error(ApiException.badRequest("A reason is required to dispense an assessment"));
+        }
+        if (reason.trim().length() > REASON_MAX) {
+            return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         }
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql(
                         "SELECT kind FROM term_assessments WHERE id = :id AND plan_id = :p").bind("id", assessmentId).bind("p", planId)
@@ -226,12 +232,13 @@ public class TermPlanService {
 
     /**
      * A P1 ou a P2 repete-se (kixi#534): o coordenador (ou o administrador) marca uma data nova e o motivo; a avaliação volta a «planeada»,
-     * sem enunciado nem sala (a sala antiga fica como histórico). Só antes de a pauta abrir: depois disso os dados já seguiram para o motor.
+     * sem enunciado nem sala (a sala antiga fica como histórico), e o agendamento deixa de estar concluído até haver novo enunciado. Só antes de a pauta abrir: depois disso os dados já seguiram para o motor.
      */
     @Transactional
     public Mono<Plan> reschedule(Access who, Long planId, Long assessmentId, LocalDate date, String reason) {
         if (date == null) return Mono.error(ApiException.badRequest("A new date is required"));
         if (reason == null || reason.isBlank()) return Mono.error(ApiException.badRequest("A reason is required to reschedule an assessment"));
+        if (reason.trim().length() > REASON_MAX) return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> {
             if (h.pautaOpenedAt() != null) return Mono.<Long>error(ApiException.conflict("The pauta is already open: its assessments cannot be rescheduled"));
             return db.sql("""
@@ -240,7 +247,10 @@ public class TermPlanService {
                     WHERE id = :id AND plan_id = :p AND kind IN ('P1', 'P2', 'MAC')
                     """).bind("d", date).bind("id", assessmentId).bind("p", planId).fetch().rowsUpdated();
         }).flatMap(n -> n == 0 ? Mono.error(ApiException.badRequest("Assessment not found in this plan"))
-                : touch(planId).then(plan(who, planId)));
+                // A avaliação voltou a «planeada», sem enunciado: o agendamento já não está concluído (a pauta ainda não abriu, a guarda
+                // de cima). Sem isto o plano ficava «concluído» sem a prova e a pauta nunca abria; o professor liga o novo enunciado e conclui.
+                : db.sql("UPDATE term_plans SET scheduling_concluded_at = NULL, scheduling_concluded_by = NULL WHERE id = :p")
+                        .bind("p", planId).fetch().rowsUpdated().then(touch(planId)).then(plan(who, planId)));
     }
 
     @Transactional

@@ -326,6 +326,58 @@ class TermPlanPostgresIntegrationTest {
                 .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
     }
 
+    /**
+     * Vaga 1C, P2-10: reagendar a P2 depois de o agendamento estar concluído tira-lhe o enunciado (kixi#534); o plano não pode
+     * continuar «concluído» (o abridor esperava uma pauta que nunca abre e o ecrã dizia «a pauta abre em instantes»). Volta a
+     * pedir enunciado e nova conclusão.
+     */
+    @Test
+    void reschedulingAnExamAfterTheSchedulingIsConcludedReopensTheScheduling() {
+        String teacher = token(TEACHER, "TEACHER");
+        String coordinator = token(COORDINATOR, "COORDINATOR");
+        bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        AtomicLong plan = new AtomicLong();
+        bearer(teacher).post().uri("/api/v1/term-plans").contentType(MediaType.APPLICATION_JSON).bodyValue(body(0)).exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(v -> plan.set(((Number) v).longValue()));
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
+                + "(523001, 'Prova', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE plan_id = " + plan.get() + " AND kind IN ('P1', 'P2')");
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+        long p2 = assessmentId(plan.get(), "P2", 1);
+
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + p2 + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2030-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.assessments[1].statementId").isEqualTo(null)
+                .jsonPath("$.schedulingConcluded").isEqualTo(false);
+        assertThat(count("SELECT COUNT(*) FROM term_plans WHERE id = " + plan.get() + " AND scheduling_concluded_at IS NOT NULL")).isZero();
+        // sem enunciado na P2 não se volta a concluir; com ele, sim
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isEqualTo(409);
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE id = " + p2);
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+    }
+
+    /** Schoolops D1: com a MAC dispensada o agendamento conclui-se só com a P1 e a P2 (a MAC não exige enunciado). */
+    @Test
+    void concludingTheSchedulingDoesNotNeedAStatementInADispensedMac() {
+        String teacher = token(TEACHER, "TEACHER");
+        String coordinator = token(COORDINATOR, "COORDINATOR");
+        bearer(token(ADMIN, "ADMIN")).put().uri("/api/v1/institutions/" + INSTITUTION + "/coordinators/" + COORDINATOR).exchange().expectStatus().isNoContent();
+        AtomicLong plan = new AtomicLong();
+        bearer(teacher).post().uri("/api/v1/term-plans").contentType(MediaType.APPLICATION_JSON).bodyValue(body(1)).exchange().expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").value(v -> plan.set(((Number) v).longValue()));
+        sql("INSERT INTO statements (id, title, exam_type, duration_minutes, total_max_score, created_by, visible, needs_review, source, class_id, subject_id) VALUES "
+                + "(523001, 'Prova', 'TEST', 60, 5, " + TEACHER + ", false, false, 'manual', " + CLASS + ", " + SUBJECT + ")");
+        sql("UPDATE term_assessments SET statement_id = 523001 WHERE plan_id = " + plan.get() + " AND kind IN ('P1', 'P2')");
+        // a única MAC sem enunciado: recusa; dispensada com motivo: conclui
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isEqualTo(409);
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + assessmentId(plan.get(), "MAC", 1) + "/dispense")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"reason\":\"MAC cancelada\"}").exchange().expectStatus().isOk();
+        bearer(teacher).post().uri("/api/v1/term-plans/" + plan.get() + "/conclude").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.schedulingConcluded").isEqualTo(true);
+    }
+
     /** kixi#623: a MAC reagenda-se como a P1 e a P2 (só o coordenador, com motivo, e só antes de a pauta abrir). */
     @Test
     void aMacAssessmentIsRescheduledLikeAnExam() {

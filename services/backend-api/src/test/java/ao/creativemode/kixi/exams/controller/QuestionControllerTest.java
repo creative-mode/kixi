@@ -14,6 +14,9 @@ import ao.creativemode.kixi.exams.dto.question.QuestionResponse;
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
 import ao.creativemode.kixi.exams.service.QuestionOptionService;
 import ao.creativemode.kixi.exams.service.QuestionService;
+import ao.creativemode.kixi.exams.service.StatementReadAccessService;
+import ao.creativemode.kixi.exams.service.StatementReadScope;
+import ao.creativemode.kixi.exams.service.StatementReader;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
 import ao.creativemode.kixi.identity.config.SecurityConfig;
@@ -84,12 +87,21 @@ class QuestionControllerTest {
     @MockBean
     private CurrentAccountService currentAccountService;
 
+    @MockBean
+    private StatementReadAccessService readAccess;
+
+    /** O âmbito do professor 7: as leituras aninhadas pesam o enunciado contra ele (StatementReader). */
+    private static final StatementReadScope SCOPE =
+            new StatementReadScope(List.of(new StatementReadScope.Pair(1L, 10L)));
+    private static final StatementReader TEACHER = new StatementReader(true, SCOPE);
+
     @BeforeEach
     void setUp() {
         when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(TEACHER_ID));
-        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(true));
+        when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
         when(currentAccountService.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
-        when(questionService.findAllActive(STATEMENT_ID, true)).thenReturn(Flux.just(questionResponse()));
+        when(readAccess.teacherScope(TEACHER_ID)).thenReturn(Mono.just(SCOPE));
+        when(questionService.findAllActive(STATEMENT_ID, TEACHER)).thenReturn(Flux.just(questionResponse()));
     }
 
     // ── Reads ───────────────────────────────────────────────────────────────
@@ -106,13 +118,13 @@ class QuestionControllerTest {
                 .jsonPath("$[0].number").isEqualTo(1)
                 .jsonPath("$[0].modelAnswer").isEqualTo("2");
 
-        verify(questionService).findAllActive(STATEMENT_ID, true);
+        verify(questionService).findAllActive(STATEMENT_ID, TEACHER);
     }
 
     @Test
     void aStudentReadsWithoutTheAnswerKeyAndTheRouteStillAnswers() {
-        when(currentAccountService.hasAnyRole("ADMIN", "TEACHER")).thenReturn(Mono.just(false));
-        when(questionService.findAllActive(STATEMENT_ID, false)).thenReturn(Flux.just(questionResponse()));
+        when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(false));
+        when(questionService.findAllActive(STATEMENT_ID, StatementReader.STUDENT)).thenReturn(Flux.just(questionResponse()));
 
         client.mutateWith(studentJwt())
                 .get()
@@ -122,12 +134,12 @@ class QuestionControllerTest {
 
         // Not simply the staff listing with fields dropped at the edge: the
         // service is asked for the reader's view.
-        verify(questionService).findAllActive(STATEMENT_ID, false);
+        verify(questionService).findAllActive(STATEMENT_ID, StatementReader.STUDENT);
     }
 
     @Test
     void listsTheRemovedQuestionsOnTheirOwnPath() {
-        when(questionService.findAllDeleted(STATEMENT_ID, true)).thenReturn(Flux.just(questionResponse()));
+        when(questionService.findAllDeleted(STATEMENT_ID, TEACHER)).thenReturn(Flux.just(questionResponse()));
 
         client.mutateWith(teacherJwt())
                 .get()

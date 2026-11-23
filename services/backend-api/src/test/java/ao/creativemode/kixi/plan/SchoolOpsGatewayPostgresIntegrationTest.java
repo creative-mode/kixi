@@ -262,6 +262,21 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         assertThat(CALLS).hasSize(1);
     }
 
+    /** Schoolops D1: com a MAC do plano dispensada o pedido leva {@code macDispensada} e as duas provas, sem {@code avaliacoesContinuas}. */
+    @Test
+    void aDispensedMacGoesAsMacDispensadaWithBothProvasAndNoContinuousAssessments() {
+        sql("UPDATE term_assessments SET dispensed_at = now(), dispensed_reason = 'MAC cancelada' WHERE plan_id = 525001 AND kind = 'MAC'");
+        sql("UPDATE term_plans SET scheduling_concluded_at = now() WHERE id = 525001");
+
+        opener.openReadyPlans();
+
+        assertThat(CALLS).hasSize(1);
+        assertThat(CALLS.get(0)).startsWith("POST /v1/pautas auth=Bearer token-de-teste")
+                .contains("\"macDispensada\":true")
+                .contains("\"componente\":\"P1\"").contains("\"componente\":\"P2\"")
+                .doesNotContain("avaliacoesContinuas");
+    }
+
     /** Uma prova cuja sala fechou antes de a pauta abrir fica em fila e encerra-se assim que a pauta abre. */
     @Test
     void aProvaClosedBeforeThePautaOpensIsClosedRightAfterItOpens() {

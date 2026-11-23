@@ -1,26 +1,29 @@
 # Matriz de autorização da API
 
-Esta matriz descreve as regras de `SecurityConfig`. As verificações de propriedade e de âmbito continuam a ser feitas pelos serviços, com a conta do token autenticado; um papel autorizado não dá acesso automático a dados de outros alunos, turmas ou escolas.
+Esta matriz descreve as regras de `SecurityConfig` e de `IntegrationScope`. As verificações de propriedade e de âmbito continuam a ser feitas pelos serviços, com a conta do token autenticado; um papel autorizado não dá acesso automático a dados de outros alunos, turmas ou escolas.
 
-| Área / operações | Anónimo | STUDENT | TEACHER | ADMIN |
-| --- | --- | --- | --- | --- |
-| Login, registo e OAuth (`/api/v1/auth/**`) | Permitido | Permitido | Permitido | Permitido |
-| Health e documentação OpenAPI | Permitido | Permitido | Permitido | Permitido |
-| Contas, utilizadores, papéis, sessões e gestão de professores (exceto `GET /teachers/me`) | Negado | Negado | Negado | Permitido |
-| Perfil próprio, instituições próprias e amizades | Negado | Autorizado, com âmbito da própria conta | Autorizado, com âmbito da própria conta | Autorizado |
-| Catálogos académicos: leitura ativa | Negado | Autenticado | Autenticado | Autorizado |
-| Lixeira dos catálogos e imagens | Negado | Negado | Permitido | Permitido |
-| Catálogos académicos: escrita | Negado | Negado | Permitido | Permitido |
-| Enunciados: leitura | Negado | Visíveis para o aluno | Inclui pendentes e respeita atribuições | Permitido |
-| Enunciados, perguntas, opções e imagens: escrita/moderação | Negado | Negado | Permitido | Permitido |
-| Simulações e respostas: leitura | Negado | Próprias | Autenticado; âmbito validado pelo serviço | Permitido |
-| Submeter simulação / resposta | Negado | Permitido | Permitido | Permitido |
-| Corrigir respostas, recuperar ou purgar registos | Negado | Negado | Permitido | Permitido |
-| Salas de prova: entrar e consultar a própria prova | Negado | Permitido | Autenticado, sujeito ao âmbito da sala | Permitido |
-| Salas de prova: gerir, transmitir ao vivo e consultar notas | Negado | Negado | Permitido | Permitido |
-| Analytics e moderação do feed | Negado | Negado | Permitido | Permitido |
-| Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido |
-| Rota sem regra explícita | Negado | Negado | Negado | Negado |
+Perfis: `COORDINATOR` é um papel que se soma a `STUDENT` (a conta coordenadora também é aluna, por isso herda o que o aluno pode e não ganha mais nada fora de `/term-plans` e `/coordination`); `INTEGRATION` é a conta de serviço do motor SchoolOps e só chega à lista fixa de `IntegrationScope` (`services/backend-api/src/main/java/ao/creativemode/kixi/identity/security/IntegrationScope.java`), ver a secção «Papel `INTEGRATION`». «403» na coluna `INTEGRATION` é o que lhe responde fora dessa lista, mesmo em rotas abertas ao anónimo.
+
+| Área / operações | Anónimo | STUDENT | TEACHER | COORDINATOR | ADMIN | INTEGRATION |
+| --- | --- | --- | --- | --- | --- | --- |
+| Login, registo e OAuth (`/api/v1/auth/**`) | Permitido | Permitido | Permitido | Permitido | Permitido | 403 |
+| Health e documentação OpenAPI (só o anónimo; com token de `INTEGRATION` é 403) | Permitido | Permitido | Permitido | Permitido | Permitido | 403 |
+| Contas, utilizadores, papéis, sessões e gestão de professores (exceto `GET /teachers/me`; `GET /teachers/me/overview` e `PUT /teaching-assignments/*/tutor-style` são `TEACHER` e `ADMIN`) | Negado | Negado | Negado | Negado | Permitido | Negado |
+| Perfil próprio, instituições próprias e amizades | Negado | Autorizado, com âmbito da própria conta | Autorizado, com âmbito da própria conta | Autorizado, com âmbito da própria conta | Autorizado | Negado |
+| Catálogos académicos: leitura ativa | Negado | Autenticado | Autenticado | Autenticado | Autorizado | Só o que o motor lê (anos letivos por id, disciplinas) |
+| Lixeira dos catálogos académicos (`/{school-years,terms,subjects,courses,classes}/trash`) | Negado | Negado | Permitido | Negado | Permitido | Negado |
+| Lista e lixeira das imagens de questões (`GET /question-images`, `/question-images/trash`) | Negado | Negado | Negado | Negado | Permitido | Negado |
+| Catálogos académicos: escrita (anos, trimestres, disciplinas, cursos, turmas; kixi#253) | Negado | Negado | Negado | Negado | Permitido | Negado |
+| Enunciados, questões e opções: leitura (com o gabarito `isCorrect`; kixi#174) | Negado | Visíveis para o aluno, sem gabarito | Inclui pendentes e lixeira, só da turma e disciplina que leciona (403 fora disso, como `GET /statements/{id}`) | Como o aluno | Permitido | Enunciado completo e questões |
+| Enunciados, perguntas, opções e imagens: escrita/moderação | Negado | Negado | Permitido, só da turma e disciplina que leciona | Negado | Permitido | Negado |
+| Simulações e respostas: leitura | Negado | Próprias | Autenticado; âmbito validado pelo serviço | Próprias | Permitido | Leitura (simulações, respostas) |
+| Submeter simulação / resposta | Negado | Permitido | Permitido | Permitido | Permitido | Abre e entrega em nome do aluno |
+| Corrigir respostas, recuperar ou purgar registos | Negado | Negado | Permitido (não nas provas de um plano) | Negado | Permitido (não nas provas de um plano, ver «Correção pela IA») | `PATCH …/grade` e `PUT …/ai-grade`; não apaga nem purga |
+| Salas de prova: entrar e consultar a própria prova | Negado | Permitido | Autenticado, sujeito ao âmbito da sala | Permitido | Permitido | Negado |
+| Salas de prova: gerir, transmitir ao vivo e consultar notas | Negado | Negado | Permitido | Negado (lê as da instituição em `/coordination/exam-rooms`) | Permitido | Fechar sala, `GET /exam-rooms/owned` e `…/grades` |
+| Analytics e moderação do feed | Negado | Negado | Permitido | Negado | Permitido | Só os alunos de uma turma (analytics) |
+| Ranking, feed, partilhas e amizades | Negado | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Autenticado, com âmbito da conta | Permitido | Negado |
+| Rota sem regra explícita | Negado | Negado | Negado | Negado | Negado | Negado |
 
 ## Registo escolar (`/api/v1/school-register/**`)
 
@@ -47,7 +50,7 @@ Um enunciado ligado a uma sala **não é visível ao aluno** até todas as salas
 
 ## Re-correção de uma resposta (`PATCH /api/v1/simulation-answers/{id}/grade?rectify=true`)
 
-Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (por uma pessoa ou pela IA; 409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509). Uma resposta corrigida pela IA e depois rectificada passa a `GRADED`.
+Mesma autorização da correção (administrador, professor atribuído à turma e disciplina, conta de integração). Com `rectify=true` só aceita respostas **já corrigidas** (por uma pessoa, pela IA ou automaticamente, como uma objetiva que uma reclamação deferida corrige; 409 se ainda pendentes) e, sem ele, só as pendentes: uma rectificação nunca passa por primeira correção nem o contrário. Nunca acima da cotação da questão; a nota final da simulação é recalculada (kixi#509). Uma resposta corrigida pela IA ou automaticamente e depois rectificada passa a `GRADED`. A rectificação de uma resposta **corrigida automaticamente** (uma objetiva) é só da conta de integração (o motor, ao deferir uma reclamação) e do administrador: o professor recebe 409 nessas, e continua a poder rectificar as corrigidas por uma pessoa ou pela IA.
 
 ## Correção pela IA das provas de um plano (kixi#542)
 
@@ -63,10 +66,14 @@ O motor escreve as pautas em `/school-register` (só `ADMIN` e `INTEGRATION`); e
 
 | Papel | `GET /term-sheets` e `/{sheetId}` | `GET /me/term-sheets` |
 |---|---|---|
-| `ADMIN` | todas as pautas (`REGISTADA` e `FECHADA`); uma que não existe dá 404 | 403 |
+| `ADMIN` | todas as pautas (`REGISTADA` e `FECHADA`); uma que não existe dá 404 | 200 com a lista vazia (ver abaixo) |
 | `TEACHER` | só as pautas da **turma e da disciplina** que leciona (`teaching_assignments`, o par exato, como a leitura de enunciados); o que não pode ler e o que não existe dão ambos 403, para não revelar que pautas há | 403 |
-| `STUDENT` | 403 | só a **sua** linha (MAC, P1, P2, MT, estado), só de pautas `FECHADA`: nada de outros alunos nem de estatísticas da turma |
+| `STUDENT`, `COORDINATOR` | 403 | só a **sua** linha (MAC, P1, P2, MT, estado), só de pautas `FECHADA`: nada de outros alunos nem de estatísticas da turma |
 | `INTEGRATION` | 403 (fora do âmbito do motor, ver `IntegrationScope`) | 403 |
+
+`GET /me/term-sheets` exige o papel `STUDENT`, que toda a conta registada tem (o `ADMIN` e o `COORDINATOR` também; um professor sem `STUDENT` recebe 403): é uma leitura **da própria conta**, por isso quem não é aluno de nenhuma pauta recebe `200 []`, e nunca linhas alheias. O código mantém-se assim (nada a proteger) e é a documentação que se alinha.
+
+O campo `dispensed` (`dispensed` em `GET /term-sheets/{id}` e `row.dispensed` em `GET /me/term-sheets`) é uma lista de textos, por esta ordem: `P1` e `P2` se a avaliação do plano da pauta foi dispensada, e `MAC` quando o plano tem avaliações de MAC e **todas** estão dispensadas (a mesma condição com que o Kixi envia `macDispensada` ao motor); distingue uma componente dispensada (nota em branco) de uma falta. Uma MAC por dispensar, ou um plano sem MAC, não a inclui.
 
 Uma pauta `ANULADA` não se mostra a ninguém. A turma e a disciplina de uma pauta vêm do contexto que o motor registou (`turmaId` = "turma-disciplina", `disciplinaId`), por isso um contexto sem elas só é visível ao administrador. Métodos de escrita em `/term-sheets` são recusados (403). Os PDFs das pautas não estão nesta rota.
 

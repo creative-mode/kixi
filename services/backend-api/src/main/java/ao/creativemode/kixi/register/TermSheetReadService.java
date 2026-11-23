@@ -105,13 +105,24 @@ public class TermSheetReadService {
     }
 
     /**
-     * As provas P1/P2 dispensadas da pauta: o motor entrega-as sem nota e o Kixi, que as dispensou no plano, sabe distingui-las de
-     * uma prova a que o aluno faltou. A pauta do motor é a do plano ({@code term_plans.pauta_ref}).
+     * As componentes dispensadas da pauta, por esta ordem (P1, P2, MAC): o motor entrega-as sem nota e o Kixi, que as dispensou no
+     * plano, sabe distingui-las de uma prova a que o aluno faltou. A MAC conta como dispensada quando o plano tem avaliações de MAC
+     * e todas estão dispensadas (a mesma condição com que o abridor envia {@code macDispensada}). A pauta do motor é a do plano
+     * ({@code term_plans.pauta_ref}).
      */
     Mono<List<String>> dispensedOf(String sheetId) {
-        return db.sql("SELECT a.kind FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id"
-                        + " WHERE p.pauta_ref = :s AND a.kind IN ('P1', 'P2') AND a.dispensed_at IS NOT NULL ORDER BY a.kind")
-                .bind("s", sheetId).map((row, meta) -> row.get(0, String.class)).all().collectList();
+        return db.sql("SELECT a.kind, a.dispensed_at IS NOT NULL AS dispensed FROM term_assessments a JOIN term_plans p ON p.id = a.plan_id"
+                        + " WHERE p.pauta_ref = :s AND a.kind IN ('P1', 'P2', 'MAC')")
+                .bind("s", sheetId).map((row, meta) -> Map.entry(row.get("kind", String.class), Boolean.TRUE.equals(row.get("dispensed", Boolean.class))))
+                .all().collectList().map(rows -> {
+                    List<String> out = new java.util.ArrayList<>();
+                    for (String kind : List.of("P1", "P2")) {
+                        if (rows.stream().anyMatch(r -> r.getKey().equals(kind) && r.getValue())) out.add(kind);
+                    }
+                    List<Map.Entry<String, Boolean>> macs = rows.stream().filter(r -> r.getKey().equals("MAC")).toList();
+                    if (!macs.isEmpty() && macs.stream().allMatch(Map.Entry::getValue)) out.add("MAC");
+                    return out;
+                });
     }
 
     /** account_id → número de processo na escola, só dos alunos que o têm (kixi#512). Lê-se agora e não do payload do motor. */

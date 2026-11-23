@@ -206,6 +206,7 @@ public class SchoolOpsReports {
                     .sorted(Comparator.comparing(Linha::accountId))
                     .forEach(l -> porComponente.computeIfAbsent(l.componente(), k -> new ArrayList<>())
                             .add(new PautaDaTurma.Entrada(l.accountId(), l.nota(), l.situacao())));
+            comValoresDaMt(folha, entradas, porComponente);
             if (porComponente.isEmpty()) {
                 continue;
             }
@@ -213,6 +214,29 @@ public class SchoolOpsReports {
                     contexto.path("disciplinaSigla").asText(""), contexto.path("disciplina").asText(""), porComponente));
         }
         return disciplinas;
+    }
+
+    /**
+     * O motor regista só a MAC ({@code minipauta.registar}) e a MT ({@code pauta.registar}); a P1 e a P2 (NPP e NPT) vivem no
+     * payload da linha da MT ({@code npp}, {@code npt}, {@code mac}), não como linhas próprias. Sem isto a folha da turma saía
+     * sem as colunas P1 e P2 (vaga 1B, C1). Uma componente que o registo já tem em linhas próprias não se toca; um valor
+     * nulo (prova dispensada, aluno sem nota) fica em branco em vez de inventar uma situação.
+     */
+    private static void comValoresDaMt(Folha folha, List<Linha> entradas, Map<String, List<PautaDaTurma.Entrada>> porComponente) {
+        for (String[] campo : new String[][] {{"NPP", "npp"}, {"NPT", "npt"}, {"MAC", "mac"}}) {
+            if (porComponente.containsKey(campo[0])) {
+                continue;
+            }
+            List<PautaDaTurma.Entrada> derivadas = entradas.stream()
+                    .filter(l -> l.sheetId().equals(folha.sheetId()) && "MT".equals(l.componente()))
+                    .sorted(Comparator.comparing(Linha::accountId))
+                    .filter(l -> l.payload().path(campo[1]).isNumber())
+                    .map(l -> new PautaDaTurma.Entrada(l.accountId(), l.payload().path(campo[1]).decimalValue(), null))
+                    .toList();
+            if (!derivadas.isEmpty()) {
+                porComponente.put(campo[0], new ArrayList<>(derivadas));
+            }
+        }
     }
 
     private JsonNode ler(String jsonTexto) {

@@ -7,7 +7,7 @@ import org.springframework.http.HttpMethod;
 /**
  * O que uma conta com o papel {@code INTEGRATION} (o motor SchoolOps) pode fazer, e nada mais. Tudo o que não
  * está aqui responde 403, mesmo que outra regra o permitisse a quem é {@code ADMIN}: é isto que torna a conta
- * do motor mais fraca do que um administrador. Ver {@code docs/authorization-matrix.md}.
+ * do motor mais fraca do que um administrador. Ver {@code conceptual/security/authorization-matrix.md}.
  */
 public final class IntegrationScope {
 

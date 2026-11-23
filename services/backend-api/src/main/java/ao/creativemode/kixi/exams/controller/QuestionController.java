@@ -7,6 +7,8 @@ import ao.creativemode.kixi.exams.dto.questionoption.CorrectOptionRequest;
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
 import ao.creativemode.kixi.exams.service.QuestionOptionService;
 import ao.creativemode.kixi.exams.service.QuestionService;
+import ao.creativemode.kixi.exams.service.StatementReadAccessService;
+import ao.creativemode.kixi.exams.service.StatementReader;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -33,8 +35,10 @@ import reactor.util.function.Tuple2;
  * weighs, so a question reached under another statement is a 404 rather than
  * something that could be edited.
  *
- * <p>Reading is open to any authenticated caller, as the statement routes are.
- * The answer key is not: /correct-option sits behind the same authorization as
+ * <p>Reading is open to any authenticated caller, as the statement routes are,
+ * and weighed the same way: a teacher reads the statements their teaching
+ * assignments cover (a 403 outside them, the trash and the answer key included),
+ * a student only a published statement. The answer key is not open: /correct-option sits behind the same authorization as
  * the other writes, so it cannot become a second way of answering a paper the
  * caller may only read.
  */
@@ -45,15 +49,18 @@ public class QuestionController {
     private final QuestionService questionService;
     private final QuestionOptionService questionOptionService;
     private final CurrentAccountService currentAccountService;
+    private final StatementReadAccessService readAccess;
 
     public QuestionController(
         QuestionService questionService,
         QuestionOptionService questionOptionService,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        StatementReadAccessService readAccess
     ) {
         this.questionService = questionService;
         this.questionOptionService = questionOptionService;
         this.currentAccountService = currentAccountService;
+        this.readAccess = readAccess;
     }
 
     // =========================================================================
@@ -61,16 +68,17 @@ public class QuestionController {
     //
     // Open to any authenticated caller, like the statement routes, but a
     // student gets a published statement and its questions without the answer
-    // key. The split is the same one StatementController already makes between a
-    // staff query and a student query; these routes only had to honour it.
+    // key, and a teacher only the statements of their own classes and subjects.
+    // The split is the one StatementController already makes (StatementReader);
+    // these routes only had to honour it.
     // =========================================================================
 
     @GetMapping
     public Mono<ResponseEntity<List<QuestionResponse>>> listAll(
         @PathVariable Long statementId
     ) {
-        return isStaff()
-            .flatMapMany(staff -> questionService.findAllActive(statementId, staff))
+        return reader()
+            .flatMapMany(reader -> questionService.findAllActive(statementId, reader))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -79,8 +87,8 @@ public class QuestionController {
     public Mono<ResponseEntity<List<QuestionResponse>>> listDeleted(
         @PathVariable Long statementId
     ) {
-        return isStaff()
-            .flatMapMany(staff -> questionService.findAllDeleted(statementId, staff))
+        return reader()
+            .flatMapMany(reader -> questionService.findAllDeleted(statementId, reader))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -90,8 +98,8 @@ public class QuestionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return isStaff()
-            .flatMap(staff -> questionService.findById(statementId, questionId, staff))
+        return reader()
+            .flatMap(reader -> questionService.findById(statementId, questionId, reader))
             .map(ResponseEntity::ok);
     }
 
@@ -209,11 +217,11 @@ public class QuestionController {
     }
 
     /**
-     * Whether the caller may see the answer key and a statement that is not
-     * published.
+     * Who is reading: whether they may see the answer key and a statement that is
+     * not published, and which statements a teacher may reach at all.
      */
-    private Mono<Boolean> isStaff() {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER");
+    private Mono<StatementReader> reader() {
+        return StatementReader.current(currentAccountService, readAccess);
     }
 
     private URI locationOf(UriComponentsBuilder uriBuilder, Long statementId, Long questionId) {
