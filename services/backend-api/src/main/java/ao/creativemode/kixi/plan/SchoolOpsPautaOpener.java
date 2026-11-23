@@ -87,7 +87,8 @@ public class SchoolOpsPautaOpener {
 
     /**
      * Daqui a um instante (a sala fechada já está gravada) e fora do fio reativo, porque {@link #closeFinishedProvas} bloqueia.
-     * A verificação periódica fica como rede de segurança, e o encerramento é idempotente ({@code closed_notified_at}).
+     * A verificação periódica fica como rede de segurança, e o encerramento é idempotente: a prova reserva-se com
+     * {@code closed_notified_at} antes do POST (ver {@link #closeFinishedProvas}), por isso duas verificações em paralelo não a enviam duas vezes.
      */
     private void closeSoon() {
         if (!properties.isEnabled()) return;
@@ -112,9 +113,19 @@ public class SchoolOpsPautaOpener {
                     """).fetch().all().collectList().block(Duration.ofSeconds(30)).forEach(row -> {
                 try {
                     WebClient http = webClients.baseUrl(properties.getBaseUrl()).defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getToken()).build();
-                    close(http, String.valueOf(row.get("pauta_ref")), String.valueOf(row.get("statement_id")))
-                            .then(db.sql("UPDATE term_assessments SET closed_notified_at = CURRENT_TIMESTAMP WHERE id = :a")
-                                    .bind("a", row.get("id")).fetch().rowsUpdated().then()).block(Duration.ofSeconds(60));
+                    // Reserva a prova antes do POST: a verificação periódica, o closeSoon() depois de abrir a pauta e o fecho da sala
+                    // podem correr ao mesmo tempo e todas leem a mesma linha por encerrar; só quem a reserva (UPDATE condicional,
+                    // atómico) envia o POST. Se o POST falhar, liberta-se a reserva para a verificação seguinte repetir.
+                    Long reserved = db.sql("UPDATE term_assessments SET closed_notified_at = CURRENT_TIMESTAMP WHERE id = :a AND closed_notified_at IS NULL")
+                            .bind("a", row.get("id")).fetch().rowsUpdated().block(Duration.ofSeconds(30));
+                    if (reserved == null || reserved == 0) return;
+                    try {
+                        close(http, String.valueOf(row.get("pauta_ref")), String.valueOf(row.get("statement_id"))).block(Duration.ofSeconds(60));
+                    } catch (RuntimeException e) {
+                        db.sql("UPDATE term_assessments SET closed_notified_at = NULL WHERE id = :a").bind("a", row.get("id"))
+                                .fetch().rowsUpdated().block(Duration.ofSeconds(30));
+                        throw e;
+                    }
                 } catch (RuntimeException e) {
                     log.warn("[schoolops] prova {} da pauta {}: encerramento por repetir ({})", row.get("statement_id"), row.get("pauta_ref"), e.getMessage());
                 }
