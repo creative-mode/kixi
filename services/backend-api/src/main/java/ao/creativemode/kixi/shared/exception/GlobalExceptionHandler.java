@@ -56,6 +56,10 @@ public class GlobalExceptionHandler {
             ex.getMessage() != null ? ex.getMessage() : "API Error occurred"
         ).withTitle(status.getReasonPhrase());
         problem = problem.withInstance(exchange);
+        // The stable code a client maps to its own text (the message stays for people and logs).
+        if (ex.getCode() != null) {
+            problem = problem.withProperty("code", ex.getCode());
+        }
 
         ResponseEntity.BodyBuilder response = ResponseEntity.status(statusCode);
         // Through the interface: shared must not depend on any domain module's

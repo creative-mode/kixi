@@ -346,3 +346,65 @@ def test_a_composite_question_sums_the_scores_of_its_alineas():
     assert q.question_type == QuestionType.COMPOSTA
     assert [s.cotacao for s in q.subitems_content] == [2.0, 3.0]
     assert q.cotacao == 5.0
+
+
+# --- números de página e cabeçalhos de continuação (V2-2) -----------------------------------------------------
+
+def _two_page_exam(**extra):
+    page0 = [
+        block("Teste de Programação - 1.º Trimestre", 40, page=0),
+        block("1) Explique o que é uma pilha.", 100, page=0),
+        block("2) Qual é a ordem de saída numa pilha LIFO?", 140, page=0),
+        block("1", 1100, page=0),
+    ]
+    page1 = [
+        block("Teste de Programação - 1.º Trimestre (continuação)", 40, page=1),
+        block("3) Descreva uma fila.", 100, page=1),
+        block("4) Escreva um algoritmo para inverter uma lista.", 140, page=1),
+        block("2", 1100, page=1),
+    ]
+    return page0 + page1
+
+
+def test_a_page_number_at_the_foot_is_not_part_of_the_last_question():
+    _, questions, _, unmapped, _ = OCRPostprocessor().process(_two_page_exam())
+    assert [q.text for q in questions] == [
+        "Explique o que é uma pilha.",
+        "Qual é a ordem de saída numa pilha LIFO?",
+        "Descreva uma fila.",
+        "Escreva um algoritmo para inverter uma lista.",
+    ]
+    assert {u.text: u.reason for u in unmapped}["2"] == "Número de página"
+
+
+def test_the_continuation_header_of_the_next_page_does_not_stick_to_the_last_question():
+    _, questions, _, unmapped, _ = OCRPostprocessor().process(_two_page_exam())
+    assert "continuação" not in " ".join(q.text for q in questions)
+    assert any(u.reason == "Cabeçalho de continuação" for u in unmapped)
+
+
+def test_a_lone_number_that_is_not_the_page_number_is_kept():
+    # "3" no fim da página 1 não é o nº da página (seria 1): pode ser dado do enunciado.
+    blocks = [
+        block("1) Quantas vezes se repete o ciclo abaixo?", 100, page=0),
+        block("2) Qual é o valor de n no fim?", 140, page=0),
+        block("3) Justifique a resposta anterior.", 180, page=0),
+        block("4) Indique a complexidade.", 220, page=0),
+        block("3", 1100, page=0),
+    ]
+    _, questions, _, unmapped, _ = OCRPostprocessor().process(blocks)
+    assert unmapped == []
+    assert questions[3].text.endswith("3")
+
+
+def test_a_printed_page_marker_is_recognised_whatever_the_number():
+    blocks = [
+        block("1) Explique o conceito de lote económico.", 100, page=0),
+        block("2) Calcule o ponto de pedido da empresa.", 140, page=0),
+        block("3) Determine o estoque de segurança.", 180, page=0),
+        block("4) Justifique a sua resposta final.", 220, page=0),
+        block("Página 7 de 9", 1100, page=0),
+    ]
+    _, questions, _, unmapped, _ = OCRPostprocessor().process(blocks)
+    assert "Página" not in questions[3].text
+    assert [u.reason for u in unmapped] == ["Número de página"]

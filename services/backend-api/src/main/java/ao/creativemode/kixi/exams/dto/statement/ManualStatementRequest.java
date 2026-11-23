@@ -50,8 +50,27 @@ public record ManualStatementRequest(
 
     @NotEmpty(message = "A statement needs at least one question")
     @Valid
-    List<Question> questions
+    List<Question> questions,
+
+    /**
+     * The id the browser gave the OCR reading this statement comes from ({@code X-OCR-Request-ID}). Optional: with it, or with
+     * any question carrying OCR evidence (raw text or confidence), the statement is kept as coming from OCR ({@code source=ocr})
+     * and shows in the «Vindos do OCR» queue even though it was published through the exam builder.
+     */
+    @Size(max = 100, message = "The OCR request id must not exceed 100 characters")
+    String ocrRequestId,
+
+    /** The reading's overall confidence, 0 to 1. Optional: left out, the lowest confidence of the questions is kept. */
+    @DecimalMin("0.0") @DecimalMax("1.0") Double ocrConfidence
 ) {
+    /** The shape the exam builder sent before the OCR provenance could travel with the statement. */
+    public ManualStatementRequest(Long institutionId, Long subjectId, String title, String examType, Integer durationMinutes,
+            String variant, String instructions, Long schoolYearId, Long termId, Long classId, Long courseId, Boolean visible,
+            List<Question> questions) {
+        this(institutionId, subjectId, title, examType, durationMinutes, variant, instructions, schoolYearId, termId, classId,
+                courseId, visible, questions, null, null);
+    }
+
     public record Question(
         @NotBlank(message = "The question text is required")
         String text,

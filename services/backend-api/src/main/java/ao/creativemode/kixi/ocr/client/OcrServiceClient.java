@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.client;
 
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.dto.OcrResponse;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -143,7 +144,7 @@ public class OcrServiceClient {
                         response.requestId(),
                         response.status(),
                         response.overallConfidence()))
-                .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
+                .doOnError(error -> OcrFailure.log(log, "OCR request failed", error));
     }
 
     /** Stream measured page progress and the final result without retrying a consumed upload. */
@@ -217,7 +218,7 @@ public class OcrServiceClient {
                 .map(entity -> ResponseEntity.status(entity.getStatusCode())
                         .headers(entity.getHeaders())
                         .body(entity.getBody().timeout(timeout)))
-                .doOnError(error -> log.error("OCR stream failed: type={}", error.getClass().getSimpleName()));
+                .doOnError(error -> OcrFailure.log(log, "OCR stream failed", error));
     }
 
     /**
@@ -264,8 +265,7 @@ public class OcrServiceClient {
                 .doOnSuccess(response -> log.info(
                         "OCR retained request successful: requestId={}, status={}",
                         response.requestId(), response.status()))
-                .doOnError(error -> log.error("OCR retained request failed: type={}",
-                        error.getClass().getSimpleName()));
+                .doOnError(error -> OcrFailure.log(log, "OCR retained request failed", error));
     }
 
     /**
@@ -305,7 +305,7 @@ public class OcrServiceClient {
                 .bodyToMono(JsonNode.class)
                 .timeout(timeout)
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(1)).filter(this::isRetryable))
-                .doOnError(error -> log.error("Answer sheet OCR request failed: type={}", error.getClass().getSimpleName()));
+                .doOnError(error -> OcrFailure.log(log, "Answer sheet OCR request failed", error));
     }
 
     /**
@@ -352,7 +352,7 @@ public class OcrServiceClient {
                         "OCR request successful: requestId={}, status={}",
                         response.requestId(),
                         response.status()))
-                .doOnError(error -> log.error("OCR request failed: type={}", error.getClass().getSimpleName()));
+                .doOnError(error -> OcrFailure.log(log, "OCR request failed", error));
     }
 
     private void applyAuthentication(HttpHeaders headers) {

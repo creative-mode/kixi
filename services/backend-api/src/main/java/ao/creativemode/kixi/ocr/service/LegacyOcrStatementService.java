@@ -1,5 +1,7 @@
 package ao.creativemode.kixi.ocr.service;
 
+import ao.creativemode.kixi.ocr.OcrProblem;
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -87,9 +89,9 @@ public class LegacyOcrStatementService {
             .extractTextFromUploadedFiles(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
-                    log.error("OCR extraction failed: requestId={}", ocrResponse.requestId());
+                    log.warn("OCR extraction failed (ficheiro ilegível): requestId={}", ocrResponse.requestId());
                     return Mono.error(
-                        ApiException.badRequest("OCR extraction failed")
+                        OcrProblem.fromServiceMessage(ocrResponse.errorMessage()).exception()
                     );
                 }
 
@@ -113,9 +115,7 @@ public class LegacyOcrStatementService {
                     result.questions().size()
                 )
             )
-            .doOnError(error -> log.error(
-                "Failed to create statement from OCR: type={}",
-                error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "Failed to create statement from OCR", error));
     }
 
     /**

@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.controller;
 
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.exams.dto.StatementOcrResponse;
 import ao.creativemode.kixi.ocr.service.LegacyOcrStatementService;
 import ao.creativemode.kixi.ocr.service.OcrUploadBuffer;
@@ -137,9 +138,7 @@ public class LegacyOcrStatementController {
                     response.getBody() != null ? response.getBody().id() : null
                 )
             )
-            .doOnError(error -> log.error(
-                "OCR statement creation failed: type={}",
-                error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "OCR statement creation failed", error));
     }
 
     /**
@@ -190,9 +189,7 @@ public class LegacyOcrStatementController {
                     response.getBody() != null ? response.getBody().id() : null
                 )
             )
-            .doOnError(error -> log.error(
-                "Single-file OCR statement creation failed: type={}",
-                error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "Single-file OCR statement creation failed", error));
     }
 
     /**

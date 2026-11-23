@@ -117,6 +117,26 @@ class OcrJobPostgresIntegrationTest {
         jobs.release(worker, jobId).block(WAIT);
     }
 
+    /** V2-4: um trabalho falhado mantém a mensagem de sempre (o frontend mapeia-a, kixi-frontend#841) e ganha o código estável à parte. */
+    @Test
+    void aFailedJobKeepsItsMessageAndAddsAStableErrorCode() {
+        UUID jobId = jobs.enqueue(ACCOUNT, UUID.randomUUID(), 0,
+            List.of(new OcrUploadedFile("down.jpg", MediaType.IMAGE_JPEG, new byte[] {1, 2})))
+            .block(WAIT);
+        UUID worker = UUID.randomUUID();
+        OcrJobService.OcrJob claimed = jobs.claimNext(worker).block(WAIT);
+        assertThat(claimed).isNotNull();
+
+        // o serviço OCR deste contexto não existe (porta 1): a leitura falha de verdade
+        jobs.process(claimed, worker).block(Duration.ofSeconds(60));
+
+        OcrJobStatusResponse status = jobs.status(ACCOUNT, jobId).block(WAIT);
+        assertThat(status.status()).isEqualTo("FAILED");
+        assertThat(status.error()).isEqualTo("OCR processing failed");
+        assertThat(status.errorCode()).isEqualTo("OCR_PROCESSING_FAILED");
+        jobs.release(worker, jobId).block(WAIT);
+    }
+
     @Test
     void activeJobIsUniquePerAccountAndNeverVisibleToAnotherAccount() {
         UUID jobId = jobs.enqueue(ACCOUNT, UUID.randomUUID(), 0,

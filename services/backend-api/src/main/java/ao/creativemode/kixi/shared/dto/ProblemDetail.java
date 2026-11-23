@@ -36,6 +36,13 @@ public record ProblemDetail(
         return new ProblemDetail(type, title, status, detail, properties);
     }
 
+    /** Adds one named property (for example the stable {@code code} a client maps to its own text). */
+    public ProblemDetail withProperty(String name, Object value) {
+        Map<String, Object> updated = new HashMap<>(properties != null ? properties : Map.of());
+        updated.put(name, value);
+        return new ProblemDetail(type, title, status, detail, updated);
+    }
+
     public ProblemDetail withTitle(String title) {
         return new ProblemDetail(type, title, status, detail, properties);
     }
