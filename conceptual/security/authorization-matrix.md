@@ -73,6 +73,8 @@ O motor escreve as pautas em `/school-register` (só `ADMIN` e `INTEGRATION`); e
 
 `GET /me/term-sheets` exige o papel `STUDENT`, que toda a conta registada tem (o `ADMIN` e o `COORDINATOR` também; um professor sem `STUDENT` recebe 403): é uma leitura **da própria conta**, por isso quem não é aluno de nenhuma pauta recebe `200 []`, e nunca linhas alheias. O código mantém-se assim (nada a proteger) e é a documentação que se alinha.
 
+O campo `dispensed` (`dispensed` em `GET /term-sheets/{id}` e `row.dispensed` em `GET /me/term-sheets`) é uma lista de textos, por esta ordem: `P1` e `P2` se a avaliação do plano da pauta foi dispensada, e `MAC` quando o plano tem avaliações de MAC e **todas** estão dispensadas (a mesma condição com que o Kixi envia `macDispensada` ao motor); distingue uma componente dispensada (nota em branco) de uma falta. Uma MAC por dispensar, ou um plano sem MAC, não a inclui.
+
 Uma pauta `ANULADA` não se mostra a ninguém. A turma e a disciplina de uma pauta vêm do contexto que o motor registou (`turmaId` = "turma-disciplina", `disciplinaId`), por isso um contexto sem elas só é visível ao administrador. Métodos de escrita em `/term-sheets` são recusados (403). Os PDFs das pautas não estão nesta rota.
 
 ## Leitura de folhas de resposta (`POST /api/v1/ocr/answer-sheets`)

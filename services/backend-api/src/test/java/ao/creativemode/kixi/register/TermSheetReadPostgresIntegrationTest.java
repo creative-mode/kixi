@@ -183,6 +183,41 @@ class TermSheetReadPostgresIntegrationTest {
                 .expectBody().jsonPath("$[?(@.sheetId == 'PT-506-A')].row.dispensed[0]").isEqualTo("P2");
     }
 
+    /** Reteste F1: a MAC dispensada (todas as avaliações de MAC do plano) também se diz, depois da P1 e da P2. */
+    @Test
+    void aDispensedMacIsReportedOnlyWhenEveryMacAssessmentOfThePlanIsDispensed() {
+        sql("INSERT INTO term_plans (id, class_id, subject_id, term_id, created_by, pauta_ref) VALUES (506901, 506001, 506001, 1, 506001, 'PT-506-A')");
+        sql("INSERT INTO term_assessments (plan_id, kind, seq, title, planned_date, dispensed_at, dispensed_reason) VALUES "
+                + "(506901, 'MAC', 1, 'MAC 1', current_date, now(), 'MAC cancelada'), "
+                + "(506901, 'P2', 1, 'P2', current_date, now(), 'Prova dispensada pela escola')");
+        String admin = token(ADMIN, "ADMIN");
+        String ana = token(ANA, "STUDENT");
+
+        // todas as MAC dispensadas: P2 e MAC, por esta ordem (P1, P2, MAC)
+        bearer(admin).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.dispensed.length()").isEqualTo(2)
+                .jsonPath("$.dispensed[0]").isEqualTo("P2").jsonPath("$.dispensed[1]").isEqualTo("MAC");
+        bearer(ana).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$[?(@.sheetId == 'PT-506-A')].row.dispensed[1]").isEqualTo("MAC");
+
+        // uma segunda MAC por dispensar: já não se diz que a MAC está dispensada
+        sql("INSERT INTO term_assessments (plan_id, kind, seq, title, planned_date) VALUES (506901, 'MAC', 2, 'MAC 2', current_date)");
+        bearer(admin).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.dispensed.length()").isEqualTo(1).jsonPath("$.dispensed[0]").isEqualTo("P2");
+        bearer(ana).get().uri("/api/v1/me/term-sheets").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$[?(@.sheetId == 'PT-506-A')].row.dispensed.length()").isEqualTo(1);
+    }
+
+    /** Sem avaliações de MAC no plano, a MAC não aparece como dispensada. */
+    @Test
+    void aPlanWithoutMacAssessmentsNeverReportsADispensedMac() {
+        sql("INSERT INTO term_plans (id, class_id, subject_id, term_id, created_by, pauta_ref) VALUES (506901, 506001, 506001, 1, 506001, 'PT-506-A')");
+        sql("INSERT INTO term_assessments (plan_id, kind, seq, title, planned_date) VALUES (506901, 'P1', 1, 'P1', current_date)");
+
+        bearer(token(ADMIN, "ADMIN")).get().uri("/api/v1/term-sheets/PT-506-A").exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.dispensed.length()").isEqualTo(0);
+    }
+
     @Test
     void aTeacherReadsOnlyTheSheetsOfTheClassAndSubjectTheyTeach() {
         String teacherA = token(TEACHER_A, "TEACHER");
