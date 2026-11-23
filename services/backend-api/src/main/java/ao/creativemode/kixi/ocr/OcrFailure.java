@@ -17,8 +17,15 @@ public final class OcrFailure {
 
     /** O serviço OCR leu o ficheiro mas não conseguiu ler nada dele (imagem em branco, ilegível). */
     public static class Unreadable extends RuntimeException {
-        public Unreadable(String message) {
-            super(message);
+        private final OcrProblem problem;
+
+        public Unreadable(OcrProblem problem) {
+            super(problem.code());
+            this.problem = problem;
+        }
+
+        public OcrProblem problem() {
+            return problem;
         }
     }
 

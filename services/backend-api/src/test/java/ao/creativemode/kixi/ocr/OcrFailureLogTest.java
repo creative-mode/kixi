@@ -58,7 +58,7 @@ class OcrFailureLogTest {
 
     @Test
     void anUnreadableResultAndAContentErrorAreWarnings() {
-        OcrFailure.log(logger, "job", new OcrFailure.Unreadable("OCR returned an unsuccessful result"));
+        OcrFailure.log(logger, "job", new OcrFailure.Unreadable(OcrProblem.NO_TEXT));
         OcrFailure.log(logger, "request", new OcrServerException("OCR service error: {\"status\": \"error\"}", 500, true));
         OcrFailure.log(logger, "statement", ApiException.badRequest("OCR extraction failed"));
 
