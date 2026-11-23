@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.service;
 
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.ocr.dto.ExamExtractionResponse;
@@ -227,8 +228,7 @@ public class OcrJobService {
             .concatMap(event -> handleEvent(job, workerId, event))
             .then(Mono.defer(() -> fail(job.id(), workerId, "OCR stream ended without a result")))
             .onErrorResume(error -> {
-                log.error("OCR background job failed: requestId={}, type={}",
-                    job.requestId(), error.getClass().getSimpleName());
+                OcrFailure.log(log, "OCR background job failed: requestId=" + job.requestId(), error);
                 return fail(job.id(), workerId, "OCR processing failed");
             })
             .then();
@@ -276,7 +276,7 @@ public class OcrJobService {
     private Mono<Void> complete(OcrJob job, UUID workerId, String json) throws Exception {
         OcrResponse response = objectMapper.readValue(json, OcrResponse.class);
         if (!response.isSuccess() && !response.isPartial()) {
-            return Mono.error(new IllegalStateException("OCR returned an unsuccessful result"));
+            return Mono.error(new OcrFailure.Unreadable("OCR returned an unsuccessful result"));
         }
         ExamExtractionResponse extraction = ExamExtractionResponse.fromOcrResponse(
             response, imageAssociationService.previewCrops(response.imagesToUpload(), job.files()));

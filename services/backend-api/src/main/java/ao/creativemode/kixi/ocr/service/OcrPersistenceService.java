@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.service;
 
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -110,7 +111,7 @@ public class OcrPersistenceService {
             .extractTextFromUploadedFiles(files)
             .flatMap(ocrResponse -> {
                 if (ocrResponse.isError()) {
-                    log.error("OCR extraction failed: requestId={}",
+                    log.warn("OCR extraction failed (ficheiro ilegível): requestId={}",
                         ocrResponse.requestId());
                     return Mono.error(
                         ApiException.badRequest("OCR extraction failed")
@@ -136,9 +137,7 @@ public class OcrPersistenceService {
                     result.statement().getId()
                 )
             )
-            .doOnError(error -> log.error(
-                "Failed to process and persist OCR: type={}",
-                error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "Failed to process and persist OCR", error));
     }
 
     /**
