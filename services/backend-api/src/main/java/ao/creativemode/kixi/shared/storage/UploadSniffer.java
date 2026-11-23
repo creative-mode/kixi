@@ -121,7 +121,9 @@ public final class UploadSniffer {
 
     private static void requireReasonablePixels(long pixels, long max) {
         if (pixels > max) {
-            throw ApiException.badRequest("The image is too large to read: " + pixels + " pixels");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Bad Request",
+                    "The image is too large to read: " + pixels + " pixels",
+                    "IMAGE_TOO_LARGE");
         }
     }
 

@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.service;
 
+import ao.creativemode.kixi.ocr.OcrProblem;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.storage.UploadSniffer;
@@ -76,28 +77,28 @@ public final class OcrUploadBuffer {
             return;
         }
         if (!isBmpOrTiff(content)) {
-            throw ApiException.badRequest("Unsupported or invalid OCR file");
+            throw OcrProblem.FILE_INVALID.exception("Unsupported or invalid OCR file");
         }
         try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(content))) {
             if (input == null) {
-                throw ApiException.badRequest("Unsupported or invalid OCR image");
+                throw OcrProblem.FILE_INVALID.exception("Unsupported or invalid OCR image");
             }
             var readers = ImageIO.getImageReaders(input);
             if (!readers.hasNext()) {
-                throw ApiException.badRequest("Unsupported or invalid OCR image");
+                throw OcrProblem.FILE_INVALID.exception("Unsupported or invalid OCR image");
             }
             ImageReader reader = readers.next();
             try {
                 reader.setInput(input, true, true);
                 long pixels = (long) reader.getWidth(0) * reader.getHeight(0);
                 if (pixels < 1 || pixels > MAX_IMAGE_PIXELS) {
-                    throw ApiException.badRequest("OCR image exceeds the maximum pixel count");
+                    throw OcrProblem.IMAGE_TOO_LARGE.exception("OCR image exceeds the maximum pixel count");
                 }
             } finally {
                 reader.dispose();
             }
         } catch (java.io.IOException error) {
-            throw ApiException.badRequest("Unsupported or invalid OCR image");
+            throw OcrProblem.FILE_INVALID.exception("Unsupported or invalid OCR image");
         }
     }
 

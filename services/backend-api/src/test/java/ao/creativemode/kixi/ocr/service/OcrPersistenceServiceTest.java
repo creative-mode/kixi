@@ -105,8 +105,9 @@ class OcrPersistenceServiceTest {
                 assertThat(error).isInstanceOf(ApiException.class);
                 ApiException apiException = (ApiException) error;
                 assertThat(apiException.getStatusCode()).isEqualTo(400);
-                assertThat(apiException.getMessage())
-                    .isEqualTo("OCR extraction failed");
+                // a mensagem de sempre (o frontend mapeia-a); o código estável vai à parte
+                assertThat(apiException.getMessage()).isEqualTo("OCR extraction failed");
+                assertThat(apiException.getCode()).isEqualTo("OCR_PROCESSING_FAILED");
             })
             .verify();
 

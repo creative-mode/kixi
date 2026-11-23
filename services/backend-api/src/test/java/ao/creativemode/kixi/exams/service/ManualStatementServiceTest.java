@@ -191,6 +191,43 @@ class ManualStatementServiceTest {
             .containsExactly(formula);
     }
 
+    /** V2-3: um enunciado do construtor que parte de uma leitura OCR revista guarda a proveniência (fila «Vindos do OCR»). */
+    @Test
+    void aStatementFromAnOcrReadingKeepsItsProvenanceAndTheRequestId() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+        var q1 = new ManualStatementRequest.Question("Resolva x+1=2", 5.0, null, "open", null, "Resolva x+1=2", 0.92, true, null);
+        var q2 = new ManualStatementRequest.Question("Resolva y", 5.0, null, "open", null, "Resolva y", 0.80, true, null);
+        var request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova foto", "Teste", 60, null, null, null, null, CLASS_ID, null, false,
+            List.of(q1, q2), "ocr-req-646", null);
+
+        StepVerifier.create(service.create(request, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<Statement> saved = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(saved.capture());
+        assertThat(saved.getValue().getSource()).isEqualTo("ocr");
+        assertThat(saved.getValue().getOcrRequestId()).isEqualTo("ocr-req-646");
+        assertThat(saved.getValue().getOcrConfidence()).as("a menor confiança das questões").isEqualTo(0.80);
+        assertThat(saved.getValue().getNeedsReview()).as("todas revistas").isFalse();
+    }
+
+    @Test
+    void anExplicitOcrConfidenceWinsAndOcrEvidenceAloneMarksTheSourceWithoutARequestId() {
+        when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
+        givenSaves();
+        var q = new ManualStatementRequest.Question("Resolva", 5.0, null, "open", null, "Resolva", 0.90, true, null);
+        var request = new ManualStatementRequest(1L, SUBJECT_ID, "Prova foto", "Teste", 60, null, null, null, null, CLASS_ID, null, false,
+            List.of(q), null, 0.95);
+
+        StepVerifier.create(service.create(request, 9L, false)).expectNextCount(1).verifyComplete();
+
+        ArgumentCaptor<Statement> saved = ArgumentCaptor.forClass(Statement.class);
+        verify(statements).save(saved.capture());
+        assertThat(saved.getValue().getSource()).isEqualTo("ocr");
+        assertThat(saved.getValue().getOcrRequestId()).isNull();
+        assertThat(saved.getValue().getOcrConfidence()).isEqualTo(0.95);
+    }
+
     @Test
     void refusesToCreateVisibleStatementWithUnreviewedOcrEvidence() {
         when(access.requireCanAuthor(9L, false, 1L, SUBJECT_ID, CLASS_ID)).thenReturn(Mono.empty());
