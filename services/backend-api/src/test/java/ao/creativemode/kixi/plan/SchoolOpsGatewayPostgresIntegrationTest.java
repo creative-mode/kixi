@@ -48,6 +48,8 @@ class SchoolOpsGatewayPostgresIntegrationTest {
     private static final String SECRET = "whsec_c2VncmVkby1kZS10ZXN0ZS0xMjM0NTY3ODkwMTIzNDU2";
     private static final List<String> CALLS = new CopyOnWriteArrayList<>();
     private static final HttpServer ENGINE;
+    /** Atraso (ms) das respostas do motor falso: alarga a janela da corrida entre dois encerramentos em paralelo. */
+    private static volatile int ENGINE_DELAY_MS = 0;
 
     static {
         if (!"true".equalsIgnoreCase(System.getenv("KIXI_POSTGRES_TESTS"))) {
@@ -60,11 +62,19 @@ class SchoolOpsGatewayPostgresIntegrationTest {
         }
         ENGINE.createContext("/", exchange -> {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            if (ENGINE_DELAY_MS > 0) {
+                try {
+                    Thread.sleep(ENGINE_DELAY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             CALLS.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath() + " auth=" + exchange.getRequestHeaders().getFirst("Authorization")
                     + (body.isBlank() ? "" : " " + body));
             byte[] out = "{\"pautaId\":\"PT-TESTE\"}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(202, out.length);
+            // a pauta PT-FALHA simula um motor em baixo: 500 (o encerramento fica por repetir)
+            exchange.sendResponseHeaders(exchange.getRequestURI().getPath().contains("PT-FALHA") ? 500 : 202, out.length);
             exchange.getResponseBody().write(out);
             exchange.close();
         });
@@ -260,6 +270,57 @@ class SchoolOpsGatewayPostgresIntegrationTest {
 
         assertThat(awaitCall("POST /v1/pautas/PT-TESTE/provas/525002/encerramento")).as("o fecho da sala arranca o fluxo").isTrue();
         assertThat(CALLS).hasSize(1);
+    }
+
+    /**
+     * Dois encerramentos em paralelo (a verificação periódica, o {@code closeSoon} depois de abrir a pauta e o fecho da sala podem
+     * coincidir) não enviam a mesma prova duas vezes: a prova reserva-se antes do POST. Era a causa da falha intermitente da
+     * linha «só a sala fechada da P1 encerra a P1» (dois POSTs iguais).
+     */
+    @Test
+    void twoConcurrentSweepsCloseAProvaOnlyOnce() throws Exception {
+        sql("UPDATE term_plans SET scheduling_concluded_at = now(), pauta_opened_at = now(), pauta_ref = 'PT-TESTE' WHERE id = 525001");
+        sql("UPDATE exam_rooms SET status = 'OPEN' WHERE id = 525002");
+        ENGINE_DELAY_MS = 400;
+        try {
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            List<java.util.concurrent.Future<?>> runs = new java.util.ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                runs.add(pool.submit(() -> {
+                    go.await();
+                    opener.closeFinishedProvas();
+                    return null;
+                }));
+            }
+            go.countDown();
+            for (var run : runs) run.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            pool.shutdown();
+        } finally {
+            ENGINE_DELAY_MS = 0;
+        }
+
+        assertThat(CALLS.stream().filter(c -> c.startsWith("POST /v1/pautas/PT-TESTE/provas/525001/encerramento")).count())
+                .as("a P1 (sala fechada) encerra-se uma só vez").isEqualTo(1);
+        assertThat(database.sql("SELECT count(*) FROM term_assessments WHERE plan_id = 525001 AND kind = 'P1' AND closed_notified_at IS NOT NULL")
+                .map((r, m) -> r.get(0, Long.class)).one().block(Duration.ofSeconds(10))).isEqualTo(1L);
+    }
+
+    /** Se o POST falha, a reserva é libertada e a verificação seguinte repete o encerramento. */
+    @Test
+    void aFailedCloseReleasesTheReservationSoTheNextSweepRetriesIt() {
+        sql("UPDATE term_plans SET scheduling_concluded_at = now(), pauta_opened_at = now(), pauta_ref = 'PT-TESTE' WHERE id = 525001");
+        sql("UPDATE exam_rooms SET status = 'OPEN' WHERE id = 525002");
+        sql("UPDATE term_plans SET pauta_ref = 'PT-FALHA' WHERE id = 525001");
+        opener.closeFinishedProvas();
+        assertThat(database.sql("SELECT count(*) FROM term_assessments WHERE plan_id = 525001 AND kind = 'P1' AND closed_notified_at IS NOT NULL")
+                .map((r, m) -> r.get(0, Long.class)).one().block(Duration.ofSeconds(10))).as("a reserva foi libertada").isZero();
+
+        CALLS.clear();
+        sql("UPDATE term_plans SET pauta_ref = 'PT-TESTE' WHERE id = 525001");
+        opener.closeFinishedProvas();
+        assertThat(CALLS).as("a verificação seguinte repete-o").hasSize(1);
+        assertThat(CALLS.get(0)).startsWith("POST /v1/pautas/PT-TESTE/provas/525001/encerramento");
     }
 
     /** Schoolops D1: com a MAC do plano dispensada o pedido leva {@code macDispensada} e as duas provas, sem {@code avaliacoesContinuas}. */

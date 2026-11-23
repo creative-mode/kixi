@@ -111,6 +111,20 @@ Papel para serviços que falam com o Kixi, hoje o motor SchoolOps. Em vez de `AD
 
 A autenticação continua a ser por login com palavra-passe (o JWT expira); trocar por um token de serviço próprio fica fora deste âmbito.
 
+## Eventos do motor fora de ordem (`POST /api/v1/integrations/schoolops/events`)
+
+A rota é pública e a assinatura HMAC é a autenticação (401 sem ela). O motor entrega os eventos com repetição, por isso chegam repetidos e fora de ordem; o estado da pauta do plano (`term_plans.pauta_status`) **só avança** e um evento que o faria recuar responde 204 sem alterar nada (log DEBUG; WARN no caso inconsistente marcado com `**`). O `time` do CloudEvent (guardado em `pauta_event_time`) desempata eventos do mesmo estado: um mais antigo não sobrescreve um mais recente.
+
+| Estado actual | `componente-calculado` | `homologada` | `rectificada` | `anulada` |
+|---|---|---|---|---|
+| (nenhum) | `EM_CURSO` | `HOMOLOGADA` | `RECTIFICADA` | `ANULADA` |
+| `EM_CURSO` | `EM_CURSO` (*) | `HOMOLOGADA` | `RECTIFICADA` | `ANULADA` |
+| `HOMOLOGADA` | ignora | `HOMOLOGADA` (*) | `RECTIFICADA` | ignora (**) |
+| `RECTIFICADA` | ignora | ignora | `RECTIFICADA` (*) | ignora (**) |
+| `ANULADA` (terminal) | ignora | ignora | ignora | `ANULADA` (*) |
+
+(*) mesmo estado: aplica-se se o `time` do evento não for anterior ao já aplicado (ou se faltar). (**) o motor recusa anular uma pauta já homologada (409), por isso um `anulada` depois de `homologada` é inconsistente e ignora-se.
+
 ## Casos cobertos pelos testes
 
 `AuthorizationIntegrationTest` cobre pedidos anónimos, STUDENT, TEACHER e ADMIN em rotas de leitura e escrita, incluindo leitura de simulações e respostas do próprio aluno, bloqueio de operações administrativas, acesso a salas de prova e uploads OCR. O teste `deniesUnmappedRoutesToEveryAuthenticatedRole` garante que uma rota nova sem regra explícita não fica acessível por herança ao papel autenticado.
