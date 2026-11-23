@@ -22,7 +22,7 @@ public class SimulationTimeLimitProperties {
      * round trip of an answer that left the student before the clock ran out.
      */
     @Min(0)
-    private int toleranceSeconds = 10;
+    private int toleranceSeconds = 120;
 
     /**
      * How often the expiration job sweeps the simulations still in progress.

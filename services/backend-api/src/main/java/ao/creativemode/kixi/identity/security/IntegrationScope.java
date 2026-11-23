@@ -7,7 +7,7 @@ import org.springframework.http.HttpMethod;
 /**
  * O que uma conta com o papel {@code INTEGRATION} (o motor SchoolOps) pode fazer, e nada mais. Tudo o que não
  * está aqui responde 403, mesmo que outra regra o permitisse a quem é {@code ADMIN}: é isto que torna a conta
- * do motor mais fraca do que um administrador. Ver {@code docs/authorization-matrix.md}.
+ * do motor mais fraca do que um administrador. Ver {@code conceptual/security/authorization-matrix.md}.
  */
 public final class IntegrationScope {
 
@@ -46,6 +46,8 @@ public final class IntegrationScope {
             rule(HttpMethod.PATCH, "/api/v1/simulation-answers/\\d+/grade"),
             // A correção que a IA fez no fluxo (kixi#542): nota, observação e confiança de uma resposta aberta.
             rule(HttpMethod.PUT, "/api/v1/simulation-answers/\\d+/ai-grade"),
+            // O aviso de que a correção de uma simulação falhou (kixi#609): o estado dela passa a FAILED até a IA voltar a corrigir.
+            rule(HttpMethod.PUT, "/api/v1/simulations/\\d+/correction-failure"),
             rule(HttpMethod.POST, "/api/v1/simulations"),
             rule(HttpMethod.PUT, "/api/v1/simulations/\\d+"),
             rule(HttpMethod.POST, "/api/v1/simulations/\\d+/submit"),

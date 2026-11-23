@@ -416,6 +416,28 @@ class AuthorizationIntegrationTest {
         verify(simulationAnswerService).findAllActiveForAccount(42L);
     }
 
+    /** kixi#596: a resposta é do aluno; o staff não a cria, não a edita e (o professor) não a apaga. */
+    @Test
+    void staffCannotWriteOrDeleteStudentAnswers() {
+        String body = "{\"simulationId\":1,\"questionId\":2,\"answerText\":\"x\"}";
+        for (WebTestClientConfigurer staff : List.of(teacherJwt(), adminJwt())) {
+            client.mutateWith(staff).post().uri("/api/v1/simulation-answers")
+                    .contentType(MediaType.APPLICATION_JSON).bodyValue(body)
+                    .exchange().expectStatus().isForbidden();
+            client.mutateWith(staff).put().uri("/api/v1/simulation-answers/10")
+                    .contentType(MediaType.APPLICATION_JSON).bodyValue(body)
+                    .exchange().expectStatus().isForbidden();
+        }
+        client.mutateWith(teacherJwt()).delete().uri("/api/v1/simulation-answers/10?reason=duplicada")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(teacherJwt()).post().uri("/api/v1/simulation-answers/10/restore?reason=duplicada")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(teacherJwt()).delete().uri("/api/v1/simulation-answers/10/purge?reason=duplicada")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(studentJwt()).delete().uri("/api/v1/simulation-answers/10?reason=duplicada")
+                .exchange().expectStatus().isForbidden();
+    }
+
     @Test
     void rejectsStudentDeleteOfSimulation() {
         client.mutateWith(studentJwt())

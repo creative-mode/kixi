@@ -10,6 +10,7 @@ import ao.creativemode.kixi.chat.dto.ChatSessionRequest;
 import ao.creativemode.kixi.chat.dto.ChatSessionResponse;
 import ao.creativemode.kixi.chat.dto.ChatStreamEvent;
 import ao.creativemode.kixi.chat.exception.ChatRateLimitException;
+import ao.creativemode.kixi.chat.model.TutorMode;
 import ao.creativemode.kixi.chat.service.ChatService;
 import ao.creativemode.kixi.identity.config.CorsConfig;
 import ao.creativemode.kixi.identity.config.CorsProperties;
@@ -119,6 +120,26 @@ class ChatAuthorizationTest {
                 .expectStatus().isCreated();
 
         verify(chatService).createSession(7L, ChatSessionRequest.of(9L));
+    }
+
+    /** Issue #610: the same endpoint opens the tutor outside one paper. */
+    @Test
+    void studentOpensASessionOnASubject() {
+        ChatSessionRequest expected = ChatSessionRequest.ofSubject(5L, null);
+        when(chatService.createSession(42L, expected)).thenReturn(Mono.just(
+                new ChatSessionResponse(6L, null, 5L, null, LocalDateTime.now(), TutorMode.GENERAL, null, List.of())));
+
+        client.mutateWith(studentJwt())
+                .post()
+                .uri("/api/v1/chat/sessions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("subjectId", 5L))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectHeader().value("Location",
+                        location -> assertThat(location).endsWith("/api/v1/chat/sessions/6"));
+
+        verify(chatService).createSession(42L, expected);
     }
 
     // === statuses of the message endpoint =================================

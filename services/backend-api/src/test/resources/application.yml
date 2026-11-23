@@ -24,3 +24,16 @@ app:
   auth:
     # O aquecimento do login (kixi#566) é só arranque a frio; nos testes só acrescentava carga e esperas.
     warmup-enabled: false
+  ocr:
+    jobs:
+      # O worker agendado de OCR existe em todos os contextos, e os contextos de teste
+      # ficam em cache: o worker de um contexto anterior continua a fazer polling contra
+      # o mesmo PostgreSQL e disputa o lease singleton e o claim dos jobs com
+      # `OcrJobPostgresIntegrationTest`. Foi assim que esse teste ficou intermitente —
+      # falhou em `qua` a 09/11/2026 e no PR #598, sempre no `claimNext` do teste, que
+      # encontrou o lease na mão de outro worker. Nos testes o worker não tem nada para
+      # fazer; quem o quiser exercitar declara as suas propriedades no próprio
+      # `@SpringBootTest`, que tem precedência sobre isto.
+      poll-interval-ms: 86400000
+      initial-delay-ms: 86400000
+      cleanup-interval-ms: 86400000

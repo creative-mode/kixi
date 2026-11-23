@@ -484,7 +484,7 @@ class QuestionServiceTest {
     void aStatementThatIsGoneIsNotFound() {
         when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID, true))
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.ADMIN))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -496,7 +496,7 @@ class QuestionServiceTest {
         // staff it is the same answer as for an id that does not exist.
         when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID, false))
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.STUDENT))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -514,7 +514,7 @@ class QuestionServiceTest {
         answered.setMaxScore(5.0);
         when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID)).thenReturn(Flux.just(answered));
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID, false))
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.STUDENT))
                 .assertNext(response -> {
                     // The content of the question, so the route is useful.
                     assertThat(response.text()).isEqualTo("texto");
@@ -536,7 +536,7 @@ class QuestionServiceTest {
         answered.setNeedsReview(true);
         when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID)).thenReturn(Flux.just(answered));
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID, true))
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.ADMIN))
                 .assertNext(response -> {
                     assertThat(response.modelAnswer()).isEqualTo("x = 1");
                     assertThat(response.needsReview()).isTrue();
@@ -550,7 +550,7 @@ class QuestionServiceTest {
         when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID))
                 .thenReturn(Mono.just(statement()));
 
-        StepVerifier.create(service.findAllDeleted(STATEMENT_ID, false))
+        StepVerifier.create(service.findAllDeleted(STATEMENT_ID, StatementReader.STUDENT))
                 .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -566,7 +566,7 @@ class QuestionServiceTest {
         when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID))
                 .thenReturn(Flux.empty());
 
-        StepVerifier.create(service.findAllActive(STATEMENT_ID, true)).verifyComplete();
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.ADMIN)).verifyComplete();
 
         verify(questions).findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID);
     }

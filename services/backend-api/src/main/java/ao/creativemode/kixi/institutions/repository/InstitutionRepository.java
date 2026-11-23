@@ -54,6 +54,14 @@ public interface InstitutionRepository extends ReactiveCrudRepository<Institutio
         """)
     Mono<Long> countPublishedRooms(Long id);
 
+    /** The verified catalogue offered to the public donation form (kixi#597), by name. */
+    @Query("SELECT * FROM institutions WHERE verified = TRUE AND deleted_at IS NULL ORDER BY LOWER(name)")
+    Flux<Institution> findAllByVerifiedIsTrueAndDeletedAtIsNullOrderByNameAsc();
+
+    /** A single verified institution by id, for validating a donation's chosen school. */
+    @Query("SELECT * FROM institutions WHERE id = :id AND verified = TRUE AND deleted_at IS NULL")
+    Mono<Institution> findByIdAndVerifiedIsTrueAndDeletedAtIsNull(Long id);
+
     /** Schools with at least one active class in the school year (issue #253), by name. */
     @Query("""
         SELECT i.* FROM institutions i

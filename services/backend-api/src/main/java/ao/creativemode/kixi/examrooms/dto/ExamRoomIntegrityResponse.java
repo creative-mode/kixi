@@ -12,6 +12,7 @@ public record ExamRoomIntegrityResponse(
 
     public record ParticipantIntegrity(
             Long accountId,
+            String displayName,
             Long simulationId,
             List<SimulationIntegrityEventResponse> events) {
     }

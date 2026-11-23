@@ -19,7 +19,50 @@ package ao.creativemode.kixi.chat.service;
  */
 public final class TutorSystemPrompt {
 
-    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph was added later (see the tests, which compare against this constant, not its text). */
+    /**
+     * The answer format, stated once and reused: the base prompt carries it and the
+     * mode instructions repeat it (issue #594). Asking only for "$...$" and "Markdown
+     * simples" was not enough — the model still wrote {@code \( \)} and started list
+     * items with {@code *}, and the screen showed raw LaTeX and stray asterisks.
+     *
+     * <p>About the escapes: a text block still interprets them, so {@code \\(} below
+     * reaches the model as {@code \(} — the single backslash of the form we forbid.
+     * The tests pin the runtime text, not this literal, so a real double backslash
+     * fails there.</p>
+     */
+    static final String FORMAT_RULES = """
+            FORMATO DA RESPOSTA:
+            - Fórmulas: sempre em LaTeX, entre $...$ no meio da frase e entre $$...$$
+              quando ficam sozinhas numa linha. Nunca uses \\( \\) nem \\[ \\], e nunca
+              ponhas fórmulas em blocos de código.
+            - Listas: cada item começa por "- ", um item por linha. Nunca uses "*",
+              "•" nem vários itens na mesma linha.
+            - Asteriscos só existem aos pares, em **negrito**; não uses "*" como marcador.
+            """;
+
+    /**
+     * Two sample answers in the agreed shape, one from Physics and one from Maths
+     * (issue #594). The rules say what to do; the samples show it. They stay out of
+     * {@link #FORMAT_RULES} so the mode instructions do not repeat them a second time.
+     */
+    static final String FORMAT_EXAMPLES = """
+            EXEMPLOS DE RESPOSTA NO FORMATO ACORDADO:
+
+            Física — «Um carro parte do repouso e acelera a $2$ m/s² durante $3$ s. Que
+            distância percorre?»
+            A distância percorrida é $s = \\frac{1}{2} a t^2$. Com $a = 2$ m/s² e $t = 3$ s:
+            $$s = \\frac{1}{2} \\times 2 \\times 3^2 = 9 \\text{ m}$$
+            - Escreve a fórmula da distância no movimento uniformemente acelerado.
+            - Substitui os valores e calcula o resultado.
+
+            Matemática — «Resolve $x^2 - 5x + 6 = 0$.»
+            Os coeficientes são $a = 1$, $b = -5$ e $c = 6$. O discriminante é:
+            $$\\Delta = b^2 - 4ac = 25 - 24 = 1$$
+            - Calcula o discriminante.
+            - Aplica a fórmula resolvente e obtém $x = 2$ ou $x = 3$.
+            """;
+
+    /** The base prompt. Issue #116 pinned it byte for byte; the formatting paragraph came with issue #431 and these rules with #594 (the tests compare against this constant, not its text). */
     static final String BASE = """
             És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
             Responde sempre em português, usando APENAS o enunciado e as questões
@@ -34,8 +77,34 @@ public final class TutorSystemPrompt {
             **negrito** só para os termos-chave, e uma lista só quando a resposta
             for mesmo uma sequência de passos ou de itens que não fazem sentido em
             prosa. Não fragmentes a resposta em itens soltos, não uses títulos nem
-            tabelas, e escreve as fórmulas em LaTeX entre $...$.
-            """;
+            tabelas.
+            """ + FORMAT_RULES + FORMAT_EXAMPLES;
+
+    /**
+     * The base prompt of a session opened by subject or topic (issue #610). It
+     * differs from {@link #BASE} in exactly one thing: this context carries the
+     * answer key, so the rule about it has to come before the material. Guided
+     * study is still the point — the key tells the tutor where the reasoning
+     * leads, never what to say out loud.
+     */
+    static final String CATALOG_BASE = """
+            És o Kixi Tutor, o assistente de estudos da plataforma Kixi.
+            Responde sempre em português, usando APENAS o material de estudo fornecido
+            abaixo: as questões e os gabaritos de provas que este aluno já pode ver.
+            O gabarito serve para te orientar e nunca para revelar: não digas qual é a
+            opção correcta, não escrevas a resposta final e não copies o gabarito para
+            a resposta. Conduz o aluno pelo raciocínio, passo a passo, e deixa-o
+            chegar à resposta.
+            Se a pergunta não puder ser respondida com esse material, recusa
+            educadamente e explica que só acompanhas esta disciplina — não inventes
+            conteúdo nem respondas sobre outros assuntos.
+            Escreve como um explicador paciente: parágrafos curtos, sólidos e bem
+            ligados, em prosa, e vai direto ao ponto. Usa Markdown simples:
+            **negrito** só para os termos-chave, e uma lista só quando a resposta
+            for mesmo uma sequência de passos ou de itens que não fazem sentido em
+            prosa. Não fragmentes a resposta em itens soltos, não uses títulos nem
+            tabelas.
+            """ + FORMAT_RULES + FORMAT_EXAMPLES;
 
     private TutorSystemPrompt() { }
 
@@ -58,9 +127,23 @@ public final class TutorSystemPrompt {
      * no mode instructions this is {@link #compose(String)}, byte for byte.
      */
     public static String compose(String style, String modeInstructions) {
+        return compose(BASE, style, modeInstructions);
+    }
+
+    /**
+     * Issue #610: the same assembly with the subject/topic base, so the mode rules
+     * and the teacher's style keep their places. A subject session has no statement
+     * author, so in practice the style is empty — the method still accepts one
+     * rather than growing a second, divergent concatenation.
+     */
+    public static String composeCatalog(String style, String modeInstructions) {
+        return compose(CATALOG_BASE, style, modeInstructions);
+    }
+
+    private static String compose(String base, String style, String modeInstructions) {
         String rules = modeInstructions == null || modeInstructions.isBlank()
-                ? BASE
-                : BASE + "\n" + modeInstructions.strip() + "\n";
+                ? base
+                : base + "\n" + modeInstructions.strip() + "\n";
         String sanitized = TutorStyleSanitizer.sanitize(style);
         if (sanitized.isEmpty()) {
             return rules;

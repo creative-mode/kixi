@@ -4,6 +4,8 @@ import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionReorderReques
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionRequest;
 import ao.creativemode.kixi.exams.dto.questionoption.QuestionOptionResponse;
 import ao.creativemode.kixi.exams.service.QuestionOptionService;
+import ao.creativemode.kixi.exams.service.StatementReadAccessService;
+import ao.creativemode.kixi.exams.service.StatementReader;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -40,20 +42,24 @@ public class QuestionOptionController {
 
     private final QuestionOptionService questionOptionService;
     private final CurrentAccountService currentAccountService;
+    private final StatementReadAccessService readAccess;
 
     public QuestionOptionController(
         QuestionOptionService questionOptionService,
-        CurrentAccountService currentAccountService
+        CurrentAccountService currentAccountService,
+        StatementReadAccessService readAccess
     ) {
         this.questionOptionService = questionOptionService;
         this.currentAccountService = currentAccountService;
+        this.readAccess = readAccess;
     }
 
     // =========================================================================
     // Reads
     //
     // Open to any authenticated caller, but a student gets a published statement
-    // and its options without is_correct. See QuestionController for the split.
+    // and its options without is_correct, and a teacher only the statements of
+    // their own classes and subjects. See QuestionController for the split.
     // =========================================================================
 
     @GetMapping
@@ -61,8 +67,8 @@ public class QuestionOptionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return isStaff()
-            .flatMapMany(staff -> questionOptionService.findAll(statementId, questionId, staff))
+        return reader()
+            .flatMapMany(reader -> questionOptionService.findAll(statementId, questionId, reader))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -72,8 +78,8 @@ public class QuestionOptionController {
         @PathVariable Long statementId,
         @PathVariable Long questionId
     ) {
-        return isStaff()
-            .flatMapMany(staff -> questionOptionService.findAllDeleted(statementId, questionId, staff))
+        return reader()
+            .flatMapMany(reader -> questionOptionService.findAllDeleted(statementId, questionId, reader))
             .collectList()
             .map(ResponseEntity::ok);
     }
@@ -84,8 +90,8 @@ public class QuestionOptionController {
         @PathVariable Long questionId,
         @PathVariable Long optionId
     ) {
-        return isStaff()
-            .flatMap(staff -> questionOptionService.findById(statementId, questionId, optionId, staff))
+        return reader()
+            .flatMap(reader -> questionOptionService.findById(statementId, questionId, optionId, reader))
             .map(ResponseEntity::ok);
     }
 
@@ -188,9 +194,9 @@ public class QuestionOptionController {
         );
     }
 
-    /** Whether the caller may see the answer key and a statement not published. */
-    private Mono<Boolean> isStaff() {
-        return currentAccountService.hasAnyRole("ADMIN", "TEACHER");
+    /** Who is reading: the answer key, unpublished statements, and a teacher's own scope. */
+    private Mono<StatementReader> reader() {
+        return StatementReader.current(currentAccountService, readAccess);
     }
 
     private URI locationOf(

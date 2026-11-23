@@ -92,7 +92,7 @@ class MatrixPracticeServiceTest {
         when(images.findByQuestionIdAndDeletedAtIsNullOrderByOrderIndexAsc(anyLong())).thenReturn(Flux.empty());
         when(simulations.createForPractice(eq(STUDENT), eq(7000L), anyString()))
                 .thenReturn(Mono.just(new SimulationResponse(90L, null, null, null, null, null, null, null, null, null,
-                        null, null, null, null)));
+                        null, null, null, null, null, null)));
     }
 
     private static Question source(long id, long statementId, int number, String type, Double score) {

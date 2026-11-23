@@ -272,6 +272,88 @@ public class LeaderboardRepository {
                 .defaultIfEmpty(false);
     }
 
+    /**
+     * Every visibility row the caller holds, for the preferences screen.
+     *
+     * <p>Absence is not read here: the service fills the missing scopes with the default,
+     * so "no row" and "a row that says visible" reach the client as the same answer and the
+     * database never has to hold a row per account just to say the default.</p>
+     */
+    public Flux<AccountVisibility> findVisibilities(Long accountId) {
+        return databaseClient.sql("""
+                        SELECT account_id, scope, ranking_visibility
+                          FROM leaderboard_visibility
+                         WHERE account_id = :accountId
+                        """)
+                .bind("accountId", accountId)
+                .map((row, metadata) -> visibilityRow(row))
+                .all();
+    }
+
+    /**
+     * The visibility each candidate holds in one scope.
+     *
+     * <p>Only the accounts in the caller's window are read, not the whole cohort: the
+     * window is what the response can show, and a name that is never displayed is a name
+     * that does not need to be read. The scope is a bind rather than a {@code scope IN
+     * (...)} because one response only ever asks about its own scope.</p>
+     */
+    public Flux<AccountVisibility> findVisibilities(Collection<Long> accountIds, Scope scope) {
+        if (accountIds.isEmpty()) {
+            return Flux.empty();
+        }
+        return databaseClient.sql("""
+                        SELECT account_id, scope, ranking_visibility
+                          FROM leaderboard_visibility
+                         WHERE account_id = ANY(:accountIds)
+                           AND scope = :scope
+                        """)
+                .bind("accountIds", accountIds.toArray(Long[]::new))
+                .bind("scope", scope.name())
+                .map((row, metadata) -> visibilityRow(row))
+                .all();
+    }
+
+    private static AccountVisibility visibilityRow(Row row) {
+        return new AccountVisibility(
+                ((Number) row.get("account_id")).longValue(),
+                (String) row.get("scope"),
+                (String) row.get("ranking_visibility"));
+    }
+
+    /**
+     * Writes one scope's visibility, in one statement.
+     *
+     * <p>An upsert, like the cross-institution consent next door: a student who toggles the
+     * switch twice must not leave two rows disagreeing about the same account and scope.
+     * Writing {@code VISIBLE} as a row rather than deleting is deliberate — the row is the
+     * audit of the student having answered, and the default is a reading of absence, not a
+     * row the database must repair.</p>
+     */
+    public Mono<Boolean> setVisibility(Long accountId, Scope scope, String visibility) {
+        if (scope == Scope.GLOBAL) {
+            throw new IllegalArgumentException(
+                    "scope=global is governed by PUT /api/v1/leaderboard/consent");
+        }
+        return databaseClient.sql("""
+                        INSERT INTO leaderboard_visibility
+                               (account_id, scope, ranking_visibility, created_at, updated_at)
+                        VALUES (:accountId, :scope, :visibility, now(), now())
+                        ON CONFLICT (account_id, scope) DO UPDATE
+                           SET ranking_visibility = EXCLUDED.ranking_visibility,
+                               updated_at = now()
+                        """)
+                .bind("accountId", accountId)
+                .bind("scope", scope.name())
+                .bind("visibility", visibility)
+                // rowsUpdated, not a returning row: the preference is not data anybody
+                // reads here, and the count answers "did it land" without fetching it back.
+                .fetch()
+                .rowsUpdated()
+                .map(rows -> rows > 0)
+                .defaultIfEmpty(false);
+    }
+
     /** One average percentage per account that has a computable score in the group. */
     public Flux<GroupScore> findAverages(
             Scope scope, Long groupId, Long schoolYearId, Long institutionId, Long statementId,
@@ -636,6 +718,14 @@ public class LeaderboardRepository {
                               Double percentile, Long xp) { }
 
     public record DisplayName(Long accountId, String firstName, String lastName) { }
+
+    /**
+     * One visibility row.
+     *
+     * @param scope             {@code CLASS}, {@code SCHOOL} or {@code FRIENDS}
+     * @param rankingVisibility {@code VISIBLE}, {@code ANONYMOUS} or {@code OUT}
+     */
+    public record AccountVisibility(Long accountId, String scope, String rankingVisibility) { }
 
     record Sql(String statement, Map<String, Object> binds) { }
 }

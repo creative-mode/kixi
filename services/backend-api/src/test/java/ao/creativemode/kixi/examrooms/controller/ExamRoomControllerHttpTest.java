@@ -84,7 +84,8 @@ class ExamRoomControllerHttpTest {
                         "startsAt", "2026-10-13T10:00:00", "endsAt", "2026-10-13T11:00:00",
                         "durationMinutes", 60))
                 .exchange().expectStatus().isCreated().expectBody()
-                .jsonPath("$.id").isEqualTo(7).jsonPath("$.status").isEqualTo("DRAFT");
+                .jsonPath("$.id").isEqualTo(7).jsonPath("$.status").isEqualTo("DRAFT")
+                .jsonPath("$.phase").isEqualTo("ENDED").jsonPath("$.transitioned").doesNotExist();
 
         client.mutateWith(teacherJwt()).post().uri("/api/v1/exam-rooms/7/participants")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("accountId", 99))
@@ -139,7 +140,8 @@ class ExamRoomControllerHttpTest {
 
     private static ExamRoomResponse room(Long id, ExamRoomStatus status) {
         return new ExamRoomResponse(id, 5L, 3L, 42L,
-                LocalDateTime.of(2026, 10, 13, 10, 0), LocalDateTime.of(2026, 10, 13, 11, 0), 60, status);
+                LocalDateTime.of(2026, 10, 13, 10, 0), LocalDateTime.of(2026, 10, 13, 11, 0), 60, status,
+                ao.creativemode.kixi.examrooms.model.ExamRoomPhase.ENDED, true);
     }
 
     private static WebTestClientConfigurer studentJwt() {

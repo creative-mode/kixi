@@ -19,7 +19,8 @@ import reactor.core.publisher.Mono;
 /**
  * O plano do trimestre (kixi#523): 1 P1, 1 P2 e X avaliações de MAC por turma, disciplina e trimestre. O estado de cada
  * avaliação é <b>derivado</b> do enunciado, da sala e das respostas (nunca guardado), por isso não se desatualiza; só a
- * dispensa e a conclusão manual da MAC se guardam. O plano fica pronto para a pauta quando todas as avaliações estão
+ * dispensa e a conclusão manual da MAC (planos antigos) se guardam. Uma avaliação de MAC é uma prova como a P1 e a P2 (kixi#623):
+ * tem enunciado e sala, reagenda-se, lembra-se, e só se dispensa quando não se vai fazer. O plano fica pronto para a pauta quando todas as avaliações estão
  * corrigidas ou dispensadas. Quem vê o quê: o administrador tudo; o professor os planos da turma e disciplina que leciona
  * (e só ele os edita); o coordenador os da sua instituição (e só ele, ou o administrador, aprova e dispensa).
  */
@@ -203,11 +204,17 @@ public class TermPlanService {
                         : touch(planId).then(plan(who, planId)));
     }
 
+    /** term_assessments.dispensed_reason é VARCHAR(500). */
+    private static final int REASON_MAX = 500;
+
     /** O coordenador (ou o administrador) dispensa uma componente, com motivo. */
     @Transactional
     public Mono<Plan> dispense(Access who, Long planId, Long assessmentId, String reason) {
         if (reason == null || reason.isBlank()) {
             return Mono.error(ApiException.badRequest("A reason is required to dispense an assessment"));
+        }
+        if (reason.trim().length() > REASON_MAX) {
+            return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         }
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql(
                         "SELECT kind FROM term_assessments WHERE id = :id AND plan_id = :p").bind("id", assessmentId).bind("p", planId)
@@ -225,21 +232,25 @@ public class TermPlanService {
 
     /**
      * A P1 ou a P2 repete-se (kixi#534): o coordenador (ou o administrador) marca uma data nova e o motivo; a avaliação volta a «planeada»,
-     * sem enunciado nem sala (a sala antiga fica como histórico). Só antes de a pauta abrir: depois disso os dados já seguiram para o motor.
+     * sem enunciado nem sala (a sala antiga fica como histórico), e o agendamento deixa de estar concluído até haver novo enunciado. Só antes de a pauta abrir: depois disso os dados já seguiram para o motor.
      */
     @Transactional
     public Mono<Plan> reschedule(Access who, Long planId, Long assessmentId, LocalDate date, String reason) {
         if (date == null) return Mono.error(ApiException.badRequest("A new date is required"));
         if (reason == null || reason.isBlank()) return Mono.error(ApiException.badRequest("A reason is required to reschedule an assessment"));
+        if (reason.trim().length() > REASON_MAX) return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> {
             if (h.pautaOpenedAt() != null) return Mono.<Long>error(ApiException.conflict("The pauta is already open: its assessments cannot be rescheduled"));
             return db.sql("""
                     UPDATE term_assessments SET planned_date = :d, statement_id = NULL, room_id = NULL, manual_done_at = NULL,
                         dispensed_by = NULL, dispensed_at = NULL, dispensed_reason = NULL
-                    WHERE id = :id AND plan_id = :p AND kind IN ('P1', 'P2')
+                    WHERE id = :id AND plan_id = :p AND kind IN ('P1', 'P2', 'MAC')
                     """).bind("d", date).bind("id", assessmentId).bind("p", planId).fetch().rowsUpdated();
-        }).flatMap(n -> n == 0 ? Mono.error(ApiException.badRequest("Only P1 and P2 can be rescheduled"))
-                : touch(planId).then(plan(who, planId)));
+        }).flatMap(n -> n == 0 ? Mono.error(ApiException.badRequest("Assessment not found in this plan"))
+                // A avaliação voltou a «planeada», sem enunciado: o agendamento já não está concluído (a pauta ainda não abriu, a guarda
+                // de cima). Sem isto o plano ficava «concluído» sem a prova e a pauta nunca abria; o professor liga o novo enunciado e conclui.
+                : db.sql("UPDATE term_plans SET scheduling_concluded_at = NULL, scheduling_concluded_by = NULL WHERE id = :p")
+                        .bind("p", planId).fetch().rowsUpdated().then(touch(planId)).then(plan(who, planId)));
     }
 
     @Transactional
@@ -251,7 +262,7 @@ public class TermPlanService {
 
     /**
      * O professor da turma e disciplina conclui o agendamento: a pauta abre no motor, cada componente fica à espera da sua data.
-     * Pede P1 e P2 com enunciado (o contrato do motor identifica a prova pelo enunciado).
+     * Pede P1 e P2 com enunciado, ou só uma delas se a outra estiver dispensada (o contrato do motor identifica a prova pelo enunciado).
      */
     @Transactional
     public Mono<Plan> conclude(Access who, Long planId) {
@@ -262,12 +273,22 @@ public class TermPlanService {
             }
             if (h.schedulingConcluded()) return Mono.just(h);
             return assessments(planId).collectList().flatMap(list -> {
-                boolean missing = !hasStatement(list, "P1") || !hasStatement(list, "P2");
-                return missing ? Mono.<Header>error(ApiException.conflict("P1 and P2 need a statement before the scheduling is concluded"))
+                // Uma prova dispensada não precisa de enunciado (kixi#635), mas não pode ser as duas: a pauta leva pelo menos uma.
+                boolean missing = !(hasStatement(list, "P1") || isDispensed(list, "P1")) || !(hasStatement(list, "P2") || isDispensed(list, "P2"))
+                        || (isDispensed(list, "P1") && isDispensed(list, "P2"));
+                // Uma avaliação de MAC é uma prova como a P1 e a P2 (kixi#623): sem enunciado só se for dispensada.
+                boolean macWithoutStatement = list.stream().anyMatch(a -> a.kind().equals("MAC") && !a.status().equals("DISPENSED") && a.statementId() == null);
+                if (missing) return Mono.<Header>error(ApiException.conflict("P1 and P2 need a statement before the scheduling is concluded"));
+                return macWithoutStatement
+                        ? Mono.<Header>error(ApiException.conflict("Every MAC assessment needs a statement (or must be dispensed) before the scheduling is concluded"))
                         : db.sql("UPDATE term_plans SET scheduling_concluded_at = CURRENT_TIMESTAMP, scheduling_concluded_by = :u, updated_at = CURRENT_TIMESTAMP WHERE id = :p")
                         .bind("u", who.accountId()).bind("p", planId).fetch().rowsUpdated().thenReturn(h);
             });
         }).then(plan(who, planId));
+    }
+
+    private static boolean isDispensed(List<Assessment> list, String kind) {
+        return list.stream().anyMatch(a -> a.kind().equals(kind) && a.status().equals("DISPENSED"));
     }
 
     private static boolean hasStatement(List<Assessment> list, String kind) {
@@ -309,7 +330,6 @@ public class TermPlanService {
                             default -> null;
                         };
                         if (action == null) continue;
-                        if (a.kind().equals("MAC") && a.status().equals("PLANNED") && days > 2) continue; // uma MAC pode não ser prova
                         String level = days < 0 ? "LATE" : days <= 2 ? "D2" : days <= 7 ? "D7" : days <= 14 ? "D14" : null;
                         if (level == null) continue;
                         out.add(new Reminder(plan.id(), a.id(), a.kind(), a.title(), a.plannedDate(), days, action, level,

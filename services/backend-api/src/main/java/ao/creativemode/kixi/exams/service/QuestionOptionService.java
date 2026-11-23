@@ -46,16 +46,18 @@ public class QuestionOptionService {
 
     // ── Reads ───────────────────────────────────────────────────────────────
 
-    public Flux<QuestionOptionResponse> findAll(Long statementId, Long questionId, boolean staff) {
-        return requireReadableQuestion(statementId, questionId, staff)
+    public Flux<QuestionOptionResponse> findAll(Long statementId, Long questionId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireReadableQuestion(statementId, questionId, reader)
             // Deferred so the listing is never even asked for when the question
             // turns out not to be there.
             .thenMany(Flux.defer(() -> options.findAllByQuestionIdOrderedByOrderIndex(questionId)))
             .map(option -> toResponse(option, staff));
     }
 
-    public Flux<QuestionOptionResponse> findAllDeleted(Long statementId, Long questionId, boolean staff) {
-        return requireReadableQuestion(statementId, questionId, staff)
+    public Flux<QuestionOptionResponse> findAllDeleted(Long statementId, Long questionId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireReadableQuestion(statementId, questionId, reader)
             .then(Mono.defer(() -> staff
                 ? Mono.<Void>empty()
                 : Mono.<Void>error(ApiException.notFound("Statement not found: " + statementId))))
@@ -63,8 +65,9 @@ public class QuestionOptionService {
             .map(option -> toResponse(option, staff));
     }
 
-    public Mono<QuestionOptionResponse> findById(Long statementId, Long questionId, Long optionId, boolean staff) {
-        return requireReadableQuestion(statementId, questionId, staff)
+    public Mono<QuestionOptionResponse> findById(Long statementId, Long questionId, Long optionId, StatementReader reader) {
+        boolean staff = reader.staff();
+        return requireReadableQuestion(statementId, questionId, reader)
             .then(Mono.defer(() -> findActiveOption(questionId, optionId)))
             .map(option -> toResponse(option, staff));
     }
@@ -339,13 +342,15 @@ public class QuestionOptionService {
      * only reaches a published one, and the answer key never travels to them.
      *
      * <p>Staff reach any statement that is not in the trash, the same as in the
-     * statement routes.
+     * statement routes, and a teacher only inside their teaching assignments
+     * ({@link StatementReader}), so the answer key does not leave the school.
      */
-    private Mono<Void> requireReadableQuestion(Long statementId, Long questionId, boolean staff) {
-        return Mono.defer(() -> staff
+    private Mono<Void> requireReadableQuestion(Long statementId, Long questionId, StatementReader reader) {
+        return Mono.defer(() -> reader.staff()
                 ? statements.findByIdAndDeletedAtIsNull(statementId)
                 : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
+            .flatMap(reader::require)
             .then(Mono.defer(() -> questions.findByIdAndDeletedAtIsNull(questionId)))
             .filter(question -> question.getStatementId().equals(statementId))
             .switchIfEmpty(Mono.error(ApiException.notFound(
@@ -354,7 +359,7 @@ public class QuestionOptionService {
     }
 
     private Mono<Void> requireQuestion(Long statementId, Long questionId) {
-        return requireReadableQuestion(statementId, questionId, true);
+        return requireReadableQuestion(statementId, questionId, StatementReader.ADMIN);
     }
 
     private Mono<QuestionOption> findActiveOption(Long questionId, Long optionId) {

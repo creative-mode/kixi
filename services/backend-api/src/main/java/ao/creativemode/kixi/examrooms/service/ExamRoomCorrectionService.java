@@ -117,9 +117,9 @@ public class ExamRoomCorrectionService {
     public Mono<ExamRoomBulkGradeResponse> grade(Long roomId, Long caller, boolean admin, ExamRoomBulkGradeRequest request) {
         List<ExamRoomBulkGradeRequest.Grade> given = request.grades() == null ? List.of() : request.grades();
         // As provas de um plano do trimestre são corrigidas pela IA no fluxo do motor (kixi#542): o professor não as corrige à mão
-        // na sala. O administrador, que também opera o motor, não é travado.
+        // na sala, nem o administrador (matriz «Correção pela IA»); o motor corrige por PATCH/PUT das respostas, não por aqui.
         return monitoring.authorize(roomId, caller, admin)
-            .flatMap(room -> isPlanRoom(roomId).flatMap(planned -> planned && !admin
+            .flatMap(room -> isPlanRoom(roomId).flatMap(planned -> planned
                 ? Mono.<ao.creativemode.kixi.examrooms.model.ExamRoom>error(ApiException.conflict(
                     "As respostas das provas do plano do trimestre são corrigidas pela IA no fluxo; a nota só muda por reclamação"))
                 : Mono.just(room)))

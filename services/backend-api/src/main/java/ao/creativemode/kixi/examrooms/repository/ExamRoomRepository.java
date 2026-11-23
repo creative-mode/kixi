@@ -2,6 +2,7 @@ package ao.creativemode.kixi.examrooms.repository;
 
 import ao.creativemode.kixi.examrooms.model.ExamRoom;
 import ao.creativemode.kixi.examrooms.model.ExamRoomStatus;
+import java.time.OffsetDateTime;
 import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -15,6 +16,12 @@ public interface ExamRoomRepository extends ReactiveCrudRepository<ExamRoom, Lon
             + "WHERE r.teacher_account_id = :teacherAccountId AND cl.institution_id = :institutionId "
             + "ORDER BY r.created_at DESC")
     Flux<ExamRoom> findByTeacherAccountIdAndInstitutionId(Long teacherAccountId, Long institutionId);
+    /** Every room, newest first: what the integration account (the SchoolOps engine) sees, since it owns none (#600). */
+    Flux<ExamRoom> findAllByOrderByCreatedAtDesc();
+    /** Every room in the classes of one school, newest first. */
+    @Query("SELECT r.* FROM exam_rooms r JOIN classes cl ON cl.id = r.class_id "
+            + "WHERE cl.institution_id = :institutionId ORDER BY r.created_at DESC")
+    Flux<ExamRoom> findAllByInstitutionId(Long institutionId);
     Mono<ExamRoom> findByIdAndTeacherAccountId(Long id, Long teacherAccountId);
     @Query("SELECT EXISTS (SELECT 1 FROM exam_rooms WHERE statement_id = :statementId "
             + "AND status IN ('OPEN', 'RUNNING'))")
@@ -24,6 +31,9 @@ public interface ExamRoomRepository extends ReactiveCrudRepository<ExamRoom, Lon
     Mono<Boolean> existsNonClosedByStatementId(Long statementId);
     @Query("SELECT * FROM exam_rooms WHERE id = :id FOR UPDATE")
     Mono<ExamRoom> lockForUpdate(Long id);
+    @Query("SELECT id FROM exam_rooms WHERE status IN ('OPEN', 'RUNNING') "
+            + "AND ends_at <= :now AND id > :afterId ORDER BY id LIMIT 100")
+    Flux<Long> findExpiredIds(OffsetDateTime now, long afterId);
     @Modifying
     @Query("UPDATE exam_rooms SET status = :next, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND status = :current")
     Mono<Integer> transition(Long id, ExamRoomStatus current, ExamRoomStatus next);

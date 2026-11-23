@@ -5,6 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -23,7 +27,8 @@ import reactor.core.publisher.Mono;
 /**
  * Receptor dos eventos assinados do motor SchoolOps (Standard Webhooks, kixi#525). A assinatura <b>é</b> a autenticação:
  * sem segredo configurado, ou com assinatura inválida ou fora de 5 minutos, responde 401 e não guarda nada. Repetir um evento
- * é inofensivo (só atualiza o estado da pauta do plano).
+ * é inofensivo (só atualiza o estado da pauta do plano) e um evento fora de ordem não faz o estado recuar (ver
+ * {@code applyIfForward}).
  */
 @RestController
 @RequestMapping("/api/v1/integrations/schoolops")
@@ -69,11 +74,63 @@ public class SchoolOpsEventController {
             return Mono.empty();
         }
         log.info("[schoolops] evento {} da pauta {} (plano {})", type, event.path("subject").asText(), planId);
-        // uma pauta homologada não volta atrás por um evento de cálculo atrasado
-        return db.sql("""
-                UPDATE term_plans SET pauta_status = :s, pauta_event_at = CURRENT_TIMESTAMP
-                WHERE id = :p AND (pauta_status IS DISTINCT FROM 'HOMOLOGADA' OR :s IN ('HOMOLOGADA', 'RECTIFICADA', 'ANULADA'))
-                """).bind("s", status).bind("p", planId).fetch().rowsUpdated().then();
+        LocalDateTime time = eventTime(event.path("time").asText(""));
+        return applyIfForward(planId, status, time, type);
+    }
+
+    /**
+     * O estado da pauta do plano só avança (V2-13). Os eventos chegam por entrega repetida e podem chegar fora de ordem, por isso
+     * cada um só se aplica se o estado não recuar:
+     * <pre>
+     *   estado actual   componente-calculado  homologada   rectificada   anulada
+     *   (nenhum)        EM_CURSO              HOMOLOGADA   RECTIFICADA   ANULADA
+     *   EM_CURSO        EM_CURSO (*)          HOMOLOGADA   RECTIFICADA   ANULADA
+     *   HOMOLOGADA      ignora                HOMOLOGADA (*) RECTIFICADA ignora (**)
+     *   RECTIFICADA     ignora                ignora       RECTIFICADA (*) ignora (**)
+     *   ANULADA         ignora (terminal)     ignora       ignora        ANULADA (*)
+     * </pre>
+     * (*) mesmo estado: aplica-se só se o {@code time} do evento não for anterior ao do já aplicado (uma homologação mais antiga
+     * não sobrescreve uma mais recente); sem {@code time} aplica-se. (**) o motor recusa anular uma pauta já homologada (409),
+     * por isso um {@code anulada} nesse ponto é inconsistente: ignora-se e avisa-se. Um evento ignorado responde 204 como os outros
+     * (o motor não deve repetir), sem alterar nada. A decisão é um só UPDATE condicional, atómico mesmo com entregas em paralelo.
+     */
+    private Mono<Void> applyIfForward(long planId, String status, LocalDateTime time, String type) {
+        DatabaseClient.GenericExecuteSpec spec = db.sql("""
+                UPDATE term_plans SET pauta_status = :s, pauta_event_at = CURRENT_TIMESTAMP, pauta_event_time = COALESCE(:t, pauta_event_time)
+                WHERE id = :p AND (
+                    pauta_status IS NULL
+                    OR (pauta_status <> 'ANULADA' AND (
+                        (:s = 'ANULADA' AND pauta_status = 'EM_CURSO')
+                        OR (:s <> 'ANULADA' AND (CASE :s WHEN 'EM_CURSO' THEN 1 WHEN 'HOMOLOGADA' THEN 2 WHEN 'RECTIFICADA' THEN 3 END)
+                                              > (CASE pauta_status WHEN 'EM_CURSO' THEN 1 WHEN 'HOMOLOGADA' THEN 2 WHEN 'RECTIFICADA' THEN 3 ELSE 0 END))
+                        OR (:s = pauta_status AND (CAST(:t AS TIMESTAMP) IS NULL OR pauta_event_time IS NULL OR :t >= pauta_event_time))
+                    ))
+                )
+                """).bind("s", status).bind("p", planId);
+        spec = time == null ? spec.bindNull("t", LocalDateTime.class) : spec.bind("t", time);
+        return spec.fetch().rowsUpdated().flatMap(updated -> {
+            if (updated > 0) return Mono.<Void>empty();
+            return db.sql("SELECT pauta_status FROM term_plans WHERE id = :p").bind("p", planId).fetch().one()
+                    .map(row -> String.valueOf(row.get("pauta_status")))
+                    .doOnNext(current -> {
+                        if ("ANULADA".equals(status) && ("HOMOLOGADA".equals(current) || "RECTIFICADA".equals(current))) {
+                            log.warn("[schoolops] plano {}: evento {} ignorado, a pauta já está {} e o motor não anula uma pauta homologada",
+                                    planId, type, current);
+                        } else {
+                            log.debug("[schoolops] plano {}: evento {} ignorado, faria o estado recuar ({} -> {})", planId, type, current, status);
+                        }
+                    }).then();
+        });
+    }
+
+    /** O {@code time} do CloudEvent em UTC (a coluna é um TIMESTAMP em UTC); ausente ou ilegível é {@code null}. */
+    private static LocalDateTime eventTime(String text) {
+        if (text.isBlank()) return null;
+        try {
+            return OffsetDateTime.parse(text).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     /** HMAC-SHA256 de {@code id.timestamp.corpo} com a chave do segredo {@code whsec_<base64>}; aceita várias assinaturas v1. */
