@@ -304,9 +304,41 @@ public class ManualStatementService {
         boolean needsReview = statementNeedsReview(request);
         statement.setVisible(Boolean.TRUE.equals(request.visible()) && !needsReview);
         statement.setNeedsReview(needsReview);
-        statement.setSource(SOURCE);
+        applyProvenance(statement, request);
         statement.setDeletedAt(null);
         return statement;
+    }
+
+    /**
+     * A statement the builder publishes from an OCR reading keeps where it came from (V2-3): with the OCR request id, or with any
+     * question carrying OCR evidence, the source is {@code ocr} (so the «Vindos do OCR» queue sees it) and the confidence is the
+     * reading's, or else the lowest of the questions'. Anything else is a statement written by hand.
+     */
+    private static void applyProvenance(Statement statement, ManualStatementRequest request) {
+        String requestId = request.ocrRequestId() == null || request.ocrRequestId().isBlank() ? null : request.ocrRequestId().trim();
+        java.util.List<Double> confidences = new java.util.ArrayList<>();
+        boolean evidence = false;
+        for (ManualStatementRequest.Question question : request.questions()) {
+            evidence |= hasOcrEvidence(question.rawText(), question.confidence());
+            if (question.confidence() != null) confidences.add(question.confidence());
+            if (question.items() != null) {
+                for (ManualStatementRequest.Item item : question.items()) {
+                    evidence |= hasOcrEvidence(item.rawText(), item.confidence());
+                    if (item.confidence() != null) confidences.add(item.confidence());
+                }
+            }
+        }
+        if (requestId == null && !evidence && request.ocrConfidence() == null) {
+            statement.setSource(SOURCE);
+            return;
+        }
+        Double confidence = request.ocrConfidence() != null ? request.ocrConfidence()
+            : confidences.stream().min(Double::compare).orElse(null);
+        statement.setOcrMetadata(requestId, confidence, statement.getNeedsReview() != null && statement.getNeedsReview());
+    }
+
+    private static boolean hasOcrEvidence(String rawText, Double confidence) {
+        return confidence != null || rawText != null && !rawText.isBlank();
     }
 
     /** The sum of what can be scored: the leaves. A group is only a statement, its items carry the score. */

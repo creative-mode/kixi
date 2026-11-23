@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.exception;
 
+import ao.creativemode.kixi.ocr.OcrProblem;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrClientException;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient.OcrServerException;
 import ao.creativemode.kixi.shared.dto.ProblemDetail;
@@ -46,8 +47,8 @@ public class OcrExceptionHandler {
             OCR_ERROR_TYPE,
             "OCR Processing Error",
             ex.getStatusCode(),
-            "The OCR request was rejected. Please verify the uploaded file and try again.",
-            Map.of("service", "ocr-service", "errorType", "client_error")
+            OcrProblem.FILE_REJECTED.message(),
+            Map.of("service", "ocr-service", "errorType", "client_error", "code", OcrProblem.FILE_REJECTED.code())
         ).withInstance(exchange);
 
         return Mono.just(
@@ -74,8 +75,8 @@ public class OcrExceptionHandler {
             OCR_ERROR_TYPE,
             "OCR Service Unavailable",
             HttpStatus.SERVICE_UNAVAILABLE.value(),
-            "The OCR service is temporarily unavailable. Please try again later.",
-            Map.of("service", "ocr-service", "errorType", "server_error")
+            OcrProblem.UNAVAILABLE.message(),
+            Map.of("service", "ocr-service", "errorType", "server_error", "code", OcrProblem.UNAVAILABLE.code())
         ).withInstance(exchange);
 
         return Mono.just(

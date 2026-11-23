@@ -1,5 +1,7 @@
 package ao.creativemode.kixi.ocr.service;
 
+import ao.creativemode.kixi.ocr.OcrProblem;
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.ocr.dto.ExamExtractionResponse;
@@ -115,7 +117,7 @@ public class OcrJobService {
             .fetch().rowsUpdated()
             .then(database.sql("""
             SELECT id, request_id, status, page_count, completed_pages, current_page,
-                   event_type, result_json::text AS result_json, error_message
+                   event_type, result_json::text AS result_json, error_message, error_code
             FROM ocr_jobs WHERE id = :id AND account_id = :accountId
             """)
             .bind("id", jobId)
@@ -127,7 +129,8 @@ public class OcrJobService {
                     row.get("id", UUID.class), row.get("request_id", UUID.class),
                     row.get("status", String.class), value(row.get("page_count", Integer.class)),
                     value(row.get("completed_pages", Integer.class)), value(row.get("current_page", Integer.class)),
-                    row.get("event_type", String.class), result, row.get("error_message", String.class)
+                    row.get("event_type", String.class), result, row.get("error_message", String.class),
+                    row.get("error_code", String.class)
                 );
             })
             .one())
@@ -225,11 +228,10 @@ public class OcrJobService {
                 return response.getBody();
             })
             .concatMap(event -> handleEvent(job, workerId, event))
-            .then(Mono.defer(() -> fail(job.id(), workerId, "OCR stream ended without a result")))
+            .then(Mono.defer(() -> fail(job.id(), workerId, OcrProblem.PROCESSING_FAILED)))
             .onErrorResume(error -> {
-                log.error("OCR background job failed: requestId={}, type={}",
-                    job.requestId(), error.getClass().getSimpleName());
-                return fail(job.id(), workerId, "OCR processing failed");
+                OcrFailure.log(log, "OCR background job failed: requestId=" + job.requestId(), error);
+                return fail(job.id(), workerId, OcrProblem.forJobFailure(error));
             })
             .then();
     }
@@ -265,7 +267,7 @@ public class OcrJobService {
                 case "progress" -> updateProgress(job.id(), workerId, "progress",
                     intValue(data, "pageCount"), intValue(data, "page"), intValue(data, "page"));
                 case "result" -> complete(job, workerId, event.data());
-                case "error" -> fail(job.id(), workerId, "OCR processing failed");
+                case "error" -> fail(job.id(), workerId, OcrProblem.PROCESSING_FAILED);
                 default -> Mono.empty();
             };
         } catch (Exception error) {
@@ -276,7 +278,7 @@ public class OcrJobService {
     private Mono<Void> complete(OcrJob job, UUID workerId, String json) throws Exception {
         OcrResponse response = objectMapper.readValue(json, OcrResponse.class);
         if (!response.isSuccess() && !response.isPartial()) {
-            return Mono.error(new IllegalStateException("OCR returned an unsuccessful result"));
+            return Mono.error(new OcrFailure.Unreadable(OcrProblem.fromServiceMessage(response.errorMessage())));
         }
         ExamExtractionResponse extraction = ExamExtractionResponse.fromOcrResponse(
             response, imageAssociationService.previewCrops(response.imagesToUpload(), job.files()));
@@ -294,13 +296,13 @@ public class OcrJobService {
             .fetch().rowsUpdated().then(deleteFiles(job.id()));
     }
 
-    private Mono<Void> fail(UUID jobId, UUID workerId, String message) {
+    private Mono<Void> fail(UUID jobId, UUID workerId, OcrProblem problem) {
         return database.sql("""
-            UPDATE ocr_jobs SET status = 'FAILED', event_type = 'error', error_message = :message,
+            UPDATE ocr_jobs SET status = 'FAILED', event_type = 'error', error_message = :message, error_code = :code,
                 expires_at = CURRENT_TIMESTAMP + INTERVAL '1 day', updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND status = 'PROCESSING' AND lease_owner = :owner
             """)
-            .bind("message", message).bind("id", jobId).bind("owner", workerId)
+            .bind("message", OcrProblem.JOB_FAILED_MESSAGE).bind("code", problem.code()).bind("id", jobId).bind("owner", workerId)
             .fetch().rowsUpdated().then(deleteFiles(jobId));
     }
 

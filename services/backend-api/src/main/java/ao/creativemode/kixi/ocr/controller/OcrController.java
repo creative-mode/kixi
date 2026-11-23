@@ -1,5 +1,6 @@
 package ao.creativemode.kixi.ocr.controller;
 
+import ao.creativemode.kixi.ocr.OcrFailure;
 import ao.creativemode.kixi.ocr.client.OcrServiceClient;
 import ao.creativemode.kixi.ocr.client.OcrUploadedFile;
 import ao.creativemode.kixi.shared.exception.ApiException;
@@ -159,8 +160,7 @@ public class OcrController {
                     response.getStatusCode()
                 )
             )
-            .doOnError(error -> log.error(
-                "OCR extraction failed: type={}", error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "OCR extraction failed", error));
     }
 
     /** Stream page-completion events for the Manager importer. The stream is request-scoped. */
@@ -211,8 +211,7 @@ public class OcrController {
                                     () -> normalizeResultEvent(event, uploaded))
                                 .subscribeOn(Schedulers.boundedElastic())))));
             })
-            .doOnError(error -> log.error(
-                "OCR stream setup failed: type={}", error.getClass().getSimpleName()));
+            .doOnError(error -> OcrFailure.log(log, "OCR stream setup failed", error));
     }
 
     /**
@@ -261,8 +260,7 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("Single-file OCR extraction failed: type={}",
-                    error.getClass().getSimpleName())
+                OcrFailure.log(log, "Single-file OCR extraction failed", error)
             );
     }
 
@@ -352,8 +350,7 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("Angolan exam extraction failed: type={}",
-                    error.getClass().getSimpleName())
+                OcrFailure.log(log, "Angolan exam extraction failed", error)
             );
     }
 
@@ -490,8 +487,7 @@ public class OcrController {
                 )
             )
             .doOnError(error ->
-                log.error("OCR extraction and persistence failed: type={}",
-                    error.getClass().getSimpleName())
+                OcrFailure.log(log, "OCR extraction and persistence failed", error)
             );
     }
 

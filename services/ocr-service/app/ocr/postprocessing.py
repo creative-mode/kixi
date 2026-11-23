@@ -1595,8 +1595,9 @@ class OCRPostprocessor:
         little printed text to tell what "beside a printed line" means is left alone.
         """
         reasons: Dict[int, str] = {}
+        self._mark_page_furniture(blocks, reasons)
         for page in sorted({b.page_index for b in blocks}):
-            page_blocks = [b for b in blocks if b.page_index == page]
+            page_blocks = [b for b in blocks if b.page_index == page and id(b) not in reasons]
             prose = [b for b in page_blocks if b.confidence >= 0.85 and self._words3(b.text) >= 2]
             if len(prose) < 4:
                 continue
@@ -1633,6 +1634,56 @@ class OCRPostprocessor:
         kept = [b for b in blocks if id(b) not in reasons]
         noise = [(b, reasons[id(b)]) for b in blocks if id(b) in reasons]
         return kept, noise
+
+    # "Página 2", "Pág. 2 de 5", "2/5", "- 2 -": a printed page marker, whatever the number.
+    _PAGE_MARKER = re.compile(
+        r"^\s*(?:p[áa]g(?:ina|\.)?\s*\d{1,3}(?:\s*(?:de|/)\s*\d{1,3})?|\d{1,3}\s*/\s*\d{1,3}|[-–—]\s*\d{1,3}\s*[-–—])\s*$",
+        re.IGNORECASE,
+    )
+    _CONTINUATION = re.compile(r"\(\s*(?:continua[çc][ãa]o|cont\.?)\s*\)\s*$", re.IGNORECASE)
+
+    def _mark_page_furniture(self, blocks: List[TextBlock], reasons: Dict[int, str]) -> None:
+        """Set aside the page number at the foot and the continuation header at the top of the pages after the first (V2-2).
+
+        Both used to stick to the text of the last question of a page (the number) or of the first one of the next
+        (the header). Deliberately narrow, each rule on one block per page:
+
+        * the lowest block of a page, when it is a printed page marker ("Página 2", "2/5") or just the number of
+          the page (the digits equal the page's position, 1-based), is the page number;
+        * the highest block of a page after the first, when it ends with "(continuação)" or repeats the highest block
+          of the first page, is the running header.
+
+        A lone number that is not the page's position stays where it is: it may be part of the statement.
+        """
+        pages = sorted({b.page_index for b in blocks})
+        if not pages:
+            return
+        first = pages[0]
+        top_of = lambda page: min((b for b in blocks if b.page_index == page), key=lambda b: (b.bbox[1], b.bbox[0]))
+        header = self._norm_header(top_of(first).text) if len(pages) > 1 else ""
+        for position, page in enumerate(pages):
+            page_blocks = [b for b in blocks if b.page_index == page]
+            if len(page_blocks) < 3:
+                continue
+            bottom = max(page_blocks, key=lambda b: (b.bbox[3], b.bbox[0]))
+            text = bottom.text.strip()
+            if not bottom.handwritten and (
+                self._PAGE_MARKER.match(text) or (re.fullmatch(r"\d{1,3}", text) is not None and int(text) == position + 1)
+            ):
+                reasons[id(bottom)] = "Número de página"
+            if page == first:
+                continue
+            top = top_of(page)
+            if id(top) in reasons or top.handwritten:
+                continue
+            if self._CONTINUATION.search(top.text.strip()) or (header and self._norm_header(top.text) == header):
+                reasons[id(top)] = "Cabeçalho de continuação"
+
+    @staticmethod
+    def _norm_header(text: str) -> str:
+        """A header compared without the "(continuação)" mark, the case, the accents' absence and the spacing."""
+        text = re.sub(r"\(\s*(?:continua[çc][ãa]o|cont\.?)\s*\)\s*$", "", text.strip(), flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", text).strip().lower()
 
     # "2) 4 valores 3) 4valores 4) 5valores": the rest of a cotação line that the engine cut in two.
     _COTACAO_CONTINUATION = re.compile(
