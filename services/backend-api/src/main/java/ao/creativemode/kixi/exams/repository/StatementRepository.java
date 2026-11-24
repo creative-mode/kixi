@@ -81,6 +81,23 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);
 
     /**
+     * S8: o enunciado faz parte de uma prova que ainda não terminou. É a mesma regra do SQL do tutor, mas só enquanto
+     * a prova não acaba: uma sala por fechar (DRAFT, OPEN, RUNNING) ou uma avaliação do plano da pauta que não foi
+     * dispensada, nem corrigida em papel, nem tem a sala fechada. Se entra em duas provas, basta uma por terminar.
+     * As perguntas e as opções só se leem depois; o catálogo (título, metadados) continua legível.
+     */
+    @Query("""
+        SELECT (EXISTS (SELECT 1 FROM exam_rooms r WHERE r.statement_id = :id AND r.status <> 'CLOSED')
+             OR EXISTS (SELECT 1 FROM term_assessments a
+                         WHERE a.statement_id = :id
+                           AND a.dispensed_at IS NULL
+                           AND a.manual_done_at IS NULL
+                           AND (a.room_id IS NULL
+                                OR NOT EXISTS (SELECT 1 FROM exam_rooms ar WHERE ar.id = a.room_id AND ar.status = 'CLOSED'))))
+        """)
+    Mono<Boolean> inUnfinishedExam(Long id);
+
+    /**
      * The same gate {@code QuestionRepository.findCatalogCandidates} already applies,
      * for the titles that travel alongside the questions it found (issue #218).
      *

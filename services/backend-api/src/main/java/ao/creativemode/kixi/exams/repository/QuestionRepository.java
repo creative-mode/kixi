@@ -398,6 +398,11 @@ public interface QuestionRepository extends R2dbcRepository<Question, Long> {
            AND s.id <> :statementId
            AND s.visible = TRUE
            AND s.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM exam_rooms r WHERE r.statement_id = s.id AND r.status <> 'CLOSED')
+           AND NOT EXISTS (SELECT 1 FROM term_assessments ta
+                            WHERE ta.statement_id = s.id AND ta.dispensed_at IS NULL AND ta.manual_done_at IS NULL
+                              AND (ta.room_id IS NULL
+                                   OR NOT EXISTS (SELECT 1 FROM exam_rooms ar WHERE ar.id = ta.room_id AND ar.status = 'CLOSED')))
            AND COALESCE(s.needs_review, FALSE) = FALSE
            AND q.deleted_at IS NULL
            AND COALESCE(q.needs_review, FALSE) = FALSE

@@ -348,7 +348,8 @@ public class QuestionOptionService {
     private Mono<Void> requireReadableQuestion(Long statementId, Long questionId, StatementReader reader) {
         return Mono.defer(() -> reader.staff()
                 ? statements.findByIdAndDeletedAtIsNull(statementId)
-                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
+                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId)
+                    .flatMap(statement -> StatementEmbargo.guard(statements, statement)))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
             .flatMap(reader::require)
             .then(Mono.defer(() -> questions.findByIdAndDeletedAtIsNull(questionId)))
