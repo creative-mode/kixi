@@ -216,7 +216,10 @@ public class TermPlanService {
         if (reason.trim().length() > REASON_MAX) {
             return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         }
-        return loadHeader(planId).flatMap(h -> requireCoordinator(who, h)).then(db.sql(
+        return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> h.pautaOpenedAt() != null
+                // G4: com a pauta aberta o motor já espera pela prova; dispensá-la deixava a pauta presa. Dispensa-se antes de aprovar.
+                ? Mono.<Void>error(ApiException.conflict("A pauta já está aberta: já não se pode dispensar uma avaliação"))
+                : Mono.<Void>empty()).then(db.sql(
                         "SELECT kind FROM term_assessments WHERE id = :id AND plan_id = :p").bind("id", assessmentId).bind("p", planId)
                         .map((row, meta) -> row.get(0, String.class)).one()
                         .switchIfEmpty(Mono.error(ApiException.notFound("Assessment not found")))
@@ -237,6 +240,8 @@ public class TermPlanService {
     @Transactional
     public Mono<Plan> reschedule(Access who, Long planId, Long assessmentId, LocalDate date, String reason) {
         if (date == null) return Mono.error(ApiException.badRequest("A new date is required"));
+        // G9: reagendar é marcar uma data futura; uma data passada deixava a avaliação já «em atraso» sem sentido.
+        if (date.isBefore(LocalDate.now())) return Mono.error(ApiException.badRequest("A nova data não pode ser no passado"));
         if (reason == null || reason.isBlank()) return Mono.error(ApiException.badRequest("A reason is required to reschedule an assessment"));
         if (reason.trim().length() > REASON_MAX) return Mono.error(ApiException.badRequest("The reason must not exceed " + REASON_MAX + " characters"));
         return loadHeader(planId).flatMap(h -> requireCoordinator(who, h).thenReturn(h)).flatMap(h -> {
