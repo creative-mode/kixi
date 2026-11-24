@@ -402,8 +402,15 @@ class TermPlanPostgresIntegrationTest {
                 .bodyValue(reagendar).exchange().expectStatus().isOk()
                 .expectBody().jsonPath("$.assessments[2].kind").isEqualTo("MAC").jsonPath("$.assessments[2].plannedDate").isEqualTo("2030-01-10")
                 .jsonPath("$.assessments[2].statementId").isEqualTo(null).jsonPath("$.assessments[2].status").isEqualTo("PLANNED");
+        // G9: uma data no passado é um 400
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac + "/reschedule").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"date\":\"2020-01-10\",\"reason\":\"prova anulada\"}").exchange().expectStatus().isBadRequest();
         // com a pauta aberta, já não
         sql("UPDATE term_plans SET pauta_opened_at = now() WHERE id = " + plan.get());
+        // G4: nem se dispensa (o motor já espera pela prova e a pauta ficava presa)
+        bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac + "/dispense").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"reason\":\"MAC cancelada\"}").exchange().expectStatus().isEqualTo(409);
+        assertThat(count("SELECT COUNT(*) FROM term_assessments WHERE id = " + mac + " AND dispensed_at IS NOT NULL")).isZero();
         bearer(coordinator).post().uri("/api/v1/term-plans/" + plan.get() + "/assessments/" + mac + "/reschedule").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(reagendar).exchange().expectStatus().isEqualTo(409);
     }
