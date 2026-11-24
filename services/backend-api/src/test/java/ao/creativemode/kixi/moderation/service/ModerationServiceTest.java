@@ -26,6 +26,7 @@ class ModerationServiceTest {
     private ModerationBlockRepository blocks;
     private ModerationReportRepository reports;
     private ApiAbuseRateLimiter rateLimiter;
+    private ao.creativemode.kixi.institutions.repository.FriendshipRepository friendships;
     private ModerationService service;
 
     @BeforeEach
@@ -37,17 +38,106 @@ class ModerationServiceTest {
         rateLimiter = mock(ApiAbuseRateLimiter.class);
         when(rateLimiter.checkReport(anyLong())).thenReturn(Mono.empty());
         when(accounts.findByIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.just(new Account()));
-        service = new ModerationService(accounts, institutions, blocks, reports, rateLimiter);
+        friendships = mock(ao.creativemode.kixi.institutions.repository.FriendshipRepository.class);
+        when(friendships.findBetween(anyLong(), anyLong())).thenReturn(Mono.empty());
+        when(blocks.findByAccountLowAndAccountHigh(anyLong(), anyLong())).thenReturn(Mono.empty());
+        service = new ModerationService(accounts, institutions, blocks, reports, rateLimiter, friendships,
+                mock(ao.creativemode.kixi.shared.service.DisplayNameReader.class));
+    }
+
+    private static ao.creativemode.kixi.moderation.model.ModerationBlock blockRow(Long blockedBy) {
+        var row = new ao.creativemode.kixi.moderation.model.ModerationBlock();
+        row.setAccountLow(12L);
+        row.setAccountHigh(34L);
+        row.setBlockedBy(blockedBy);
+        return row;
     }
 
     @Test
-    void toggleStoresAnOrderedPairAndReturnsBlocked() {
-        when(blocks.togglePair(12L, 34L)).thenReturn(Mono.just(true));
+    void blockStoresAnOrderedPairWithTheBlockerAndIsIdempotent() {
+        when(blocks.insertPair(12L, 34L, 34L)).thenReturn(Mono.empty());
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L)).thenReturn(Mono.just(blockRow(34L)));
 
-        var response = service.toggleBlock(34L, 12L).block();
+        var first = service.block(34L, 12L).block();
+        var again = service.block(34L, 12L).block();
 
-        assertThat(response.blocked()).isTrue();
-        verify(blocks).togglePair(12L, 34L);
+        assertThat(first.blocked()).isTrue();
+        assertThat(first.blockedByMe()).isTrue();
+        assertThat(again).isEqualTo(first);
+        verify(blocks, times(2)).insertPair(12L, 34L, 34L);
+    }
+
+    @Test
+    void blockingAFriendEndsTheFriendship() {
+        var friendship = ao.creativemode.kixi.institutions.model.Friendship.between(12L, 34L, 12L);
+        friendship.accept();
+        when(blocks.insertPair(12L, 34L, 34L)).thenReturn(Mono.empty());
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L)).thenReturn(Mono.just(blockRow(34L)));
+        when(friendships.findBetween(12L, 34L)).thenReturn(Mono.just(friendship));
+        when(friendships.save(any(ao.creativemode.kixi.institutions.model.Friendship.class)))
+                .thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        service.block(34L, 12L).block();
+
+        assertThat(friendship.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void unblockRemovesTheBlockOnlyForWhoPutIt() {
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L)).thenReturn(Mono.just(blockRow(34L)));
+        when(blocks.deletePair(12L, 34L)).thenReturn(Mono.just(1));
+
+        var response = service.unblock(34L, 12L).block();
+
+        assertThat(response.blocked()).isFalse();
+        verify(blocks).deletePair(12L, 34L);
+    }
+
+    @Test
+    void theBlockedPersonCannotLiftTheBlock() {
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L)).thenReturn(Mono.just(blockRow(34L)));
+
+        StepVerifier.create(service.unblock(12L, 34L))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verify(blocks, never()).deletePair(anyLong(), anyLong());
+    }
+
+    @Test
+    void unblockingWhatIsNotBlockedIsAHarmlessNoop() {
+        var response = service.unblock(34L, 12L).block();
+
+        assertThat(response.blocked()).isFalse();
+        verify(blocks, never()).deletePair(anyLong(), anyLong());
+    }
+
+    @Test
+    void theLegacyToggleStillBlocksThenUnblocks() {
+        var stored = new java.util.concurrent.atomic.AtomicReference<ao.creativemode.kixi.moderation.model.ModerationBlock>();
+        when(blocks.insertPair(12L, 34L, 34L)).thenAnswer(call -> {
+            stored.set(blockRow(34L));
+            return Mono.empty();
+        });
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L))
+                .thenAnswer(call -> Mono.justOrEmpty(stored.get()));
+        when(blocks.deletePair(12L, 34L)).thenAnswer(call -> {
+            stored.set(null);
+            return Mono.just(1);
+        });
+
+        assertThat(service.toggleBlock(34L, 12L).block().blocked()).isTrue();
+        assertThat(service.toggleBlock(34L, 12L).block().blocked()).isFalse();
+    }
+
+    @Test
+    void theLegacyToggleCannotBeUsedByTheBlockedPersonToLiftTheBlock() {
+        when(blocks.findByAccountLowAndAccountHigh(12L, 34L)).thenReturn(Mono.just(blockRow(34L)));
+
+        StepVerifier.create(service.toggleBlock(12L, 34L))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
     }
 
     @Test
@@ -60,12 +150,9 @@ class ModerationServiceTest {
 
     @Test
     void aConcurrentDoubleInsertComesBackAsAConflictNotA500() {
-        // Two requests racing to block the same pair for the first time can both
-        // reach the INSERT despite the advisory lock (see ModerationBlockRepository);
-        // the unique constraint then rejects the loser with this exception.
-        when(blocks.togglePair(12L, 34L)).thenReturn(Mono.error(new DataIntegrityViolationException("duplicate")));
+        when(blocks.insertPair(12L, 34L, 34L)).thenReturn(Mono.error(new DataIntegrityViolationException("duplicate")));
 
-        StepVerifier.create(service.toggleBlock(34L, 12L))
+        StepVerifier.create(service.block(34L, 12L))
                 .expectErrorSatisfies(error -> {
                     assertThat(error).isInstanceOf(ApiException.class);
                     assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT);

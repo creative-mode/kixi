@@ -88,6 +88,7 @@ class PostServiceTest {
     @Mock private FeedRateLimiter rateLimiter;
     @Mock private SimulationShowcaseReader showcaseReader;
     @Mock private InstitutionNameReader institutionNames;
+    @Mock private ao.creativemode.kixi.shared.service.BlockedAccountReader blockedAccounts;
 
     private PostService postService;
 
@@ -98,7 +99,8 @@ class PostServiceTest {
     void setUp() {
         postService = new PostService(postRepository, feedRepository, reactionRepository,
                 commentRepository, displayNames, reportRepository, scopeAuthorizer,
-                rateLimiter, showcaseReader, institutionNames, clock);
+                rateLimiter, showcaseReader, institutionNames, blockedAccounts, clock);
+        lenient().when(blockedAccounts.blockedBetween(anyLong(), anyLong())).thenReturn(Mono.just(false));
         lenient().when(displayNames.maskedNameOf(anyLong()))
                 .thenAnswer(call -> Mono.just(maskedNameOf((Long) call.getArgument(0))));
         lenient().when(displayNames.briefsOf(org.mockito.ArgumentMatchers.anyCollection()))
@@ -196,7 +198,7 @@ class PostServiceTest {
     @Test
     void feedWithNoParametersOnlyEverTouchesTheCallersOwnScope() {
         when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
-        when(feedRepository.findFeed(eq(myScope()), isNull(), isNull(), isNull(), eq(10), eq(0L)))
+        when(feedRepository.findFeed(eq(myScope()), eq(ACCOUNT_ID), isNull(), isNull(), isNull(), eq(10), eq(0L)))
                 .thenReturn(Flux.just(myPost()));
         when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(0L));
         when(reactionRepository.existsByPostIdAndAccountId(POST_ID, ACCOUNT_ID)).thenReturn(Mono.just(false));
@@ -205,7 +207,7 @@ class PostServiceTest {
                 .expectNextCount(1)
                 .verifyComplete();
 
-        verify(feedRepository).findFeed(eq(myScope()), isNull(), isNull(), isNull(), eq(10), eq(0L));
+        verify(feedRepository).findFeed(eq(myScope()), eq(ACCOUNT_ID), isNull(), isNull(), isNull(), eq(10), eq(0L));
     }
 
     @Test
@@ -232,7 +234,7 @@ class PostServiceTest {
     @Test
     void aClassIdInsideTheCallersScopeIsAcceptedAsANarrowingFilter() {
         when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
-        when(feedRepository.findFeed(any(), isNull(), isNull(), eq(MY_CLASS_ID), eq(10), eq(0L)))
+        when(feedRepository.findFeed(any(), any(), isNull(), isNull(), eq(MY_CLASS_ID), eq(10), eq(0L)))
                 .thenReturn(Flux.empty());
 
         StepVerifier.create(postService.getFeed(ACCOUNT_ID, null, null, MY_CLASS_ID, 1, 10))
@@ -249,7 +251,7 @@ class PostServiceTest {
         second.setContent("second");
 
         when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
-        when(feedRepository.findFeed(any(), any(), any(), any(), anyInt(), anyLong()))
+        when(feedRepository.findFeed(any(), any(), any(), any(), any(), anyInt(), anyLong()))
                 .thenReturn(Flux.just(first, second));
         // The second post resolves its enrichment data slower than the first, so a
         // getFeed that merged results by completion order (flatMap) rather than by
@@ -367,7 +369,7 @@ class PostServiceTest {
         Post post = mySimulationPost(false);
         when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
         when(scopeAuthorizer.scopeOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
-        when(feedRepository.findFeed(eq(myScope()), isNull(), isNull(), isNull(), anyInt(), anyLong()))
+        when(feedRepository.findFeed(eq(myScope()), any(), isNull(), isNull(), isNull(), anyInt(), anyLong()))
                 .thenReturn(Flux.just(post));
         when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
         when(reactionRepository.existsByPostIdAndAccountId(anyLong(), anyLong())).thenReturn(Mono.just(false));
@@ -1008,6 +1010,103 @@ class PostServiceTest {
         StepVerifier.create(postService.hideComment(POST_ID, COMMENT_ID, teacherId, false)).verifyComplete();
 
         verify(commentRepository).save(argThat(saved -> Boolean.TRUE.equals(saved.getIsHidden())));
+    }
+
+    // ── S1: title longer than the column ────────────────────────────────────
+
+    @Test
+    void aTitleOver150CharactersIsA400NotADatabaseError() {
+        PostRequest request = new PostRequest(PostType.DOUBT, MY_CLASS_ID, "T".repeat(151), "Sample test post content", null);
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID, request))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(error).hasMessage("Título até 150 caracteres");
+                })
+                .verify();
+        verifyNoInteractions(postRepository);
+    }
+
+    @Test
+    void aTitleOfExactly150CharactersIsAccepted() {
+        PostRequest request = new PostRequest(PostType.DOUBT, MY_CLASS_ID, "T".repeat(150), "Sample test post content", null);
+        when(scopeAuthorizer.classScope(ACCOUNT_ID, MY_CLASS_ID)).thenReturn(Mono.just(
+                new ClassScope(MY_CLASS_ID, MY_INSTITUTION_ID, MY_COURSE_ID, MY_SCHOOL_YEAR_ID)));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(commentRepository.countByPostIdAndIsHiddenFalseAndDeletedAtIsNull(any())).thenReturn(Mono.just(0L));
+        when(reactionRepository.existsByPostIdAndAccountId(any(), eq(ACCOUNT_ID))).thenReturn(Mono.just(false));
+
+        StepVerifier.create(postService.createPost(ACCOUNT_ID, request)).expectNextCount(1).verifyComplete();
+    }
+
+    @Test
+    void editingATitleOver150CharactersIsA400() {
+        when(postRepository.findByIdAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+
+        StepVerifier.create(postService.editPost(POST_ID, ACCOUNT_ID,
+                        new PostEditRequest("t".repeat(3000), null, null)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(error).hasMessage("Título até 150 caracteres");
+                })
+                .verify();
+        verify(postRepository, never()).save(any());
+    }
+
+    // ── S5: a block is a wall ───────────────────────────────────────────────
+
+    private Post postBy(Long author) {
+        Post post = myPost();
+        post.setAuthorAccountId(author);
+        return post;
+    }
+
+    @Test
+    void aBlockedPersonCannotCommentOnTheBlockersPost() {
+        when(scopeAuthorizer.scopeOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(postBy(ACCOUNT_ID)));
+        when(blockedAccounts.blockedBetween(OTHER_ACCOUNT_ID, ACCOUNT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(postService.addComment(POST_ID, OTHER_ACCOUNT_ID, new PostCommentRequest("Olá, colega")))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verify(commentRepository, never()).save(any());
+    }
+
+    @Test
+    void aBlockedPersonCannotReactToOrReadTheCommentsOfTheBlockersPost() {
+        when(scopeAuthorizer.scopeOf(OTHER_ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(postBy(ACCOUNT_ID)));
+        when(blockedAccounts.blockedBetween(OTHER_ACCOUNT_ID, ACCOUNT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(postService.setReaction(POST_ID, OTHER_ACCOUNT_ID,
+                        new PostReactionSetRequest(PostReactionType.APPLAUSE, true)))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        StepVerifier.create(postService.listComments(POST_ID, OTHER_ACCOUNT_ID, 1, 10))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verifyNoInteractions(reactionRepository);
+    }
+
+    @Test
+    void theCommentsOfSomeoneBlockedAreLeftOutOfTheThread() {
+        when(scopeAuthorizer.scopeOf(ACCOUNT_ID)).thenReturn(Mono.just(myScope()));
+        when(postRepository.findByIdAndIsHiddenFalseAndDeletedAtIsNull(POST_ID)).thenReturn(Mono.just(myPost()));
+        PostComment mine = myComment(false);
+        PostComment fromBlocked = myComment(false);
+        fromBlocked.setId(901L);
+        fromBlocked.setAuthorAccountId(OTHER_ACCOUNT_ID);
+        when(commentRepository.findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(eq(POST_ID), any(Pageable.class)))
+                .thenReturn(Flux.just(mine, fromBlocked));
+        when(blockedAccounts.blockedBetween(ACCOUNT_ID, OTHER_ACCOUNT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(postService.listComments(POST_ID, ACCOUNT_ID, 1, 10))
+                .assertNext(comment -> assertThat(comment.id()).isEqualTo(COMMENT_ID))
+                .verifyComplete();
     }
 
     // ── Edit and delete (kixi#593) ─────────────────────────────────────────

@@ -57,6 +57,9 @@ import java.util.Set;
 public class PostService {
 
     private static final int AUTO_HIDE_REPORT_THRESHOLD = 5;
+    /** posts.title is VARCHAR(150): a longer title is a 400, never a database error. */
+    static final int MAX_TITLE = 150;
+    static final String TITLE_TOO_LONG = "Título até 150 caracteres";
     private static final int MIN_LIMIT = 1;
     private static final int MAX_LIMIT = 50;
 
@@ -72,6 +75,7 @@ public class PostService {
     private final FeedRateLimiter rateLimiter;
     private final SimulationShowcaseReader showcaseReader;
     private final InstitutionNameReader institutionNames;
+    private final ao.creativemode.kixi.shared.service.BlockedAccountReader blockedAccounts;
     private final Clock clock;
 
     public PostService(PostRepository postRepository,
@@ -84,6 +88,7 @@ public class PostService {
                        FeedRateLimiter rateLimiter,
                        SimulationShowcaseReader showcaseReader,
                        InstitutionNameReader institutionNames,
+                       ao.creativemode.kixi.shared.service.BlockedAccountReader blockedAccounts,
                        Clock clock) {
         this.postRepository = postRepository;
         this.feedRepository = feedRepository;
@@ -95,6 +100,7 @@ public class PostService {
         this.rateLimiter = rateLimiter;
         this.showcaseReader = showcaseReader;
         this.institutionNames = institutionNames;
+        this.blockedAccounts = blockedAccounts;
         this.clock = clock;
     }
 
@@ -112,7 +118,7 @@ public class PostService {
                     .flatMapMany(scope -> {
                         requireWithinScope(scope, schoolYearId, courseId, classId);
                         long offset = (long) (page - 1) * limit;
-                        return feedRepository.findFeed(scope, schoolYearId, courseId, classId, limit, offset)
+                        return feedRepository.findFeed(scope, accountId, schoolYearId, courseId, classId, limit, offset)
                                 .flatMapSequential(post -> mapToResponse(post, accountId));
                     });
         });
@@ -123,7 +129,7 @@ public class PostService {
         return scopeAuthorizer.scopeOf(accountId)
                 .flatMap(scope -> {
                     requireWithinScope(scope, schoolYearId, courseId, classId);
-                    return feedRepository.countFeed(scope, schoolYearId, courseId, classId);
+                    return feedRepository.countFeed(scope, accountId, schoolYearId, courseId, classId);
                 });
     }
 
@@ -140,6 +146,9 @@ public class PostService {
                     "Only DOUBT, TOPIC, SIMULATION, STUDY_CARD, SOLUTION or CHALLENGE posts can be created manually"));
         }
         boolean simulation = request.type() == PostType.SIMULATION;
+        if (request.title() != null && request.title().trim().length() > MAX_TITLE) {
+            return Mono.error(ApiException.badRequest(TITLE_TOO_LONG));
+        }
         final java.util.List<ao.creativemode.kixi.feed.dto.post.PostBlock> blocks;
         try {
             blocks = PostBlocks.validate(request.blocks());
@@ -237,6 +246,7 @@ public class PostService {
         return rateLimiter.check(accountId)
                 .then(scopeAuthorizer.scopeOf(accountId))
                 .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> requireNotBlocked(post, accountId))
                 .flatMap(post -> reactionRepository.deleteReaction(postId, accountId, type)
                         .flatMap(deleted -> deleted > 0
                                 ? Mono.just(new PostReactionToggleResponse(false))
@@ -251,6 +261,7 @@ public class PostService {
         return rateLimiter.check(accountId)
                 .then(scopeAuthorizer.scopeOf(accountId))
                 .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> requireNotBlocked(post, accountId))
                 .flatMap(post -> request.reacted()
                         ? reactionRepository.insertReaction(postId, accountId, type)
                                 .thenReturn(new PostReactionToggleResponse(true))
@@ -263,6 +274,7 @@ public class PostService {
         return rateLimiter.check(accountId)
                 .then(scopeAuthorizer.scopeOf(accountId))
                 .flatMap(scope -> requireVisible(postId, scope))
+                .flatMap(post -> requireNotBlocked(post, accountId))
                 .flatMap(post -> {
                     PostComment comment = new PostComment();
                     comment.setPostId(postId);
@@ -294,6 +306,7 @@ public class PostService {
             validatePagination(page, limit);
             return scopeAuthorizer.scopeOf(accountId)
                     .flatMap(scope -> requireVisible(postId, scope))
+                    .flatMap(post -> requireNotBlocked(post, accountId))
                     .flatMapMany(visible -> commentRepository
                             .findByPostIdAndIsHiddenFalseAndDeletedAtIsNullOrderByCreatedAtAsc(
                                     postId, PageRequest.of(page - 1, limit))
@@ -302,11 +315,16 @@ public class PostService {
                                 // One read for the distinct authors, not one per comment.
                                 List<Long> authors = comments.stream()
                                         .map(PostComment::getAuthorAccountId).distinct().toList();
-                                return displayNames.briefsOf(authors)
+                                return Flux.fromIterable(authors)
+                                        .filter(author -> !author.equals(accountId))
+                                        .filterWhen(author -> blockedAccounts.blockedBetween(accountId, author))
+                                        .collect(java.util.stream.Collectors.toSet())
+                                        .flatMapMany(blockedAuthors -> displayNames.briefsOf(authors)
                                         .defaultIfEmpty(Map.of())
                                         .flatMapMany(briefs -> Flux.fromIterable(comments)
+                                                .filter(comment -> !blockedAuthors.contains(comment.getAuthorAccountId()))
                                                 .map(comment -> toCommentResponse(
-                                                        comment, accountId, briefs.get(comment.getAuthorAccountId()))));
+                                                        comment, accountId, briefs.get(comment.getAuthorAccountId())))));
                             }));
         });
     }
@@ -502,6 +520,9 @@ public class PostService {
         return postRepository.findByIdAndDeletedAtIsNull(postId)
                 .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")))
                 .flatMap(post -> {
+                    if (request.title() != null && request.title().trim().length() > MAX_TITLE) {
+                        return Mono.<Post>error(ApiException.badRequest(TITLE_TOO_LONG));
+                    }
                     if (!post.getAuthorAccountId().equals(accountId)) {
                         // 403, not 404: the caller knows the post exists (it is in their feed) and must learn only that they may not edit it.
                         return Mono.<Post>error(ApiException.forbidden("Only the author can edit a post"));
@@ -689,6 +710,21 @@ public class PostService {
                 .filter(post -> scope.covers(
                         post.getInstitutionId(), post.getClassId(), post.getCourseId(), post.getSchoolYearId()))
                 .switchIfEmpty(Mono.error(ApiException.notFound("Post not found")));
+    }
+
+    /**
+     * A block (kixi#S5) is a wall in both directions: whoever is on the other side of it
+     * does not read, react to or comment on the author's post. The answer is the same 404
+     * as a post that is not there, so the blocked person is not told they are blocked.
+     */
+    private Mono<Post> requireNotBlocked(Post post, Long viewerAccountId) {
+        if (post.getAuthorAccountId() == null || post.getAuthorAccountId().equals(viewerAccountId)) {
+            return Mono.just(post);
+        }
+        return blockedAccounts.blockedBetween(viewerAccountId, post.getAuthorAccountId())
+                .flatMap(blocked -> blocked
+                        ? Mono.<Post>error(ApiException.notFound("Post not found"))
+                        : Mono.just(post));
     }
 
     private Mono<ClassScope> requireClassScope(Long accountId, Long classId) {

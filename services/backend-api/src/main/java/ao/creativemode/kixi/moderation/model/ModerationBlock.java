@@ -18,6 +18,9 @@ public class ModerationBlock {
     private Long accountLow;
     @Column("account_high")
     private Long accountHigh;
+    /** Who put the block; null on rows that predate the column (either side may lift those). */
+    @Column("blocked_by")
+    private Long blockedBy;
     @Column("created_at")
     private LocalDateTime createdAt;
 }
