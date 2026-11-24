@@ -41,6 +41,7 @@ class QuestionImageReadAccessServiceTest {
         statement.setSubjectId(8L);
         when(currentAccount.requiredAccountId()).thenReturn(Mono.just(77L));
         when(currentAccount.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
+        when(currentAccount.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccount.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
         when(questions.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(question));
         when(statements.findByIdAndDeletedAtIsNull(20L)).thenReturn(Mono.just(statement));
@@ -59,6 +60,7 @@ class QuestionImageReadAccessServiceTest {
         Statement statement = new Statement();
         when(currentAccount.requiredAccountId()).thenReturn(Mono.just(77L));
         when(currentAccount.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
+        when(currentAccount.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccount.hasAnyRole("TEACHER")).thenReturn(Mono.just(false));
         when(questions.findByIdAndDeletedAtIsNull(5L)).thenReturn(Mono.just(question));
         when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(20L)).thenReturn(Mono.just(statement));

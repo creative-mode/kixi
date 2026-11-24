@@ -3,6 +3,7 @@ package ao.creativemode.kixi.exams.service;
 import ao.creativemode.kixi.exams.model.Statement;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.shared.service.CurrentAccountService;
+import java.util.Set;
 import reactor.core.publisher.Mono;
 
 /**
@@ -17,8 +18,19 @@ import reactor.core.publisher.Mono;
  *
  * @param staff whether the caller reads as staff (sees drafts, the trash and the answer key)
  * @param scope the teacher's scope; {@code null} for an administrator or a student
+ * @param coordinatedInstitutions the institutions the reader coordinates: a coordinator reads the questions of the statements of
+ *                                their institution even while the exam they belong to has not finished (S8), without being staff
+ *                                (no drafts, no answer key)
  */
-public record StatementReader(boolean staff, StatementReadScope scope) {
+public record StatementReader(boolean staff, StatementReadScope scope, Set<Long> coordinatedInstitutions) {
+
+    public StatementReader {
+        coordinatedInstitutions = coordinatedInstitutions == null ? Set.of() : Set.copyOf(coordinatedInstitutions);
+    }
+
+    public StatementReader(boolean staff, StatementReadScope scope) {
+        this(staff, scope, Set.of());
+    }
 
     /** An administrator: staff with no scope to weigh a statement against. */
     public static final StatementReader ADMIN = new StatementReader(true, null);
@@ -28,13 +40,17 @@ public record StatementReader(boolean staff, StatementReadScope scope) {
 
     /** Resolves the reader of the current request. */
     public static Mono<StatementReader> current(CurrentAccountService currentAccount, StatementReadAccessService readAccess) {
-        return Mono.zip(currentAccount.hasAnyRole("ADMIN"), currentAccount.hasAnyRole("TEACHER"))
+        return Mono.zip(currentAccount.hasAnyRole("ADMIN"), currentAccount.hasAnyRole("TEACHER"), currentAccount.hasAnyRole("COORDINATOR"))
             .flatMap(roles -> {
                 if (roles.getT1()) return Mono.just(ADMIN);
-                if (!roles.getT2()) return Mono.just(STUDENT);
+                Mono<Set<Long>> institutions = roles.getT3()
+                    ? currentAccount.requiredAccountId().flatMap(readAccess::coordinatedInstitutions)
+                    : Mono.just(Set.<Long>of());
+                if (!roles.getT2()) return institutions.map(coordinated -> new StatementReader(false, null, coordinated));
                 return currentAccount.requiredAccountId()
                     .flatMap(readAccess::teacherScope)
-                    .map(scope -> new StatementReader(true, scope));
+                    .zipWith(institutions)
+                    .map(both -> new StatementReader(true, both.getT1(), both.getT2()));
             });
     }
 
