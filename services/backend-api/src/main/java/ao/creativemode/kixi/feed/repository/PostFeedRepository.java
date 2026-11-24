@@ -35,16 +35,16 @@ public class PostFeedRepository {
     }
 
     /** The feed a caller may see, newest first, optionally narrowed to one class/course/year inside their scope. */
-    public Flux<Post> findFeed(FeedScope scope, Long schoolYearId, Long courseId, Long classId, int limit, long offset) {
-        Sql sql = feedSql(scope, schoolYearId, courseId, classId, limit, offset);
+    public Flux<Post> findFeed(FeedScope scope, Long viewerAccountId, Long schoolYearId, Long courseId, Long classId, int limit, long offset) {
+        Sql sql = feedSql(scope, viewerAccountId, schoolYearId, courseId, classId, limit, offset);
         return bindAll(databaseClient.sql(sql.statement()), sql.binds())
                 .map((row, metadata) -> rowToPost(row))
                 .all();
     }
 
     /** How many posts a {@link #findFeed} call with the same filters would page over. */
-    public Mono<Long> countFeed(FeedScope scope, Long schoolYearId, Long courseId, Long classId) {
-        Sql sql = countSql(scope, schoolYearId, courseId, classId);
+    public Mono<Long> countFeed(FeedScope scope, Long viewerAccountId, Long schoolYearId, Long courseId, Long classId) {
+        Sql sql = countSql(scope, viewerAccountId, schoolYearId, courseId, classId);
         return bindAll(databaseClient.sql(sql.statement()), sql.binds())
                 .map((row, metadata) -> ((Number) row.get("total")).longValue())
                 .one()
@@ -112,9 +112,9 @@ public class PostFeedRepository {
             Long postId, Long authorAccountId, Long classId, String content,
             boolean isHidden, long reportCount, java.time.LocalDateTime createdAt) { }
 
-    static Sql feedSql(FeedScope scope, Long schoolYearId, Long courseId, Long classId, int limit, long offset) {
+    static Sql feedSql(FeedScope scope, Long viewerAccountId, Long schoolYearId, Long courseId, Long classId, int limit, long offset) {
         Map<String, Object> binds = new LinkedHashMap<>();
-        String where = scopeWhere(scope, schoolYearId, courseId, classId, binds);
+        String where = scopeWhere(scope, viewerAccountId, schoolYearId, courseId, classId, binds);
         binds.put("limit", limit);
         binds.put("offset", offset);
         String statement = "SELECT * FROM posts WHERE " + where
@@ -122,9 +122,9 @@ public class PostFeedRepository {
         return new Sql(statement, binds);
     }
 
-    static Sql countSql(FeedScope scope, Long schoolYearId, Long courseId, Long classId) {
+    static Sql countSql(FeedScope scope, Long viewerAccountId, Long schoolYearId, Long courseId, Long classId) {
         Map<String, Object> binds = new LinkedHashMap<>();
-        String where = scopeWhere(scope, schoolYearId, courseId, classId, binds);
+        String where = scopeWhere(scope, viewerAccountId, schoolYearId, courseId, classId, binds);
         return new Sql("SELECT COUNT(*) AS total FROM posts WHERE " + where, binds);
     }
 
@@ -150,10 +150,16 @@ public class PostFeedRepository {
      * scope must yield zero rows rather than an unfiltered table.
      */
     private static String scopeWhere(
-            FeedScope scope, Long schoolYearId, Long courseId, Long classId, Map<String, Object> binds) {
+            FeedScope scope, Long viewerAccountId, Long schoolYearId, Long courseId, Long classId,
+            Map<String, Object> binds) {
         List<String> where = new ArrayList<>();
         where.add("is_hidden = false");
         where.add("deleted_at IS NULL");
+        // A block hides the author's posts from the viewer and the viewer's from the author.
+        where.add("NOT EXISTS (SELECT 1 FROM moderation_blocks blk "
+                + "WHERE blk.account_low = LEAST(posts.author_account_id, CAST(:viewerAccountId AS bigint)) "
+                + "AND blk.account_high = GREATEST(posts.author_account_id, CAST(:viewerAccountId AS bigint)))");
+        binds.put("viewerAccountId", viewerAccountId);
         where.add("institution_id = ANY(:institutionIds)");
         // Course and school year are matched together with their institution, never
         // from flat sets: a course id held in school A must not open school B's posts.

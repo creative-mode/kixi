@@ -92,6 +92,7 @@ class QuestionOptionControllerTest {
     @BeforeEach
     void setUp() {
         when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(TEACHER_ID));
+        when(currentAccountService.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
         when(currentAccountService.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
         when(readAccess.teacherScope(TEACHER_ID)).thenReturn(Mono.just(SCOPE));
@@ -121,6 +122,7 @@ class QuestionOptionControllerTest {
         // covered in QuestionOptionServiceTest — so what this pins is that the
         // controller asks for the reader's view at all, rather than for the staff
         // one and dropping the field on the way out.
+        when(currentAccountService.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(false));
         when(questionOptionService.findAll(STATEMENT_ID, QUESTION_ID, StatementReader.STUDENT))
                 .thenReturn(Flux.just(optionResponse()));

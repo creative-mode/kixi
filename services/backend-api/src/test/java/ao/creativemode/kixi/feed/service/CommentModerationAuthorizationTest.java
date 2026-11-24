@@ -98,7 +98,8 @@ class CommentModerationAuthorizationTest {
                 new InstitutionFeedScopeAuthorizer(mock(EnrollmentRepository.class), teachingAssignmentRepository,
                         teacherRepository, mock(ClassRepository.class)),
                 mock(FeedRateLimiter.class), mock(SimulationShowcaseReader.class),
-                mock(InstitutionNameReader.class), clock);
+                mock(InstitutionNameReader.class),
+                mock(ao.creativemode.kixi.shared.service.BlockedAccountReader.class), clock);
 
         // The common path, so each test below states only what it changes.
         lenient().when(teacherRepository.findByAccountIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.empty());

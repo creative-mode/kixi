@@ -98,6 +98,7 @@ class QuestionControllerTest {
     @BeforeEach
     void setUp() {
         when(currentAccountService.requiredAccountId()).thenReturn(Mono.just(TEACHER_ID));
+        when(currentAccountService.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(true));
         when(currentAccountService.hasAnyRole("ADMIN")).thenReturn(Mono.just(false));
         when(readAccess.teacherScope(TEACHER_ID)).thenReturn(Mono.just(SCOPE));
@@ -123,6 +124,7 @@ class QuestionControllerTest {
 
     @Test
     void aStudentReadsWithoutTheAnswerKeyAndTheRouteStillAnswers() {
+        when(currentAccountService.hasAnyRole("COORDINATOR")).thenReturn(Mono.just(false));
         when(currentAccountService.hasAnyRole("TEACHER")).thenReturn(Mono.just(false));
         when(questionService.findAllActive(STATEMENT_ID, StatementReader.STUDENT)).thenReturn(Flux.just(questionResponse()));
 

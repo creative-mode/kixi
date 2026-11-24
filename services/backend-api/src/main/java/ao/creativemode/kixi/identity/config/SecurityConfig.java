@@ -95,6 +95,10 @@ public class SecurityConfig {
                         .hasRole("STUDENT")
                         .pathMatchers(HttpMethod.PUT, "/api/v1/profiles/accounts/*/block")
                         .hasRole("STUDENT")
+                        .pathMatchers(HttpMethod.POST, "/api/v1/profiles/accounts/*/block")
+                        .hasRole("STUDENT")
+                        .pathMatchers(HttpMethod.DELETE, "/api/v1/profiles/accounts/*/block")
+                        .hasRole("STUDENT")
                         .pathMatchers(HttpMethod.POST, "/api/v1/profiles/accounts/*/reports",
                                 "/api/v1/institutions/*/reports")
                         .hasRole("STUDENT")

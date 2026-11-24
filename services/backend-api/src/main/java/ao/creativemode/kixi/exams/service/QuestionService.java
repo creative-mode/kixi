@@ -73,7 +73,8 @@ public class QuestionService {
                 ? statements.findByIdAndDeletedAtIsNull(statementId)
                 // Same 404 as "does not exist", so an unpublished statement of
                 // another class is not confirmed to exist by the status code.
-                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId))
+                : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId)
+                    .flatMap(statement -> StatementEmbargo.guard(statements, statement, reader.coordinatedInstitutions())))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
             // A teacher reads the statements their assignments cover, here as on
             // GET /statements/{id}: the questions carry the same paper, and the
