@@ -349,7 +349,7 @@ public class QuestionOptionService {
         return Mono.defer(() -> reader.staff()
                 ? statements.findByIdAndDeletedAtIsNull(statementId)
                 : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(statementId)
-                    .flatMap(statement -> StatementEmbargo.guard(statements, statement)))
+                    .flatMap(statement -> StatementEmbargo.guard(statements, statement, reader.coordinatedInstitutions())))
             .switchIfEmpty(Mono.error(ApiException.notFound("Statement not found: " + statementId)))
             .flatMap(reader::require)
             .then(Mono.defer(() -> questions.findByIdAndDeletedAtIsNull(questionId)))
