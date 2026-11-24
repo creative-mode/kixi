@@ -226,7 +226,6 @@ public class SimulationService {
                 .switchIfEmpty(Mono.error(() -> ApiException.notFound("Account not found")))
                 .then((requireVisibleStatement
                         ? statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(dto.statementId())
-                                .flatMap(visible -> ao.creativemode.kixi.exams.service.StatementEmbargo.guard(statementRepository, visible))
                         : statementLookup(dto.statementId()))
                         .switchIfEmpty(Mono.error(() -> ApiException.notFound("Statement not found")))
                         .flatMap(statement -> !authorizeStatement
@@ -253,6 +252,10 @@ public class SimulationService {
                                                      "The statement is currently assigned to an exam room"))
                                              : Mono.just(statement));
                          })
+                        // S8: o aluno não treina com um enunciado de prova por terminar (depois do lock da sala).
+                        .flatMap(statement -> requireVisibleStatement
+                                ? ao.creativemode.kixi.exams.service.StatementEmbargo.guard(statementRepository, statement)
+                                : Mono.just(statement))
                         .then(Mono.defer(() -> {
                     if (dto.schoolYearId() != null) {
                         return schoolYearRepository.findById(dto.schoolYearId())
