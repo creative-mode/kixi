@@ -502,6 +502,33 @@ class QuestionServiceTest {
                 .verify();
     }
 
+    // ── S8: statement in an exam that has not finished ─────────────────────
+
+    @Test
+    void aStudentCannotReadTheQuestionsOfAStatementInAnUnfinishedExam() {
+        when(statements.findByIdAndVisibleTrueAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement()));
+        when(statements.inUnfinishedExam(STATEMENT_ID)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.STUDENT))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ao.creativemode.kixi.shared.exception.ApiException) error).getStatus())
+                            .isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                    assertThat(error).hasMessage(StatementEmbargo.MESSAGE);
+                })
+                .verify();
+        verifyNoInteractions(questions);
+    }
+
+    @Test
+    void staffStillReadsTheQuestionsOfAStatementInAnUnfinishedExam() {
+        when(statements.findByIdAndDeletedAtIsNull(STATEMENT_ID)).thenReturn(Mono.just(statement()));
+        when(statements.inUnfinishedExam(STATEMENT_ID)).thenReturn(Mono.just(true));
+        when(questions.findAllByStatementIdOrderedByOrderIndex(STATEMENT_ID)).thenReturn(Flux.just(question(QUESTION_ID, 1)));
+
+        StepVerifier.create(service.findAllActive(STATEMENT_ID, StatementReader.ADMIN))
+                .expectNextCount(1).verifyComplete();
+    }
+
     // ── What a reader does and does not see ─────────────────────────────────
 
     @Test

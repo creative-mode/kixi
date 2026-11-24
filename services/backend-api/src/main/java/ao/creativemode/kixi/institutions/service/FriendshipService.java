@@ -9,6 +9,7 @@ import ao.creativemode.kixi.institutions.model.Friendship;
 import ao.creativemode.kixi.institutions.repository.FriendshipRepository;
 import ao.creativemode.kixi.shared.exception.ApiException;
 import ao.creativemode.kixi.identity.repository.UserRepository;
+import ao.creativemode.kixi.shared.service.BlockedAccountReader;
 import ao.creativemode.kixi.shared.service.EnrollmentSeatReader;
 
 import org.springframework.stereotype.Service;
@@ -33,12 +34,15 @@ public class FriendshipService {
     private final FriendshipRepository friendships;
     private final EnrollmentSeatReader seats;
     private final UserRepository users;
+    private final BlockedAccountReader blockedAccounts;
 
     public FriendshipService(
-            FriendshipRepository friendships, EnrollmentSeatReader seats, UserRepository users) {
+            FriendshipRepository friendships, EnrollmentSeatReader seats, UserRepository users,
+            BlockedAccountReader blockedAccounts) {
         this.friendships = friendships;
         this.seats = seats;
         this.users = users;
+        this.blockedAccounts = blockedAccounts;
     }
 
     /**
@@ -59,13 +63,47 @@ public class FriendshipService {
         Long low = Math.min(fromAccountId, other);
         Long high = Math.max(fromAccountId, other);
 
-        return inSameSchoolYear(fromAccountId, other)
+        return refuseIfBlocked(fromAccountId, other)
+                .then(inSameSchoolYear(fromAccountId, other))
                 .then(friendships.findBetween(low, high)
-                        .flatMap(existing -> Mono.just(revive(existing, fromAccountId)))
+                        .flatMap(existing -> existing.getDeletedAt() != null
+                                ? Mono.just(revive(existing, fromAccountId))
+                                : answerLive(existing, fromAccountId))
                         .switchIfEmpty(Mono.fromSupplier(() -> Friendship.between(
                                 fromAccountId, other, fromAccountId)))
                         .flatMap(friendships::save)
                         .flatMap(friendship -> decorate(friendship, fromAccountId)));
+    }
+
+    /**
+     * Asking somebody who is already in the pair's live row never demotes it (S4): an accepted
+     * friendship is a 409, a request I already sent is returned as it is, and a request the
+     * other side sent me is answered by this very request, so A->B followed by B->A makes
+     * them friends instead of flipping the direction (S11).
+     */
+    private Mono<Friendship> answerLive(Friendship existing, Long requester) {
+        if (Friendship.ACCEPTED.equals(existing.getStatus())) {
+            return Mono.error(ApiException.conflict("Já são amigos"));
+        }
+        if (!existing.getRequestedBy().equals(requester)) {
+            existing.accept();
+        }
+        return Mono.just(existing);
+    }
+
+    /** A block between the two accounts, either way, closes the door; the blocked side is not told why. */
+    private Mono<Void> refuseIfBlocked(Long fromAccountId, Long other) {
+        return blockedAccounts.blockedBetween(fromAccountId, other)
+                .flatMap(blocked -> {
+                    if (!blocked) {
+                        return Mono.<Void>empty();
+                    }
+                    return blockedAccounts.blockedByViewer(fromAccountId, other)
+                            .flatMap(byMe -> byMe
+                                    ? Mono.<Void>error(ApiException.conflict(
+                                            "Bloqueaste esta pessoa. Desbloqueia-a antes de enviar um pedido de amizade"))
+                                    : Mono.<Void>error(ApiException.notFound("Pessoa não encontrada")));
+                });
     }
 
     /**
@@ -126,6 +164,8 @@ public class FriendshipService {
                         accountId, seat.schoolYearId(), seat.institutionId(),
                         term == null || term.isBlank() ? null : term.trim(),
                         SEARCH_LIMIT))
+                .filterWhen(user -> blockedAccounts.blockedBetween(accountId, user.getAccountId())
+                        .map(blocked -> !blocked))
                 .map(user -> new ColleagueResponse(
                         user.getAccountId(), mask(user.getFirstName(), user.getLastName())));
     }

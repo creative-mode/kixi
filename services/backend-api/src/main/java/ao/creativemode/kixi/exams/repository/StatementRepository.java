@@ -81,6 +81,35 @@ public interface StatementRepository extends R2dbcRepository<Statement, Long> {
     Mono<Statement> findByIdAndVisibleTrueAndDeletedAtIsNull(Long id);
 
     /**
+     * S8: o enunciado faz parte de uma prova que ainda não terminou. É a mesma regra do SQL do tutor, mas só enquanto
+     * a prova não acaba: uma sala por fechar (DRAFT, OPEN, RUNNING) ou uma avaliação do plano da pauta que não foi
+     * dispensada, nem terminada. Se entra em duas provas, basta uma por terminar. As perguntas e as opções só se leem
+     * depois; o catálogo (título, metadados) continua legível.
+     *
+     * <p>Uma avaliação do plano está terminada quando foi dispensada, quando a prova foi marcada como feita (MAC),
+     * quando a sua sala fechou, ou quando a pauta do plano já passou a HOMOLOGADA, RECTIFICADA ou ANULADA (estados finais
+     * de {@code term_plans.pauta_status}, que o motor devolve por evento). Esta última regra é a que liberta a P1 e a P2
+     * em papel, que não têm sala nem {@code manual_done_at}: sem ela ficavam retidas para sempre (kixi#N1). Enquanto a
+     * pauta está EM_CURSO (ou ainda não abriu) a prova de papel continua por terminar.</p>
+     */
+    @Query("""
+        SELECT (EXISTS (SELECT 1 FROM exam_rooms r WHERE r.statement_id = :id AND r.status <> 'CLOSED')
+             OR EXISTS (SELECT 1 FROM term_assessments a
+                         WHERE a.statement_id = :id
+                           AND a.dispensed_at IS NULL
+                           AND a.manual_done_at IS NULL
+                           AND NOT EXISTS (SELECT 1 FROM term_plans tp
+                                            WHERE tp.id = a.plan_id AND tp.pauta_status IN ('HOMOLOGADA', 'RECTIFICADA', 'ANULADA'))
+                           AND (a.room_id IS NULL
+                                OR NOT EXISTS (SELECT 1 FROM exam_rooms ar WHERE ar.id = a.room_id AND ar.status = 'CLOSED'))))
+        """)
+    Mono<Boolean> inUnfinishedExam(Long id);
+
+    /** As instituições de que a conta é coordenadora (vazio se não for). */
+    @Query("SELECT institution_id FROM institution_coordinators WHERE account_id = :accountId")
+    Flux<Long> findCoordinatedInstitutionIds(Long accountId);
+
+    /**
      * The same gate {@code QuestionRepository.findCatalogCandidates} already applies,
      * for the titles that travel alongside the questions it found (issue #218).
      *

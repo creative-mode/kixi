@@ -2,7 +2,12 @@ package ao.creativemode.kixi.moderation.service;
 
 import ao.creativemode.kixi.identity.repository.AccountRepository;
 import ao.creativemode.kixi.institutions.repository.InstitutionRepository;
+import ao.creativemode.kixi.institutions.repository.FriendshipRepository;
 import ao.creativemode.kixi.moderation.dto.BlockResponse;
+import ao.creativemode.kixi.moderation.dto.BlockedAccountResponse;
+import ao.creativemode.kixi.moderation.model.ModerationBlock;
+import ao.creativemode.kixi.shared.service.DisplayNameReader;
+import reactor.core.publisher.Flux;
 import ao.creativemode.kixi.moderation.dto.ReportRequest;
 import ao.creativemode.kixi.moderation.dto.ReportResponse;
 import ao.creativemode.kixi.moderation.model.ModerationReport;
@@ -29,10 +34,15 @@ public class ModerationService implements BlockedAccountReader {
     private final ModerationBlockRepository blocks;
     private final ModerationReportRepository reports;
     private final ApiAbuseRateLimiter rateLimiter;
+    private final FriendshipRepository friendships;
+    private final DisplayNameReader displayNames;
 
     public ModerationService(AccountRepository accounts, InstitutionRepository institutions,
                              ModerationBlockRepository blocks, ModerationReportRepository reports,
-                             ApiAbuseRateLimiter rateLimiter) {
+                             ApiAbuseRateLimiter rateLimiter, FriendshipRepository friendships,
+                             DisplayNameReader displayNames) {
+        this.friendships = friendships;
+        this.displayNames = displayNames;
         this.accounts = accounts;
         this.institutions = institutions;
         this.blocks = blocks;
@@ -42,8 +52,9 @@ public class ModerationService implements BlockedAccountReader {
 
     public Mono<BlockResponse> blockState(Long callerId, Long targetId) {
         return requireAccount(targetId).then(pair(callerId, targetId)
-                .flatMap(p -> blocks.existsPair(p[0], p[1])))
-                .map(BlockResponse::new);
+                .flatMap(p -> blocks.findByAccountLowAndAccountHigh(p[0], p[1])
+                        .map(block -> new BlockResponse(true, blockedBy(block, callerId)))
+                        .defaultIfEmpty(new BlockResponse(false, false))));
     }
 
     @Override
@@ -56,12 +67,79 @@ public class ModerationService implements BlockedAccountReader {
         return blocks.existsPair(low, high);
     }
 
+    @Override
+    public Mono<Boolean> blockedByViewer(Long viewerAccountId, Long otherAccountId) {
+        if (viewerAccountId.equals(otherAccountId)) {
+            return Mono.just(false);
+        }
+        return blocks.findByAccountLowAndAccountHigh(
+                        Math.min(viewerAccountId, otherAccountId), Math.max(viewerAccountId, otherAccountId))
+                .map(block -> blockedBy(block, viewerAccountId))
+                .defaultIfEmpty(false);
+    }
+
+    /** Explicit block (idempotent). A pair already blocked keeps its first blocker. */
+    public Mono<BlockResponse> block(Long callerId, Long targetId) {
+        if (callerId.equals(targetId)) {
+            return Mono.error(ApiException.badRequest("You cannot block yourself"));
+        }
+        return requireAccount(targetId).then(pair(callerId, targetId)
+                .flatMap(p -> blocks.insertPair(p[0], p[1], callerId)
+                        .onErrorMap(DataIntegrityViolationException.class,
+                                e -> ApiException.conflict("Could not update the block state"))
+                        // Blocking ends the friendship: a friend list must not keep somebody the caller shut out.
+                        .then(Mono.defer(() -> friendships.findBetween(p[0], p[1])))
+                        .filter(friendship -> friendship.getDeletedAt() == null)
+                        .flatMap(friendship -> {
+                            friendship.softDelete();
+                            return friendships.save(friendship);
+                        })
+                        .then(Mono.defer(() -> blockState(callerId, targetId)))));
+    }
+
+    /** Explicit unblock. Only who put the block lifts it; for anyone else it does not exist. */
+    public Mono<BlockResponse> unblock(Long callerId, Long targetId) {
+        if (callerId.equals(targetId)) {
+            return Mono.error(ApiException.badRequest("You cannot block yourself"));
+        }
+        return requireAccount(targetId).then(pair(callerId, targetId)
+                .flatMap(p -> blocks.findByAccountLowAndAccountHigh(p[0], p[1])
+                        .flatMap(block -> blockedBy(block, callerId)
+                                ? blocks.deletePair(p[0], p[1]).thenReturn(new BlockResponse(false, false))
+                                : Mono.<BlockResponse>error(ApiException.notFound("Pessoa não encontrada")))
+                        .defaultIfEmpty(new BlockResponse(false, false))));
+    }
+
+    /** The old toggle, kept for the clients that send an empty PUT. */
     public Mono<BlockResponse> toggleBlock(Long callerId, Long targetId) {
         if (callerId.equals(targetId)) {
             return Mono.error(ApiException.badRequest("You cannot block yourself"));
         }
         return requireAccount(targetId).then(pair(callerId, targetId)
-                .flatMap(p -> atomicToggle(p[0], p[1])));
+                .flatMap(p -> blocks.findByAccountLowAndAccountHigh(p[0], p[1])
+                        .map(java.util.Optional::of)
+                        .defaultIfEmpty(java.util.Optional.empty())
+                        .flatMap(existing -> existing.isPresent() ? unblock(callerId, targetId) : block(callerId, targetId))));
+    }
+
+    /** The people the caller blocked, so they can find and lift each block. */
+    public Flux<BlockedAccountResponse> listBlocked(Long callerId) {
+        return blocks.findBlockedBy(callerId).collectList().flatMapMany(rows -> {
+            java.util.List<Long> others = rows.stream()
+                    .map(row -> row.getAccountLow().equals(callerId) ? row.getAccountHigh() : row.getAccountLow())
+                    .toList();
+            return displayNames.briefsOf(others).defaultIfEmpty(java.util.Map.of()).flatMapMany(briefs ->
+                    Flux.fromIterable(rows).map(row -> {
+                        Long other = row.getAccountLow().equals(callerId) ? row.getAccountHigh() : row.getAccountLow();
+                        DisplayNameReader.Brief brief = briefs.get(other);
+                        return new BlockedAccountResponse(other, brief == null ? null : brief.maskedName(),
+                                brief == null ? null : brief.photo(), row.getCreatedAt());
+                    }));
+        });
+    }
+
+    private static boolean blockedBy(ModerationBlock block, Long accountId) {
+        return block.getBlockedBy() == null || block.getBlockedBy().equals(accountId);
     }
 
     public Mono<ReportResponse> reportAccount(Long callerId, Long targetId, ReportRequest request) {
@@ -123,13 +201,5 @@ public class ModerationService implements BlockedAccountReader {
 
     private Mono<Long[]> pair(Long a, Long b) {
         return Mono.just(a < b ? new Long[]{a, b} : new Long[]{b, a});
-    }
-
-    private Mono<BlockResponse> atomicToggle(Long low, Long high) {
-        return blocks.togglePair(low, high)
-                .defaultIfEmpty(false)
-                .map(BlockResponse::new)
-                .onErrorMap(DataIntegrityViolationException.class,
-                        e -> ApiException.conflict("Could not update the block state"));
     }
 }

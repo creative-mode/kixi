@@ -42,6 +42,7 @@ class FriendshipServiceTest {
     private FriendshipRepository friendships;
     private EnrollmentSeatReader seats;
     private UserRepository users;
+    private ao.creativemode.kixi.shared.service.BlockedAccountReader blocked;
     private FriendshipService service;
 
     @BeforeEach
@@ -49,7 +50,9 @@ class FriendshipServiceTest {
         friendships = mock(FriendshipRepository.class);
         seats = mock(EnrollmentSeatReader.class);
         users = mock(UserRepository.class);
-        service = new FriendshipService(friendships, seats, users);
+        blocked = mock(ao.creativemode.kixi.shared.service.BlockedAccountReader.class);
+        when(blocked.blockedBetween(anyLong(), anyLong())).thenReturn(Mono.just(false));
+        service = new FriendshipService(friendships, seats, users, blocked);
         named(ANA, "Ana", "Neto");
         named(BRUNO, "Bruno", "Sali");
 
@@ -362,6 +365,83 @@ class FriendshipServiceTest {
                     assertThat(colleague.displayName()).isEqualTo("Bruno S.");
                     assertThat(colleague.displayName()).doesNotContain("Sali");
                 });
+    }
+
+    // === S4 / S11 / S5: the pair's live row and blocks ===================
+
+    @Test
+    void askingSomeoneWhoIsAlreadyAFriendNeverDemotesTheFriendship() {
+        seatedIn(ANA, YEAR);
+        seatedIn(BRUNO, YEAR);
+        Friendship accepted = Friendship.between(ANA, BRUNO, ANA);
+        accepted.accept();
+        when(friendships.findBetween(ANA, BRUNO)).thenReturn(Mono.just(accepted));
+        when(friendships.save(any(Friendship.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        StepVerifier.create(service.request(ANA, new FriendRequest(BRUNO)))
+                .expectErrorSatisfies(error -> {
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(error).hasMessage("Já são amigos");
+                })
+                .verify();
+        assertThat(accepted.getStatus()).isEqualTo(Friendship.ACCEPTED);
+        verify(friendships, org.mockito.Mockito.never()).save(any(Friendship.class));
+    }
+
+    @Test
+    void repeatingARequestThatIsStillPendingChangesNothing() {
+        seatedIn(ANA, YEAR);
+        seatedIn(BRUNO, YEAR);
+        Friendship pending = Friendship.between(ANA, BRUNO, ANA);
+        when(friendships.findBetween(ANA, BRUNO)).thenReturn(Mono.just(pending));
+        when(friendships.save(any(Friendship.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        var response = service.request(ANA, new FriendRequest(BRUNO)).block();
+
+        assertThat(response.accepted()).isFalse();
+        assertThat(pending.getRequestedBy()).isEqualTo(ANA);
+    }
+
+    @Test
+    void aReciprocalRequestAcceptsInsteadOfFlippingTheDirection() {
+        seatedIn(ANA, YEAR);
+        seatedIn(BRUNO, YEAR);
+        Friendship fromAna = Friendship.between(ANA, BRUNO, ANA);
+        when(friendships.findBetween(ANA, BRUNO)).thenReturn(Mono.just(fromAna));
+        when(friendships.save(any(Friendship.class))).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        var response = service.request(BRUNO, new FriendRequest(ANA)).block();
+
+        assertThat(response.accepted()).isTrue();
+        assertThat(fromAna.getStatus()).isEqualTo(Friendship.ACCEPTED);
+    }
+
+    @Test
+    void aBlockedPersonCannotAskTheBlockerAndIsNotToldWhy() {
+        seatedIn(ANA, YEAR);
+        seatedIn(BRUNO, YEAR);
+        when(blocked.blockedBetween(BRUNO, ANA)).thenReturn(Mono.just(true));
+        when(blocked.blockedByViewer(BRUNO, ANA)).thenReturn(Mono.just(false));
+
+        StepVerifier.create(service.request(BRUNO, new FriendRequest(ANA)))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
+        verify(friendships, org.mockito.Mockito.never()).save(any(Friendship.class));
+    }
+
+    @Test
+    void theBlockerCannotAskEitherUntilTheyUnblock() {
+        seatedIn(ANA, YEAR);
+        seatedIn(BRUNO, YEAR);
+        when(blocked.blockedBetween(ANA, BRUNO)).thenReturn(Mono.just(true));
+        when(blocked.blockedByViewer(ANA, BRUNO)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.request(ANA, new FriendRequest(BRUNO)))
+                .expectErrorSatisfies(error ->
+                        assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.CONFLICT))
+                .verify();
+        verify(friendships, org.mockito.Mockito.never()).save(any(Friendship.class));
     }
 
     // === helpers ===========================================================

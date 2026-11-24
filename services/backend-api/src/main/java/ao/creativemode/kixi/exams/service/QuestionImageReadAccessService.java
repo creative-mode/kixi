@@ -68,6 +68,12 @@ public class QuestionImageReadAccessService {
                 .flatMap(image -> requireWritableQuestion(image.getQuestionId()));
     }
 
+    /** As instituições que o leitor coordena (vazio se não é coordenador): estão dispensadas do embargo (S8). */
+    private Mono<java.util.Set<Long>> coordinatedInstitutions(Long accountId) {
+        return currentAccount.hasAnyRole("COORDINATOR")
+                .flatMap(coordinator -> coordinator ? readAccess.coordinatedInstitutions(accountId) : Mono.just(java.util.Set.<Long>of()));
+    }
+
     private Mono<Void> requireStatement(Question question, Long accountId, boolean admin, boolean teacher) {
         // As imagens de um treino montado (kixi#729) só as lê o dono do treino; os outros leitores não o veem existir.
         Mono<Statement> ownPractice = statements.findPracticeByIdAndOwner(question.getStatementId(), accountId);
@@ -81,7 +87,9 @@ public class QuestionImageReadAccessService {
                 ? statements.findByIdAndDeletedAtIsNull(question.getStatementId())
                 : teacher
                         ? statements.findByIdAndDeletedAtIsNull(question.getStatementId())
-                        : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(question.getStatementId());
+                        : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(question.getStatementId())
+                                .flatMap(visible -> coordinatedInstitutions(accountId)
+                                        .flatMap(institutions -> StatementEmbargo.guard(statements, visible, institutions)));
         return statement.switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
                 .flatMap(found -> {
                     if (admin || !teacher) {
