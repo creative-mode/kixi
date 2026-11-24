@@ -226,6 +226,7 @@ public class SimulationService {
                 .switchIfEmpty(Mono.error(() -> ApiException.notFound("Account not found")))
                 .then((requireVisibleStatement
                         ? statementRepository.findByIdAndVisibleTrueAndDeletedAtIsNull(dto.statementId())
+                                .flatMap(visible -> ao.creativemode.kixi.exams.service.StatementEmbargo.guard(statementRepository, visible))
                         : statementLookup(dto.statementId()))
                         .switchIfEmpty(Mono.error(() -> ApiException.notFound("Statement not found")))
                         .flatMap(statement -> !authorizeStatement

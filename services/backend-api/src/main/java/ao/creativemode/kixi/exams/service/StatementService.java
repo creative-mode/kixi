@@ -122,7 +122,7 @@ public class StatementService {
      * Find a visible statement with its questions.
      */
     public Mono<StatementWithQuestions> findByIdWithQuestionsVisible(Long id) {
-        return findByIdWithQuestions(findByIdVisible(id));
+        return findByIdWithQuestions(findByIdVisible(id).flatMap(statement -> StatementEmbargo.guard(statementRepository, statement)));
     }
 
     private Mono<StatementWithQuestions> findByIdWithQuestions(Mono<Statement> statementMono) {

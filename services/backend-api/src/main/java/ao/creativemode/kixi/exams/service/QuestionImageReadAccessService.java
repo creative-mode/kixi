@@ -81,7 +81,8 @@ public class QuestionImageReadAccessService {
                 ? statements.findByIdAndDeletedAtIsNull(question.getStatementId())
                 : teacher
                         ? statements.findByIdAndDeletedAtIsNull(question.getStatementId())
-                        : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(question.getStatementId());
+                        : statements.findByIdAndVisibleTrueAndDeletedAtIsNull(question.getStatementId())
+                                .flatMap(visible -> StatementEmbargo.guard(statements, visible));
         return statement.switchIfEmpty(Mono.error(ApiException.notFound("Statement not found")))
                 .flatMap(found -> {
                     if (admin || !teacher) {
