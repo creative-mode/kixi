@@ -207,11 +207,23 @@ class PersonProfileServiceTest {
     void blockedProfileIsNotVisibleEvenWhenItIsPublic() {
         when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
         when(blockedAccounts.blockedBetween(VIEWER_ACCOUNT, TARGET_ACCOUNT)).thenReturn(Mono.just(true));
+        when(blockedAccounts.blockedByViewer(VIEWER_ACCOUNT, TARGET_ACCOUNT)).thenReturn(Mono.just(false));
 
         StepVerifier.create(service.person(VIEWER_ACCOUNT, false, TARGET_USER))
             .expectErrorSatisfies(error -> assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.NOT_FOUND))
             .verify();
         verify(settings, never()).findVisibility(TARGET_USER);
+    }
+
+    @Test
+    void theBlockerStillSeesTheProfileOfWhoTheyBlockedToBeAbleToUnblock() {
+        when(settings.findVisibility(TARGET_USER)).thenReturn(Mono.just("public"));
+        when(blockedAccounts.blockedBetween(VIEWER_ACCOUNT, TARGET_ACCOUNT)).thenReturn(Mono.just(true));
+        when(blockedAccounts.blockedByViewer(VIEWER_ACCOUNT, TARGET_ACCOUNT)).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.person(VIEWER_ACCOUNT, false, TARGET_USER))
+            .expectNextCount(1)
+            .verifyComplete();
     }
 
     @Test

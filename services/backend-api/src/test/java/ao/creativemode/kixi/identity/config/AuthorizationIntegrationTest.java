@@ -121,6 +121,12 @@ class AuthorizationIntegrationTest {
     private ModerationReportRepository moderationReportRepository;
 
     @MockBean
+    private ao.creativemode.kixi.institutions.repository.FriendshipRepository friendshipRepository;
+
+    @MockBean
+    private ao.creativemode.kixi.shared.service.DisplayNameReader displayNameReader;
+
+    @MockBean
     private OcrPersistenceService ocrPersistenceService;
 
     @MockBean
@@ -145,7 +151,27 @@ class AuthorizationIntegrationTest {
         when(abuseRateLimiter.checkReport(anyLong())).thenReturn(Mono.empty());
         when(accountRepository.findByIdAndDeletedAtIsNull(anyLong())).thenReturn(Mono.just(new Account()));
         when(moderationBlockRepository.existsPair(anyLong(), anyLong())).thenReturn(Mono.just(false));
-        when(moderationBlockRepository.togglePair(anyLong(), anyLong())).thenReturn(Mono.just(true));
+        var stored = new java.util.concurrent.atomic.AtomicReference<ao.creativemode.kixi.moderation.model.ModerationBlock>();
+        when(moderationBlockRepository.findByAccountLowAndAccountHigh(anyLong(), anyLong()))
+                .thenAnswer(call -> Mono.justOrEmpty(stored.get()));
+        when(moderationBlockRepository.insertPair(anyLong(), anyLong(), anyLong())).thenAnswer(call -> {
+            var row = new ao.creativemode.kixi.moderation.model.ModerationBlock();
+            row.setAccountLow(call.getArgument(0));
+            row.setAccountHigh(call.getArgument(1));
+            row.setBlockedBy(call.getArgument(2));
+            stored.set(row);
+            return Mono.empty();
+        });
+        when(moderationBlockRepository.findBlockedBy(anyLong()))
+                .thenAnswer(call -> stored.get() == null ? reactor.core.publisher.Flux.empty()
+                        : reactor.core.publisher.Flux.just(stored.get()));
+        when(moderationBlockRepository.deletePair(anyLong(), anyLong())).thenAnswer(call -> {
+            stored.set(null);
+            return Mono.just(1);
+        });
+        when(displayNameReader.briefsOf(org.mockito.ArgumentMatchers.anyCollection()))
+                .thenReturn(Mono.just(java.util.Map.of()));
+        when(friendshipRepository.findBetween(anyLong(), anyLong())).thenReturn(Mono.empty());
         when(moderationReportRepository.save(any(ModerationReport.class)))
                 .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
     }
@@ -212,6 +238,21 @@ class AuthorizationIntegrationTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody().json("{\"blocked\":true}");
+
+        // S6: explicit actions, student only; the blocker can list and lift what they blocked.
+        client.mutateWith(teacherJwt()).post().uri("/api/v1/profiles/accounts/2/block")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(teacherJwt()).delete().uri("/api/v1/profiles/accounts/2/block")
+                .exchange().expectStatus().isForbidden();
+        client.mutateWith(studentJwt()).post().uri("/api/v1/profiles/accounts/2/block")
+                .exchange().expectStatus().isOk().expectBody().json("{\"blocked\":true,\"blockedByMe\":true}");
+        client.mutateWith(studentJwt()).get().uri("/api/v1/profiles/blocks")
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$[0].accountId").isEqualTo(2);
+        client.mutateWith(studentJwt()).delete().uri("/api/v1/profiles/accounts/2/block")
+                .exchange().expectStatus().isOk().expectBody().json("{\"blocked\":false}");
+        client.mutateWith(studentJwt()).put().uri("/api/v1/profiles/accounts/2/block")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"blocked\":true}")
+                .exchange().expectStatus().isOk().expectBody().json("{\"blocked\":true}");
 
         client.mutateWith(studentJwt())
                 .post()

@@ -66,8 +66,15 @@ public class PersonProfileService {
             .findByIdAndDeletedAtIsNull(userId)
             .switchIfEmpty(Mono.error(ApiException.notFound("Profile not found")))
             .flatMap(user -> blockedAccounts.blockedBetween(viewerAccountId, user.getAccountId())
+                // S6: whoever put the block keeps the profile (to find the unblock action);
+                // the blocked person gets the same 404 as before.
                 .flatMap(blocked -> blocked
-                    ? Mono.error(ApiException.notFound("Profile not found"))
+                    ? blockedAccounts.blockedByViewer(viewerAccountId, user.getAccountId())
+                        .flatMap(byViewer -> byViewer ? Mono.just(Boolean.TRUE) : Mono.<Boolean>error(ApiException.notFound("Profile not found")))
+                        .then(Mono.defer(() -> Mono.zip(
+                            settings.findVisibility(userId).defaultIfEmpty(ProfileSetting.SCHOOL),
+                            schoolIdsOfAccount(user.getAccountId()),
+                            teacherOf(user.getAccountId()))))
                     : Mono.zip(
                     settings.findVisibility(userId).defaultIfEmpty(ProfileSetting.SCHOOL),
                     schoolIdsOfAccount(user.getAccountId()),

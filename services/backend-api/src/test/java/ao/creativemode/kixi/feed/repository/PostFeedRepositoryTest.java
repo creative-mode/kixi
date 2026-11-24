@@ -21,8 +21,19 @@ class PostFeedRepositoryTest {
             Set.of(1L), Set.of(10L), Set.of(20L), Set.of(2026L));
 
     @Test
+    void aBlockBetweenViewerAndAuthorHidesThePostInTheFeedAndTheCount() {
+        Sql feed = PostFeedRepository.feedSql(SCOPE, 7L, null, null, null, 10, 0);
+        Sql count = PostFeedRepository.countSql(SCOPE, 7L, null, null, null);
+
+        for (Sql sql : new Sql[]{feed, count}) {
+            assertThat(sql.statement()).contains("NOT EXISTS (SELECT 1 FROM moderation_blocks");
+            assertThat(sql.binds()).containsEntry("viewerAccountId", 7L);
+        }
+    }
+
+    @Test
     void institutionIsAlwaysTheHardGate() {
-        Sql sql = PostFeedRepository.feedSql(SCOPE, null, null, null, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(SCOPE, 7L, null, null, null, 10, 0);
 
         assertThat(sql.statement()).contains("institution_id = ANY(:institutionIds)");
         assertThat((Long[]) sql.binds().get("institutionIds")).containsExactly(1L);
@@ -30,7 +41,7 @@ class PostFeedRepositoryTest {
 
     @Test
     void withoutNarrowingTheClassCourseAndSchoolYearSetsStillGateTheRows() {
-        Sql sql = PostFeedRepository.feedSql(SCOPE, null, null, null, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(SCOPE, 7L, null, null, null, 10, 0);
 
         assertThat(sql.statement())
                 .contains("class_id = ANY(:classIds)")
@@ -44,7 +55,7 @@ class PostFeedRepositoryTest {
 
     @Test
     void anEmptyScopeBindsEmptyArraysRatherThanDroppingTheFilter() {
-        Sql sql = PostFeedRepository.feedSql(FeedScope.NONE, null, null, null, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(FeedScope.NONE, 7L, null, null, null, 10, 0);
 
         assertThat((Long[]) sql.binds().get("institutionIds")).isEmpty();
         assertThat((Long[]) sql.binds().get("classIds")).isEmpty();
@@ -52,7 +63,7 @@ class PostFeedRepositoryTest {
 
     @Test
     void aRequestedClassNarrowsButDoesNotReplaceTheScope() {
-        Sql sql = PostFeedRepository.feedSql(SCOPE, null, null, 10L, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(SCOPE, 7L, null, null, 10L, 10, 0);
 
         assertThat(sql.statement())
                 .contains("institution_id = ANY(:institutionIds)")
@@ -62,7 +73,7 @@ class PostFeedRepositoryTest {
 
     @Test
     void hiddenAndDeletedPostsAreNeverReturned() {
-        Sql sql = PostFeedRepository.feedSql(SCOPE, null, null, null, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(SCOPE, 7L, null, null, null, 10, 0);
 
         assertThat(sql.statement())
                 .contains("is_hidden = false")
@@ -71,14 +82,14 @@ class PostFeedRepositoryTest {
 
     @Test
     void feedIsOrderedNewestFirstWithATiebreaker() {
-        Sql sql = PostFeedRepository.feedSql(SCOPE, null, null, null, 10, 0);
+        Sql sql = PostFeedRepository.feedSql(SCOPE, 7L, null, null, null, 10, 0);
 
         assertThat(sql.statement()).contains("ORDER BY created_at DESC, id DESC");
     }
 
     @Test
     void countUsesTheSameScopeAsTheFeed() {
-        Sql countSql = PostFeedRepository.countSql(SCOPE, null, 20L, null);
+        Sql countSql = PostFeedRepository.countSql(SCOPE, 7L, null, 20L, null);
 
         assertThat(countSql.statement())
                 .contains("SELECT COUNT(*)")

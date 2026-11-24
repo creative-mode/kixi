@@ -1,6 +1,9 @@
 package ao.creativemode.kixi.moderation.controller;
 
+import ao.creativemode.kixi.moderation.dto.BlockRequest;
 import ao.creativemode.kixi.moderation.dto.BlockResponse;
+import ao.creativemode.kixi.moderation.dto.BlockedAccountResponse;
+import reactor.core.publisher.Flux;
 import ao.creativemode.kixi.moderation.dto.ReportRequest;
 import ao.creativemode.kixi.moderation.dto.ReportResponse;
 import ao.creativemode.kixi.moderation.service.ModerationService;
@@ -25,9 +28,31 @@ public class ModerationController {
         return current.requiredAccountId().flatMap(account -> service.blockState(account, id));
     }
 
+    /**
+     * Kept for the existing client: an empty body toggles, as it always did; {@code {"blocked":true|false}}
+     * is explicit and idempotent. New clients should prefer POST and DELETE below.
+     */
     @PutMapping("/profiles/accounts/{id}/block")
-    public Mono<BlockResponse> toggleBlock(@PathVariable Long id) {
-        return current.requiredAccountId().flatMap(account -> service.toggleBlock(account, id));
+    public Mono<BlockResponse> setBlock(@PathVariable Long id, @RequestBody(required = false) BlockRequest request) {
+        if (request == null || request.blocked() == null) {
+            return current.requiredAccountId().flatMap(account -> service.toggleBlock(account, id));
+        }
+        return request.blocked() ? block(id) : unblock(id);
+    }
+
+    @PostMapping("/profiles/accounts/{id}/block")
+    public Mono<BlockResponse> block(@PathVariable Long id) {
+        return current.requiredAccountId().flatMap(account -> service.block(account, id));
+    }
+
+    @DeleteMapping("/profiles/accounts/{id}/block")
+    public Mono<BlockResponse> unblock(@PathVariable Long id) {
+        return current.requiredAccountId().flatMap(account -> service.unblock(account, id));
+    }
+
+    @GetMapping("/profiles/blocks")
+    public Flux<BlockedAccountResponse> blocked() {
+        return current.requiredAccountId().flatMapMany(service::listBlocked);
     }
 
     @PostMapping("/profiles/accounts/{id}/reports")
