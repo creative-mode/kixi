@@ -141,7 +141,9 @@ public class StatementController {
                 .flatMap(reader -> readableStatementWithQuestions(
                         reader,
                         () -> statementService.findByIdWithQuestions(id),
-                        () -> statementService.findByIdWithQuestionsVisible(id, reader.coordinatedInstitutions()))
+                        () -> reader.coordinatedInstitutions().isEmpty()
+                            ? statementService.findByIdWithQuestionsVisible(id)
+                            : statementService.findByIdWithQuestionsVisible(id, reader.coordinatedInstitutions()))
                     .map(result -> StatementOcrResponse.from(result, reader.staff())))))
             .map(ResponseEntity::ok);
     }
